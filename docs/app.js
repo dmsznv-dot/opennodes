@@ -175,6 +175,7 @@ window.addEventListener('hashchange', () => {
 
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
+  if (hintEl) return hideHint();
   if (document.querySelector('.modal-backdrop')) closeModal();
   else if (document.querySelector('.popover')) closePopover();
   else if (ui.panelNodeId) closePanel();
@@ -183,6 +184,7 @@ document.addEventListener('keydown', (e) => {
 // ── Render root ───────────────────────────────────────────────────────────────
 
 function render() {
+  hideHint();
   applySettings();
   if (ui.auth) return renderAuth();
   advanceOnboarding();
@@ -216,10 +218,10 @@ function renderBanner() {
 
 function renderHeader() {
   const nav = [
-    ['automations', 'nav.automations'],
-    ['templates', 'nav.templates'],
-    ['connections', 'nav.connections'],
-    ['history', 'nav.history'],
+    ['automations', 'nav.automations', 'nav.automationsShort'],
+    ['templates', 'nav.templates', 'nav.templates'],
+    ['connections', 'nav.connections', 'nav.connections'],
+    ['history', 'nav.history', 'nav.history'],
   ];
   const current = ui.route.view === 'editor' ? 'automations' : ui.route.view;
   clear($('appHeader')).append(
@@ -236,15 +238,17 @@ function renderHeader() {
     h(
       'nav',
       { class: 'main-nav', 'aria-label': t('nav.main') },
-      nav.map(([id, key]) =>
+      nav.map(([id, key, short]) =>
         h(
           'a',
           {
             href: `#/${id}`,
             class: ['nav-link', current === id && 'active'],
             'aria-current': current === id ? 'page' : null,
+            'data-hint': id === 'automations' ? null : `nav.${id}`,
           },
-          t(key)
+          h('span', { class: 'nav-long' }, t(key)),
+          h('span', { class: 'nav-short', 'aria-hidden': 'true' }, t(short))
         )
       )
     ),
@@ -283,6 +287,7 @@ function profileButton() {
       class: 'avatar-btn',
       'aria-label': t('menu.open'),
       'aria-haspopup': 'menu',
+      'data-hint': 'profile',
       onclick: (e) => openProfileMenu(e.currentTarget),
     },
     getLocale() === 'ru' ? 'Я' : 'Me'
@@ -324,6 +329,8 @@ function openProfileMenu(anchor) {
           if (ob.status === 'in_progress' && ob.hidden) {
             ob.hidden = false;
           } else {
+            for (const k of Object.keys(store.hints))
+              if (k.startsWith('hover.')) delete store.hints[k];
             Object.assign(store.onboarding, {
               status: 'new',
               step: 1,
@@ -627,7 +634,13 @@ function filterTemplates(query, category) {
     (tpl) => ({ tpl, score: searchScore(query, templateHaystack(tpl)) })
   );
   return bestMatches(scored)
-    .sort((x, y) => y.score - x.score || (y.tpl.recommended ? 1 : 0) - (x.tpl.recommended ? 1 : 0))
+    .sort(
+      (x, y) =>
+        // Templates that can be used now come before the ones still waiting for an integration.
+        (x.tpl.planned?.length ? 1 : 0) - (y.tpl.planned?.length ? 1 : 0) ||
+        y.score - x.score ||
+        (y.tpl.recommended ? 1 : 0) - (x.tpl.recommended ? 1 : 0)
+    )
     .map((x) => x.tpl);
 }
 
@@ -694,16 +707,19 @@ function templateCard(tpl) {
         { type: 'button', class: 'btn btn-ghost', onclick: () => openTemplateDetails(tpl) },
         t('tpl.details')
       ),
-      h(
-        'button',
-        {
-          type: 'button',
-          class: 'btn btn-primary',
-          disabled: planned,
-          onclick: () => createFromTemplate(tpl),
-        },
-        t('tpl.use')
-      )
+      // A template that cannot run yet offers details only, not a disabled primary button.
+      planned
+        ? null
+        : h(
+            'button',
+            {
+              type: 'button',
+              class: 'btn btn-primary',
+              'data-hint': 'useTemplate',
+              onclick: () => createFromTemplate(tpl),
+            },
+            t('tpl.use')
+          )
     )
   );
 }
@@ -846,7 +862,7 @@ function createBlank() {
 function viewAutomations() {
   const grid = h('div', { class: 'tpl-grid' });
   const fill = () => {
-    const list = filterTemplates(ui.homeQuery, ui.homeCategory).slice(0, ui.homeQuery ? 8 : 4);
+    const list = filterTemplates(ui.homeQuery, ui.homeCategory).slice(0, ui.homeQuery ? 6 : 3);
     clear(grid).append(
       ...(list.length ? list.map(templateCard) : [h('p', { class: 'empty' }, t('home.noResults'))])
     );
@@ -865,13 +881,14 @@ function viewAutomations() {
     },
   });
 
-  return h(
-    'div',
-    { class: 'page' },
+  const hasOwn = store.automations.length > 0;
+  const discover = [
     h(
       'section',
-      { class: 'hero' },
-      h('h1', { class: 'page-title' }, t('home.title')),
+      { class: ['hero', hasOwn && 'hero-compact'] },
+      hasOwn
+        ? h('h2', { class: 'section-title' }, t('home.titleMore'))
+        : h('h1', { class: 'page-title' }, t('home.title')),
       h('p', { class: 'muted' }, t('home.subtitle')),
       search,
       categoryChips(ui.homeCategory, (c) => {
@@ -890,24 +907,38 @@ function viewAutomations() {
           'div',
           { class: 'row-gap' },
           h('a', { class: 'btn btn-ghost', href: '#/templates' }, t('home.allTemplates')),
+          hasOwn
+            ? null
+            : h(
+                'button',
+                { type: 'button', class: 'btn', onclick: createBlank },
+                `＋ ${t('home.fromScratch')}`
+              )
+        )
+      ),
+      grid
+    ),
+  ];
+  // Returning users come for their own automations: those go first.
+  const mine = hasOwn
+    ? h(
+        'section',
+        { class: 'block block-first' },
+        h(
+          'div',
+          { class: 'block-head' },
+          h('h1', { class: 'page-title' }, t('home.mine')),
           h(
             'button',
             { type: 'button', class: 'btn', onclick: createBlank },
             `＋ ${t('home.fromScratch')}`
           )
-        )
-      ),
-      grid
-    ),
-    h(
-      'section',
-      { class: 'block' },
-      h('h2', {}, t('home.mine')),
-      store.automations.length
-        ? h('ul', { class: 'auto-list' }, store.automations.map(automationRow))
-        : h('p', { class: 'empty' }, t('home.empty'))
-    )
-  );
+        ),
+        h('ul', { class: 'auto-list' }, store.automations.map(automationRow))
+      )
+    : null;
+
+  return h('div', { class: 'page' }, mine, discover);
 }
 
 function automationRow(a) {
@@ -1025,10 +1056,21 @@ function viewTemplates() {
 // ── View: Connections ─────────────────────────────────────────────────────────
 
 function viewConnections() {
-  const cards = SERVICE_ORDER.filter(
+  const visible = SERVICE_ORDER.filter(
     (id) =>
       store.settings.devMode || !SERVICES[id].dev || store.connections.some((c) => c.service === id)
-  ).map((id) => {
+  );
+  // Cards only for services that take an account; the rest are one compact line each.
+  const accounts = visible.filter((id) => SERVICES[id].auth && !SERVICES[id].planned);
+  const free = visible.filter((id) => !SERVICES[id].auth && !SERVICES[id].planned);
+  const planned = visible.filter((id) => SERVICES[id].planned);
+  const compact = (ids) =>
+    h(
+      'ul',
+      { class: 'svc-chips' },
+      ids.map((id) => h('li', { class: 'svc-chip' }, serviceIcon(id, 'sm'), L(SERVICES[id].name)))
+    );
+  const cards = accounts.map((id) => {
     const s = SERVICES[id];
     const conns = store.connections.filter((c) => c.service === id);
     let status;
@@ -1041,40 +1083,48 @@ function viewConnections() {
       actions = null;
     } else if (conns.length) {
       status = h('span', { class: 'badge badge-ok' }, t('conn.connected'));
-      actions = conns.map((c) =>
-        h(
-          'div',
-          { class: 'conn-line' },
-          h('span', { class: 'small' }, c.name),
+      actions = [
+        ...conns.map((c) =>
           h(
             'div',
-            { class: 'row-gap' },
+            { class: 'conn-line' },
+            h('span', { class: 'conn-name' }, c.name),
             h(
-              'button',
-              {
-                type: 'button',
-                class: 'btn btn-ghost',
-                onclick: () => (live.isLive ? checkLiveConnection(c) : toast(t('conn.checkOk'))),
-              },
-              t('conn.check')
-            ),
-            h(
-              'button',
-              {
-                type: 'button',
-                class: 'btn btn-ghost danger-text',
-                onclick: () => {
-                  if (!confirm(t('conn.disconnectConfirm', { name: c.name }))) return;
-                  store.connections = store.connections.filter((x) => x.id !== c.id);
-                  save();
-                  render();
+              'div',
+              { class: 'row-gap' },
+              h(
+                'button',
+                {
+                  type: 'button',
+                  class: 'btn btn-small',
+                  'data-hint': 'connCheck',
+                  onclick: () => (live.isLive ? checkLiveConnection(c) : toast(t('conn.checkOk'))),
                 },
-              },
-              t('conn.disconnect')
+                t('conn.check')
+              ),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  class: 'btn btn-ghost btn-small danger-text',
+                  onclick: () => {
+                    if (!confirm(t('conn.disconnectConfirm', { name: c.name }))) return;
+                    store.connections = store.connections.filter((x) => x.id !== c.id);
+                    save();
+                    render();
+                  },
+                },
+                t('conn.disconnect')
+              )
             )
           )
-        )
-      );
+        ),
+        h(
+          'button',
+          { type: 'button', class: 'btn btn-ghost btn-small', onclick: () => openConnect(id) },
+          `＋ ${t('conn.addAnother')}`
+        ),
+      ];
     } else {
       status = h('span', { class: 'badge badge-warn' }, t('conn.notConnected'));
       actions = h(
@@ -1097,7 +1147,25 @@ function viewConnections() {
     h('h1', { class: 'page-title' }, t('conn.title')),
     h('p', { class: 'muted' }, t('conn.subtitle')),
     store.settings.devMode ? h('p', { class: 'note' }, t('conn.securityDev')) : null,
-    h('div', { class: 'conn-grid' }, cards)
+    h('div', { class: 'conn-grid' }, cards),
+    free.length
+      ? h(
+          'section',
+          { class: 'block' },
+          h('h2', {}, t('conn.freeTitle')),
+          h('p', { class: 'muted small' }, t('conn.freeText')),
+          compact(free)
+        )
+      : null,
+    planned.length
+      ? h(
+          'section',
+          { class: 'block' },
+          h('h2', {}, t('conn.plannedTitle')),
+          h('p', { class: 'muted small' }, t('conn.plannedText')),
+          compact(planned)
+        )
+      : null
   );
 }
 
@@ -1360,94 +1428,113 @@ function viewEditor(id) {
   const dev = store.settings.devMode;
   const dag = validateDag(a.nodes, a.edges);
 
+  // Sized to the name, so the status sits right next to it rather than mid-bar.
+  const fitName = (el) => (el.size = Math.min(48, Math.max(12, el.value.length + 2)));
   const nameInput = h('input', {
     class: 'input name-input',
     value: a.name,
+    size: Math.min(48, Math.max(12, a.name.length + 2)),
     'aria-label': t('ed.nameLabel'),
     placeholder: t('ed.namePlaceholder'),
+    oninput: (e) => fitName(e.target),
     onchange: (e) => {
       a.name = e.target.value.trim() || a.name;
       touch(a);
     },
   });
 
+  // Title on the left (it wraps as a unit), actions on the right (they stay in one row).
   const bar = h(
     'div',
     { class: 'editor-bar' },
-    h('a', { class: 'back-link', href: '#/automations' }, `← ${t('ed.back')}`),
-    nameInput,
-    statusPill(a),
-    h('div', { class: 'spacer' }),
-    dev
-      ? h(
-          'span',
-          {
-            class: ['pill', dag.valid ? 'pill-active' : 'pill-error'],
-            title: dag.valid
-              ? t('ed.dagOk')
-              : describeIssue({
-                  key: dag.messageKey,
-                  params: { path: (dag.cycle ?? []).join(' → ') },
-                }),
-          },
-          dag.valid ? 'DAG ✓' : dag.code
-        )
-      : null,
     h(
-      'button',
-      {
-        type: 'button',
-        class: 'btn btn-ghost',
-        'aria-haspopup': 'menu',
-        onclick: (e) => openVersionMenu(e.currentTarget, a),
-      },
-      `${t('ed.version')} ▾`
+      'div',
+      { class: 'editor-title' },
+      h('a', { class: 'back-link', href: '#/automations', 'aria-label': t('ed.back') }, '←'),
+      h(
+        'label',
+        { class: 'name-field', 'data-hint': 'rename' },
+        nameInput,
+        h('span', { class: 'name-pencil', 'aria-hidden': 'true' }, '✎')
+      ),
+      h('span', { 'data-hint': 'status' }, statusPill(a))
     ),
     h(
-      'button',
-      {
-        type: 'button',
-        class: 'btn',
-        title: t('ed.checkHint'),
-        disabled: !a.nodes.length || ui.busy,
-        onclick: () => runCheck(a),
-      },
-      ui.busy ? `… ${t('ed.check')}` : `▶ ${t('ed.check')}`
-    ),
-    live.isLive && a.status === 'active' && triggerOf(a)?.action === 'manual.run'
-      ? h(
-          'button',
-          {
-            type: 'button',
-            class: 'btn',
-            disabled: ui.busy,
-            onclick: () => liveRunNow(a),
-          },
-          `⏵ ${t('ed.runNow')}`
-        )
-      : null,
-    a.status === 'active'
-      ? a.dirty
+      'div',
+      { class: 'editor-actions' },
+      dev
+        ? h(
+            'span',
+            {
+              class: ['pill', dag.valid ? 'pill-active' : 'pill-error'],
+              title: dag.valid
+                ? t('ed.dagOk')
+                : describeIssue({
+                    key: dag.messageKey,
+                    params: { path: (dag.cycle ?? []).join(' → ') },
+                  }),
+            },
+            dag.valid ? 'DAG ✓' : dag.code
+          )
+        : null,
+      h(
+        'button',
+        {
+          type: 'button',
+          class: 'btn btn-ghost',
+          'aria-haspopup': 'menu',
+          'data-hint': 'version',
+          onclick: (e) => openVersionMenu(e.currentTarget, a),
+        },
+        `${t('ed.version')} ▾`
+      ),
+      h(
+        'button',
+        {
+          type: 'button',
+          class: 'btn',
+          'data-hint': 'check',
+          disabled: !a.nodes.length || ui.busy,
+          onclick: () => runCheck(a),
+        },
+        ui.busy ? `… ${t('ed.check')}` : `▶ ${t('ed.check')}`
+      ),
+      live.isLive && a.status === 'active' && triggerOf(a)?.action === 'manual.run'
         ? h(
             'button',
-            { type: 'button', class: 'btn btn-primary', onclick: () => requestActivate(a) },
-            t('ed.publish')
+            {
+              type: 'button',
+              class: 'btn',
+              disabled: ui.busy,
+              onclick: () => liveRunNow(a),
+            },
+            `⏵ ${t('ed.runNow')}`
           )
+        : null,
+      a.status === 'active'
+        ? a.dirty
+          ? h(
+              'button',
+              { type: 'button', class: 'btn btn-primary', onclick: () => requestActivate(a) },
+              t('ed.publish')
+            )
+          : h(
+              'button',
+              { type: 'button', class: 'btn', onclick: () => setPaused(a) },
+              t('ed.disable')
+            )
         : h(
             'button',
-            { type: 'button', class: 'btn', onclick: () => setPaused(a) },
-            t('ed.disable')
+            {
+              type: 'button',
+              class: 'btn btn-primary',
+              disabled: !a.nodes.length,
+              'data-hint': 'enable',
+              onclick: () => requestActivate(a),
+            },
+            t('ed.enable')
           )
-      : h(
-          'button',
-          {
-            type: 'button',
-            class: 'btn btn-primary',
-            disabled: !a.nodes.length,
-            onclick: () => requestActivate(a),
-          },
-          t('ed.enable')
-        )
+    )
   );
 
   const body = h(
@@ -1567,6 +1654,7 @@ function canvasContent(a) {
         class: ['node-card', ui.panelNodeId === n.id && 'selected', `ns-${state}`],
         style: { left: `${p.x}px`, top: `${p.y}px`, width: `${CARD_W}px`, height: `${cardH}px` },
         'aria-label': `${t('step.n', { n: nums.get(n.id) })}: ${nodeTitle(n)} — ${t(`step.${state}`)}`,
+        'data-hint': 'node',
         onclick: () => openPanel(a, n.id),
       },
       h(
@@ -1595,7 +1683,7 @@ function canvasContent(a) {
         class: 'plus-btn',
         style: { left: `${p.x + CARD_W / 2 - 16}px`, top: `${p.y + cardH + 20}px` },
         'aria-label': `${t('ed.addNext')} (${nodeTitle(n)})`,
-        title: t('ed.addNext'),
+        'data-hint': 'addStep',
         onclick: () => openPicker(a, n.id),
       },
       '＋'
@@ -2716,6 +2804,79 @@ function renderTour() {
     )
   );
 }
+
+// ── First-time hints ──────────────────────────────────────────────────────────
+// The first time the pointer rests on (or the keyboard focuses) a control marked
+// `data-hint`, a short explanation appears next to it — once per control, ever.
+
+const HINT_DELAY_MS = 450;
+const canHover = window.matchMedia?.('(hover: hover) and (pointer: fine)').matches ?? false;
+let hintTimer = null;
+let hintEl = null;
+
+const hintSeen = (key) => Boolean(store.hints[`hover.${key}`]);
+
+function hideHint() {
+  clearTimeout(hintTimer);
+  hintEl?.remove();
+  hintEl = null;
+}
+
+function showHint(target, key) {
+  if (!target.isConnected || document.querySelector('.modal-backdrop, .popover')) return;
+  hideHint();
+  store.hints[`hover.${key}`] = true;
+  save();
+  const bubble = h(
+    'div',
+    { class: 'coach', role: 'tooltip', id: 'coach' },
+    h('p', {}, t(`hint.${key}`)),
+    h('button', { type: 'button', class: 'coach-ok', onclick: hideHint }, t('hint.ok'))
+  );
+  document.body.append(bubble);
+  const r = target.getBoundingClientRect();
+  const below = r.bottom + bubble.offsetHeight + 12 < window.innerHeight;
+  bubble.dataset.side = below ? 'bottom' : 'top';
+  const left = Math.min(
+    Math.max(8, r.left + r.width / 2 - bubble.offsetWidth / 2),
+    window.innerWidth - bubble.offsetWidth - 8
+  );
+  Object.assign(bubble.style, {
+    left: `${left}px`,
+    top: `${below ? r.bottom + 10 : r.top - bubble.offsetHeight - 10}px`,
+  });
+  bubble.style.setProperty('--arrow-x', `${r.left + r.width / 2 - left}px`);
+  target.setAttribute('aria-describedby', 'coach');
+  hintEl = bubble;
+  const away = () =>
+    setTimeout(() => {
+      if (hintEl === bubble && !bubble.matches(':hover') && !target.matches(':hover, :focus')) {
+        target.removeAttribute('aria-describedby');
+        hideHint();
+      }
+    }, 250);
+  target.addEventListener('mouseleave', away);
+  target.addEventListener('blur', away);
+  bubble.addEventListener('mouseleave', away);
+}
+
+function armHint(target) {
+  const key = target?.dataset.hint;
+  if (!key || hintSeen(key) || hintEl) return;
+  clearTimeout(hintTimer);
+  hintTimer = setTimeout(() => {
+    if (target.matches(':hover, :focus-visible')) showHint(target, key);
+  }, HINT_DELAY_MS);
+}
+
+if (canHover) {
+  document.addEventListener('mouseover', (e) => armHint(e.target.closest?.('[data-hint]')));
+}
+document.addEventListener('focusin', (e) => {
+  const target = e.target.closest?.('[data-hint]');
+  if (target?.matches(':focus-visible')) armHint(target);
+});
+document.addEventListener('scroll', hideHint, true);
 
 // ── Live mode: sign-in, real tests and runs, connections ──────────────────────
 

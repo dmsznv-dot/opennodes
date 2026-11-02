@@ -20,6 +20,32 @@ const DICT = {
     'nav.connections': 'Подключения',
     'nav.history': 'История',
     'nav.main': 'Основная навигация',
+    'nav.automationsShort': 'Сценарии',
+    'home.titleMore': 'Что ещё автоматизировать?',
+    'conn.freeTitle': 'Работают без подключения',
+    'conn.freeText': 'Эти шаги можно добавлять сразу — аккаунт не нужен.',
+    'conn.plannedTitle': 'Скоро',
+    'conn.plannedText': 'Интеграции в разработке. Шаблоны с ними пока недоступны.',
+    'conn.addAnother': 'Ещё одно подключение',
+    'hint.ok': 'Понятно',
+    'hint.nav.templates':
+      'Готовые сценарии под частые задачи: выберите, и останется заполнить пару полей.',
+    'hint.nav.connections':
+      'Аккаунты сервисов — бот Telegram, ключ AI. Подключаете один раз, используете во всех сценариях.',
+    'hint.nav.history': 'Все запуски с результатом каждого шага. Здесь видно, что пошло не так.',
+    'hint.profile': 'Язык, тема, режим разработчика и повтор обучения.',
+    'hint.useTemplate': 'Создаст вашу копию сценария — потом её можно менять как угодно.',
+    'hint.rename': 'Нажмите, чтобы переименовать сценарий.',
+    'hint.status':
+      'Черновик — ещё ни разу не включался. Включена — работает сама. Выключена — на паузе.',
+    'hint.version':
+      'Включённая версия продолжает работать, пока вы правите черновик. Здесь можно вернуться к ней.',
+    'hint.check':
+      'Прогоняет сценарий в симуляции с примерными данными — ничего никуда не отправляется.',
+    'hint.enable': 'Включает сценарий. В демо меняется только статус.',
+    'hint.node': 'Нажмите на шаг, чтобы настроить его. Метка справа показывает, всё ли заполнено.',
+    'hint.addStep': 'Добавить следующий шаг после этого.',
+    'hint.connCheck': 'Проверяет, что токен или ключ рабочий. Сообщения при этом не отправляются.',
 
     'menu.open': 'Меню профиля',
     'menu.restartTour': 'Повторить обучение',
@@ -269,6 +295,32 @@ const DICT = {
     'nav.connections': 'Connections',
     'nav.history': 'History',
     'nav.main': 'Main navigation',
+    'nav.automationsShort': 'Automations',
+    'home.titleMore': 'What else to automate?',
+    'conn.freeTitle': 'Work without a connection',
+    'conn.freeText': 'You can add these steps right away — no account needed.',
+    'conn.plannedTitle': 'Coming soon',
+    'conn.plannedText': 'Integrations in progress. Templates that use them are not available yet.',
+    'conn.addAnother': 'Add another connection',
+    'hint.ok': 'Got it',
+    'hint.nav.templates':
+      'Ready-made automations for common tasks: pick one and fill in a couple of fields.',
+    'hint.nav.connections':
+      'Service accounts — a Telegram bot, an AI key. Connect once, use in every automation.',
+    'hint.nav.history':
+      'Every run with the result of each step. This is where you see what went wrong.',
+    'hint.profile': 'Language, theme, developer mode and the tour.',
+    'hint.useTemplate': 'Creates your own copy of the automation — change it any way you like.',
+    'hint.rename': 'Click to rename the automation.',
+    'hint.status': 'Draft — never turned on. On — runs by itself. Off — paused.',
+    'hint.version':
+      'The version that is on keeps running while you edit the draft. You can go back to it here.',
+    'hint.check':
+      'Runs the automation as a simulation with example data — nothing is sent anywhere.',
+    'hint.enable': 'Turns the automation on. In the demo only the status changes.',
+    'hint.node': 'Click a step to set it up. The label on the right shows whether it is complete.',
+    'hint.addStep': 'Add the next step after this one.',
+    'hint.connCheck': 'Checks that the token or key works. No messages are sent.',
 
     'menu.open': 'Profile menu',
     'menu.restartTour': 'Restart the tour',
@@ -589,6 +641,13 @@ const LIVE = {
     'list.lastRun': 'Последний запуск: {when}',
     'onb.s2':
       'Подключите сервис (токен бота, API-ключ или локальную модель) или заполните поля, отмеченные «Нужна настройка».',
+    'hist.retry': 'Проверить ещё раз',
+    'run.sum.cron': 'По расписанию · {when}',
+    'run.sum.webhook': 'Получены данные вебхука: полей — {n}',
+    'run.sum.manual': 'Запуск вручную',
+    'hint.check': 'Выполняет шаги по-настоящему с примерными данными. В историю не попадает.',
+    'hint.enable': 'Сценарий начнёт запускаться сам — по расписанию, сообщению или вебхуку.',
+    'hint.profile': 'Язык, тема, режим разработчика, повтор обучения и выход.',
   },
   en: {
     'menu.about': 'About',
@@ -669,6 +728,14 @@ const LIVE = {
     'list.lastRun': 'Last run: {when}',
     'onb.s2':
       'Connect the service (a bot token, an API key or a local model) or fill in the fields marked “Needs setup”.',
+    'hist.retry': 'Test again',
+    'run.sum.cron': 'Schedule · {when}',
+    'run.sum.webhook': 'Webhook data received: {n} fields',
+    'run.sum.manual': 'Started by hand',
+    'hint.check': 'Runs the steps for real with example data. Not recorded in history.',
+    'hint.enable':
+      'The automation starts running by itself — on a schedule, a message or a webhook.',
+    'hint.profile': 'Language, theme, developer mode, the tour and sign out.',
   },
 };
 

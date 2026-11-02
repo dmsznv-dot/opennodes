@@ -256,6 +256,18 @@ function summarize(output) {
   return json.length > 160 ? `${json.slice(0, 157)}…` : json;
 }
 
+/** What started the run, in words: "Schedule · 2 Nov, 09:00", "Anna: hello". */
+function triggerSummary(type, payload) {
+  const p = payload && typeof payload === 'object' ? payload : {};
+  if (type === 'trigger.cron') {
+    const at = Date.parse(p.scheduledAt ?? p.firedAt);
+    return t('run.sum.cron', { when: Number.isFinite(at) ? formatDateTime(at) : '—' });
+  }
+  if (type === 'trigger.telegram') return `${p.fromName || p.username || '—'}: «${p.text ?? ''}»`;
+  if (type === 'trigger.webhook') return t('run.sum.webhook', { n: Object.keys(p).length });
+  return p.text ? `«${String(p.text).slice(0, 140)}»` : t('run.sum.manual');
+}
+
 function toStep(s, a, nums) {
   const node = a?.nodes.find((n) => n.id === s.nodeId);
   const out = s.outputPayload;
@@ -263,7 +275,7 @@ function toStep(s, a, nums) {
   let summary = summarize(out);
   if (s.status === 'SUCCEEDED') {
     status = s.nodeType === 'logic.condition' && out?.passed === false ? 'stopped' : 'ok';
-    if (s.nodeType?.startsWith('trigger.')) summary = summarize(out?.payload) || summary;
+    if (s.nodeType?.startsWith('trigger.')) summary = triggerSummary(s.nodeType, out?.payload);
   } else if (s.status === 'FAILED') status = 'failed';
   else if (s.status === 'SKIPPED') status = out?.disabled ? 'skipped' : 'notReached';
   else if (s.status === 'PENDING' && out?.waitingUntil) {
