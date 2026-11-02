@@ -23,6 +23,11 @@ export const WorkerConfigSchema = z.object({
     .default(24 * 3_600_000),
   /** Delays up to this long run inline; longer ones suspend the run (WAITING). */
   INLINE_DELAY_MAX_MS: z.coerce.number().int().min(0).default(5_000),
+  /** How often due schedules are checked. */
+  TRIGGER_TICK_MS: z.coerce.number().int().min(50).default(5_000),
+  /** Telegram Bot API base, e.g. a local Bot API server. */
+  TELEGRAM_API_BASE: z.string().url().default('https://api.telegram.org'),
+  TELEGRAM_POLL_TIMEOUT_SEC: z.coerce.number().int().min(0).max(50).default(25),
 });
 
 export type WorkerConfig = z.infer<typeof WorkerConfigSchema>;

@@ -24,6 +24,8 @@ export const WorkflowNodeDataSchema = z.object({
   description: z.string().optional(),
   config: z.record(z.string(), z.unknown()).default({}),
   credentialId: z.string().uuid().optional(),
+  /** A switched-off step: the engine passes over it and the flow continues. */
+  disabled: z.boolean().optional(),
   executionPolicy: NodeExecutionPolicySchema.optional(),
 });
 

@@ -1,5 +1,6 @@
 /**
- * OpenNodes — public GitHub Pages demo (simulation only).
+ * OpenNodes — editor. On GitHub Pages it is the public demo (simulation only); served
+ * by the OpenNodes web server it runs against the real API (see live.js).
  *
  * Simple-first: pick a task → connect a service → fill 2–5 clear fields → test → turn on.
  * The graph editor, versions, checksums and raw JSON stay available behind
@@ -15,7 +16,9 @@ import {
   detectLocale,
   formatRelative,
   formatDateTime,
+  setLiveMode,
 } from './i18n.js';
+import * as live from './live.js';
 import {
   ACTIONS,
   SERVICES,
@@ -53,7 +56,9 @@ import {
 
 // ── Persistent store (this browser only) ──────────────────────────────────────
 
-const STORE_KEY = 'opennodes.demo.v2';
+// Live mode keeps only per-browser preferences locally; everything else is on the server.
+const STORE_KEY = live.isLive ? 'opennodes.app.v1' : 'opennodes.demo.v2';
+setLiveMode(live.isLive);
 const MAX_RUNS = 60;
 
 function defaultStore() {
@@ -73,6 +78,13 @@ function loadStore() {
     const raw = localStorage.getItem(STORE_KEY);
     if (raw) {
       const data = JSON.parse(raw);
+      if (data?.version === 2 && live.isLive)
+        return {
+          ...defaultStore(),
+          settings: { ...defaultStore().settings, ...data.settings },
+          onboarding: data.onboarding ?? defaultStore().onboarding,
+          hints: data.hints ?? {},
+        };
       if (data?.version === 2)
         return {
           ...defaultStore(),
@@ -90,10 +102,16 @@ const store = loadStore();
 
 function save() {
   try {
-    localStorage.setItem(STORE_KEY, JSON.stringify(store));
+    const { automations, connections, runs, ...prefs } = store;
+    localStorage.setItem(STORE_KEY, JSON.stringify(live.isLive ? prefs : store));
   } catch {
     /* private mode: the demo still works for this session */
   }
+  if (live.isLive) live.scheduleSync(store, showApiError);
+}
+
+function showApiError(err) {
+  toast(t('live.saveFailed', { message: err?.message ?? String(err) }), 'error');
 }
 
 // ── Transient UI state ────────────────────────────────────────────────────────
@@ -110,6 +128,11 @@ const ui = {
   focusedField: null,
   runPanelOpen: false,
   lastRunId: null,
+  /** Live mode before the workspace is loaded: 'loading' | 'login' | 'setup' | 'offline'. */
+  auth: live.isLive ? 'loading' : null,
+  authError: null,
+  busy: false,
+  triggerInfo: null,
 };
 
 // ── Bootstrapping ─────────────────────────────────────────────────────────────
@@ -144,6 +167,7 @@ window.addEventListener('hashchange', () => {
   ui.panelDirty = false;
   ui.panelResult = null;
   ui.runPanelOpen = false;
+  ui.triggerInfo = null;
   parseRoute();
   render();
   $('view').focus({ preventScroll: true });
@@ -160,6 +184,7 @@ document.addEventListener('keydown', (e) => {
 
 function render() {
   applySettings();
+  if (ui.auth) return renderAuth();
   advanceOnboarding();
   renderHeader();
   renderBanner();
@@ -180,6 +205,8 @@ function render() {
 }
 
 function renderBanner() {
+  $('demoBanner').hidden = live.isLive;
+  if (live.isLive) return;
   clear($('demoBanner')).append(
     h('span', { class: 'demo-dot', 'aria-hidden': 'true' }),
     h('span', { class: 'banner-long' }, t('demo.banner')),
@@ -202,7 +229,10 @@ function renderHeader() {
       h('img', { src: './logo-mark.svg', alt: '', class: 'brand-logo' }),
       h('span', { class: 'brand-title' }, 'OpenNodes')
     ),
-    h('span', { class: 'demo-badge', title: t('demo.noRealRun') }, t('demo.badge')),
+    // Element.append() would print null as text, so the badge is spread in or not at all.
+    ...(live.isLive
+      ? []
+      : [h('span', { class: 'demo-badge', title: t('demo.noRealRun') }, t('demo.badge'))]),
     h(
       'nav',
       { class: 'main-nav', 'aria-label': t('nav.main') },
@@ -280,6 +310,9 @@ function openProfileMenu(anchor) {
     );
 
   openPopover(anchor, [
+    live.session.user
+      ? h('div', { class: 'menu-label' }, t('auth.signedInAs', { email: live.session.user.email }))
+      : null,
     h(
       'button',
       {
@@ -338,24 +371,42 @@ function openProfileMenu(anchor) {
       },
       t('menu.about')
     ),
-    h(
-      'button',
-      {
-        type: 'button',
-        role: 'menuitem',
-        class: 'menu-item danger',
-        onclick: () => {
-          closePopover();
-          if (!confirm(t('menu.resetConfirm'))) return;
-          const lang = store.settings.lang;
-          Object.assign(store, defaultStore());
-          store.settings.lang = lang;
-          save();
-          go('#/automations');
-        },
-      },
-      t('menu.reset')
-    ),
+    live.isLive
+      ? h(
+          'button',
+          {
+            type: 'button',
+            role: 'menuitem',
+            class: 'menu-item',
+            onclick: async () => {
+              closePopover();
+              await live.signOut().catch(() => {});
+              signedOut();
+            },
+          },
+          t('auth.logout')
+        )
+      : null,
+    live.isLive
+      ? null
+      : h(
+          'button',
+          {
+            type: 'button',
+            role: 'menuitem',
+            class: 'menu-item danger',
+            onclick: () => {
+              closePopover();
+              if (!confirm(t('menu.resetConfirm'))) return;
+              const lang = store.settings.lang;
+              Object.assign(store, defaultStore());
+              store.settings.lang = lang;
+              save();
+              go('#/automations');
+            },
+          },
+          t('menu.reset')
+        ),
   ]);
 }
 
@@ -713,6 +764,8 @@ function openTemplateDetails(tpl) {
 }
 
 function uid(prefix) {
+  // The server keys automations by UUID; the editor creates them before saving.
+  if (live.isLive && prefix === 'wf') return crypto.randomUUID();
   return `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 }
 
@@ -921,6 +974,8 @@ function automationRow(a) {
 }
 
 function runResultText(result) {
+  if (result === 'running') return t('hist.running');
+  if (result === 'waiting') return t('hist.waiting');
   if (result === 'ok') return t('hist.ok');
   if (result === 'stopped') return t('hist.okStopped');
   if (result?.startsWith?.('failed')) return t('hist.failed', { n: result.split(':')[1] ?? '?' });
@@ -996,7 +1051,11 @@ function viewConnections() {
             { class: 'row-gap' },
             h(
               'button',
-              { type: 'button', class: 'btn btn-ghost', onclick: () => toast(t('conn.checkOk')) },
+              {
+                type: 'button',
+                class: 'btn btn-ghost',
+                onclick: () => (live.isLive ? checkLiveConnection(c) : toast(t('conn.checkOk'))),
+              },
               t('conn.check')
             ),
             h(
@@ -1043,6 +1102,7 @@ function viewConnections() {
 }
 
 function openConnect(serviceId, onDone) {
+  if (live.isLive) return openLiveConnect(serviceId, onDone);
   const s = SERVICES[serviceId];
   openModal({
     title: t('conn.modalTitle', { service: L(s.name) }),
@@ -1101,26 +1161,42 @@ function openConnect(serviceId, onDone) {
 // ── View: History ─────────────────────────────────────────────────────────────
 
 function viewHistory() {
+  // Live: runs keep arriving from schedules and bots; refresh when the page is shown.
+  if (live.isLive && Date.now() - (ui.runsAt ?? 0) > 3000) {
+    ui.runsAt = Date.now();
+    live
+      .reloadRuns(store)
+      .then(() => ui.route.view === 'history' && render())
+      .catch(() => {});
+  }
+  const runs = live.isLive ? store.runs.filter((r) => r.kind !== 'test') : store.runs;
   return h(
     'div',
     { class: 'page' },
     h('h1', { class: 'page-title' }, t('hist.title')),
     h('p', { class: 'muted' }, t('hist.subtitle')),
-    store.runs.length
+    runs.length
       ? h(
           'ul',
           { class: 'run-list' },
-          store.runs.map((run) => h('li', {}, runCard(run, { showAutomation: true })))
+          runs.map((run) => h('li', {}, runCard(run, { showAutomation: true })))
         )
       : h('p', { class: 'empty' }, t('hist.empty'))
   );
 }
 
 function runHeadline(run) {
+  if (run.result === 'running') return t('hist.running');
+  if (run.result === 'waiting') return t('hist.waiting');
   if (run.result === 'ok') return t('hist.ok');
   if (run.result === 'stopped') return t('hist.okStopped');
   const failed = run.steps.find((s) => s.status === 'failed');
   return t('hist.failed', { n: failed?.n ?? '?' });
+}
+
+function runBadge(run) {
+  if (!run.live) return t('run.simulated');
+  return run.kind === 'test' ? t('run.test') : t(`run.trigger.${run.kind}`);
 }
 
 function runCard(run, { showAutomation = false, inEditor = false } = {}) {
@@ -1145,14 +1221,16 @@ function runCard(run, { showAutomation = false, inEditor = false } = {}) {
         h(
           'div',
           { class: 'run-title' },
-          h('span', { class: 'badge' }, t('run.simulated')),
+          h('span', { class: 'badge' }, runBadge(run)),
           ' ',
           inEditor
-            ? run.result === 'ok'
-              ? t('run.ok')
-              : run.result === 'stopped'
-                ? t('run.stopped', { n: run.steps.find((s) => s.status === 'stopped')?.n })
-                : t('run.failed', { n: run.steps.find((s) => s.status === 'failed')?.n ?? '?' })
+            ? run.result === 'running' || run.result === 'waiting'
+              ? t('run.inProgress')
+              : run.result === 'ok'
+                ? t('run.ok')
+                : run.result === 'stopped'
+                  ? t('run.stopped', { n: run.steps.find((s) => s.status === 'stopped')?.n })
+                  : t('run.failed', { n: run.steps.find((s) => s.status === 'failed')?.n ?? '?' })
             : runHeadline(run)
         ),
         h('div', { class: 'muted small' }, formatDateTime(run.at))
@@ -1186,7 +1264,15 @@ function runCard(run, { showAutomation = false, inEditor = false } = {}) {
 }
 
 function stepResultRow(s, a) {
-  const icon = { ok: '✓', stopped: '■', failed: '✕', skipped: '–', notReached: '·' }[s.status];
+  const icon = {
+    ok: '✓',
+    stopped: '■',
+    failed: '✕',
+    skipped: '–',
+    notReached: '·',
+    running: '…',
+    waiting: '⏸',
+  }[s.status];
   const text =
     s.status === 'failed'
       ? describeIssue(s.error)
@@ -1323,11 +1409,23 @@ function viewEditor(id) {
         type: 'button',
         class: 'btn',
         title: t('ed.checkHint'),
-        disabled: !a.nodes.length,
+        disabled: !a.nodes.length || ui.busy,
         onclick: () => runCheck(a),
       },
-      `▶ ${t('ed.check')}`
+      ui.busy ? `… ${t('ed.check')}` : `▶ ${t('ed.check')}`
     ),
+    live.isLive && a.status === 'active' && triggerOf(a)?.action === 'manual.run'
+      ? h(
+          'button',
+          {
+            type: 'button',
+            class: 'btn',
+            disabled: ui.busy,
+            onclick: () => liveRunNow(a),
+          },
+          `⏵ ${t('ed.runNow')}`
+        )
+      : null,
     a.status === 'active'
       ? a.dirty
         ? h(
@@ -1374,6 +1472,7 @@ function viewEditor(id) {
     'div',
     { class: 'editor' },
     bar,
+    live.isLive ? triggerStatusLine(a) : null,
     body,
     lastRun
       ? h(
@@ -1589,7 +1688,11 @@ function openVersionMenu(anchor, a) {
 // ── Run / activate ────────────────────────────────────────────────────────────
 
 function runCheck(a, { navigate = false } = {}) {
-  const run = simulate(a, store.connections);
+  if (live.isLive) return liveCheck(a, { navigate });
+  recordCheck(a, simulate(a, store.connections), { navigate });
+}
+
+function recordCheck(a, run, { navigate = false } = {}) {
   store.runs.unshift(run);
   store.runs.length = Math.min(store.runs.length, MAX_RUNS);
   a.lastRunAt = run.at;
@@ -1675,6 +1778,9 @@ function requestActivate(a) {
           ]
         : h('p', {}, t('ed.activateNoExternal')),
       h('p', { class: 'note' }, t('ed.activateDemo')),
+      a.nodes.some((n) => n.action === 'webhook.receive') && live.isLive
+        ? h('p', { class: 'small' }, `${t('ed.webhookUrl')}: `, h('code', {}, live.webhookUrl(a)))
+        : null,
     ],
     actions: [
       { label: t('ed.cancel') },
@@ -1682,6 +1788,7 @@ function requestActivate(a) {
         label: a.status === 'active' ? t('ed.publish') : t('ed.activateConfirm'),
         primary: true,
         onClick: () => {
+          if (live.isLive) return liveActivate(a);
           const wasActive = a.status === 'active';
           a.publishedVersion += 1;
           a.published = { nodes: structuredClone(a.nodes), edges: structuredClone(a.edges) };
@@ -1702,6 +1809,16 @@ function requestActivate(a) {
 }
 
 function setPaused(a) {
+  if (live.isLive) {
+    live
+      .setActive(store, a, false)
+      .then(() => {
+        toast(t('ed.paused'));
+        render();
+      })
+      .catch(showApiError);
+    return;
+  }
   a.status = 'paused';
   save();
   toast(t('ed.paused'));
@@ -2152,6 +2269,15 @@ function nodePanel(a, node) {
       : null,
     act?.planned ? h('div', { class: 'alert error' }, t('err.planned')) : null,
     accountBlock,
+    live.isLive && node.action === 'webhook.receive'
+      ? h(
+          'div',
+          { class: 'field' },
+          h('div', { class: 'field-label' }, t('ed.webhookUrl')),
+          h('code', { class: 'small webhook-url' }, live.webhookUrl(a)),
+          h('div', { class: 'small muted' }, t('ed.webhookUrlHint'))
+        )
+      : null,
     h('h3', { class: 'panel-section' }, t('panel.basic')),
     basic.map(fieldControl),
     dataBlock,
@@ -2196,9 +2322,17 @@ function nodePanel(a, node) {
         {
           type: 'button',
           class: 'btn',
-          onclick: () => {
+          onclick: async () => {
             if (ui.panelDirty && !saveNode()) return;
-            const run = simulate(a, store.connections, { until: node.id });
+            const run = live.isLive
+              ? await live
+                  .flushSync(store, showApiError)
+                  .then(() => live.testRun(a, node.id))
+                  .catch((err) => ({
+                    steps: [],
+                    error: { key: 'err.server', params: { message: err.message } },
+                  }))
+              : simulate(a, store.connections, { until: node.id });
             const step =
               run.steps.find((s) => s.nodeId === node.id) ??
               run.steps.find((s) => s.status === 'failed');
@@ -2583,7 +2717,412 @@ function renderTour() {
   );
 }
 
+// ── Live mode: sign-in, real tests and runs, connections ──────────────────────
+
+function triggerOf(a) {
+  return a.nodes.find((n) => ACTIONS[n.action]?.kind === 'trigger');
+}
+
+function liveCheck(a, { navigate = false } = {}) {
+  const nums = stepNumbers(a);
+  const external = stepOrder(a)
+    .map((id) => a.nodes.find((n) => n.id === id))
+    .filter((n) => n && !n.disabled && ACTIONS[n.action]?.external);
+  const start = async () => {
+    ui.busy = true;
+    render();
+    try {
+      await live.flushSync(store, showApiError);
+      recordCheck(a, await live.testRun(a), { navigate });
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      ui.busy = false;
+      render();
+    }
+  };
+  if (!external.length) return void start();
+  // A real test sends real messages: say which, before it happens.
+  openModal({
+    title: t('ed.testExternalTitle'),
+    body: [
+      h('p', {}, t('ed.testExternal')),
+      h(
+        'ul',
+        { class: 'plain-list' },
+        external.map((n) =>
+          h(
+            'li',
+            {},
+            `${t('step.n', { n: nums.get(n.id) })}: ${nodeTitle(n)} — ${nodeSubtitle(a, n)}`
+          )
+        )
+      ),
+    ],
+    actions: [
+      { label: t('ed.cancel') },
+      { label: t('ed.testConfirm'), primary: true, onClick: () => void start() },
+    ],
+  });
+}
+
+async function liveRunNow(a) {
+  ui.busy = true;
+  render();
+  try {
+    const run = await live.runNow(a);
+    store.runs.unshift(run);
+    a.lastRunAt = run.at;
+    a.lastRunResult = run.result;
+    ui.lastRunId = run.id;
+    ui.runPanelOpen = true;
+    toast(t('ed.runDone'));
+  } catch (err) {
+    toast(err.message, 'error');
+  } finally {
+    ui.busy = false;
+    render();
+  }
+}
+
+async function liveActivate(a) {
+  const wasActive = a.status === 'active';
+  try {
+    if (a.status === 'paused' && a.published && !a.dirty) await live.setActive(store, a, true);
+    else await live.publish(store, a);
+  } catch (err) {
+    openModal({ title: t('ed.publishFailed'), body: h('p', {}, err.message) });
+    return;
+  }
+  const ob = store.onboarding;
+  if (ob.status === 'in_progress' && ob.step === 4 && ob.automationId === a.id) {
+    ob.status = 'finishing';
+    ob.hidden = false;
+  }
+  ui.triggerInfo = null;
+  save();
+  toast(wasActive ? t('ed.published', { v: a.publishedVersion }) : t('ed.activated'));
+  render();
+}
+
+/** "Next run …" / bot polling error under the editor bar of an active automation. */
+function triggerStatusLine(a) {
+  const trigger = triggerOf(a);
+  if (
+    a.status !== 'active' ||
+    !['schedule.every', 'telegram.newMessage'].includes(trigger?.action)
+  ) {
+    return null;
+  }
+  if (ui.triggerInfo?.id !== a.id) {
+    ui.triggerInfo = { id: a.id, data: null };
+    live
+      .triggerStatus(a)
+      .then((data) => {
+        if (ui.triggerInfo?.id !== a.id) return;
+        ui.triggerInfo.data = data;
+        render();
+      })
+      .catch(() => {});
+    return null;
+  }
+  const info = ui.triggerInfo.data;
+  if (!info) return null;
+  const parts = [];
+  if (info.telegram?.lastError) {
+    return h(
+      'div',
+      { class: 'alert error trigger-status' },
+      t('ed.triggerError', { message: info.telegram.lastError })
+    );
+  }
+  if (info.nextRunAt)
+    parts.push(t('ed.triggerNext', { when: formatDateTime(Date.parse(info.nextRunAt)) }));
+  if (info.lastRunAt)
+    parts.push(t('ed.triggerLast', { when: formatRelative(Date.parse(info.lastRunAt)) }));
+  return parts.length ? h('div', { class: 'muted small trigger-status' }, parts.join(' · ')) : null;
+}
+
+async function checkLiveConnection(c) {
+  toast(t('conn.checking'));
+  try {
+    const res = await live.checkConnection(c.id);
+    toast(
+      res.ok
+        ? t('conn.checkOkLive', { message: res.message })
+        : t('conn.checkFail', { message: res.message }),
+      res.ok ? 'ok' : 'error'
+    );
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
+function openLiveConnect(serviceId, onDone) {
+  const s = SERVICES[serviceId];
+  const fields = live.CONNECT_FIELDS[serviceId] ?? [];
+  const nameInput = h('input', { class: 'input', id: 'conn_name', value: L(s.name) });
+  const controls = fields.map((f) => ({
+    f,
+    input: h('input', {
+      class: 'input',
+      id: `conn_${f.key}`,
+      type: f.secret ? 'password' : 'text',
+      autocomplete: 'off',
+      spellcheck: 'false',
+      placeholder: f.placeholder ?? '',
+    }),
+    error: h('div', { class: 'field-error' }),
+  }));
+  const formError = h('p', { class: 'error-text', role: 'alert' });
+  let sending = false;
+  const submit = async () => {
+    const values = Object.fromEntries(controls.map((c) => [c.f.key, c.input.value]));
+    let valid = true;
+    for (const c of controls) {
+      const missing = c.f.required && !c.input.value.trim();
+      c.error.textContent = missing ? t('conn.required') : '';
+      if (missing) valid = false;
+    }
+    formError.textContent = '';
+    if (serviceId === 'ai' && !values.apiKey?.trim() && !values.baseUrl?.trim()) {
+      formError.textContent = t('conn.needKey');
+      valid = false;
+    }
+    if (!valid || sending) return;
+    sending = true;
+    try {
+      const conn = await live.createConnection(
+        serviceId,
+        nameInput.value.trim() || L(s.name),
+        values
+      );
+      store.connections.push(conn);
+      // Steps waiting for this service pick the new connection up automatically.
+      for (const a of store.automations) {
+        for (const n of a.nodes) {
+          if (
+            ACTIONS[n.action]?.service === serviceId &&
+            !store.connections.some((c) => c.id === n.connectionId)
+          ) {
+            n.connectionId = conn.id;
+            if (a.nodeErrors) delete a.nodeErrors[n.id];
+          }
+        }
+      }
+      save();
+      closeModal();
+      toast(t('conn.saved'));
+      onDone?.(conn);
+      render();
+      checkLiveConnection(conn);
+    } catch (err) {
+      formError.textContent = err.message;
+    } finally {
+      sending = false;
+    }
+  };
+  openModal({
+    title: t('conn.modalTitle', { service: L(s.name) }),
+    body: [
+      s.needs
+        ? h(
+            'section',
+            { class: 'detail-section' },
+            h('h3', {}, t('conn.whatNeeded')),
+            h(
+              'ol',
+              { class: 'plain-list' },
+              L(s.needs).map((x) => h('li', {}, x))
+            )
+          )
+        : null,
+      h(
+        'form',
+        {
+          class: 'connect-form',
+          onsubmit: (e) => {
+            e.preventDefault();
+            submit();
+          },
+        },
+        h(
+          'div',
+          { class: 'field' },
+          h('label', { class: 'field-label', for: 'conn_name' }, t('conn.fieldName')),
+          nameInput
+        ),
+        controls.map((c) =>
+          h(
+            'div',
+            { class: 'field' },
+            h('label', { class: 'field-label', for: `conn_${c.f.key}` }, t(c.f.label)),
+            c.input,
+            c.f.help ? h('div', { class: 'small muted' }, t(c.f.help)) : null,
+            c.error
+          )
+        ),
+        h('button', { type: 'submit', hidden: true })
+      ),
+      formError,
+      h('p', { class: 'note' }, t('conn.subtitle')),
+    ],
+    actions: [
+      { label: t('ed.cancel') },
+      {
+        label: t('conn.save'),
+        primary: true,
+        onClick: () => {
+          submit();
+          return false; // the form closes itself once the server saved it
+        },
+      },
+    ],
+  });
+}
+
+function renderAuth() {
+  clear($('appHeader')).append(
+    h(
+      'span',
+      { class: 'brand' },
+      h('img', { src: './logo-mark.svg', alt: '', class: 'brand-logo' }),
+      h('span', { class: 'brand-title' }, 'OpenNodes')
+    ),
+    h('div', { class: 'header-right' }, langSwitch())
+  );
+  $('demoBanner').hidden = true;
+  const view = clear($('view'));
+  if (ui.auth === 'loading') {
+    view.append(h('div', { class: 'page auth-page' }, h('p', { class: 'muted' }, '…')));
+    return;
+  }
+  if (ui.auth === 'offline') {
+    view.append(
+      h(
+        'div',
+        { class: 'page auth-page' },
+        h(
+          'section',
+          { class: 'auth-card' },
+          h('h1', { class: 'page-title' }, t('auth.offline')),
+          h('p', { class: 'muted' }, t('auth.offlineText')),
+          h('button', { type: 'button', class: 'btn btn-primary', onclick: boot }, t('auth.retry'))
+        )
+      )
+    );
+    return;
+  }
+  const setup = ui.auth === 'setup';
+  const field = (id, label, input, hint) =>
+    h(
+      'div',
+      { class: 'field' },
+      h('label', { class: 'field-label', for: id }, label),
+      input,
+      hint ? h('div', { class: 'small muted' }, hint) : null
+    );
+  const email = h('input', {
+    class: 'input',
+    id: 'auth_email',
+    type: 'email',
+    autocomplete: 'username',
+    required: true,
+  });
+  const password = h('input', {
+    class: 'input',
+    id: 'auth_password',
+    type: 'password',
+    autocomplete: setup ? 'new-password' : 'current-password',
+    required: true,
+    minlength: setup ? '8' : null,
+  });
+  const team = setup
+    ? h('input', { class: 'input', id: 'auth_team', value: t('auth.workspaceDefault') })
+    : null;
+  const error = h('p', { class: 'error-text', role: 'alert' }, ui.authError ?? '');
+  const submitBtn = h(
+    'button',
+    { type: 'submit', class: 'btn btn-primary' },
+    setup ? t('auth.create') : t('auth.login')
+  );
+  view.append(
+    h(
+      'div',
+      { class: 'page auth-page' },
+      h(
+        'form',
+        {
+          class: 'auth-card',
+          onsubmit: async (e) => {
+            e.preventDefault();
+            submitBtn.disabled = true;
+            error.textContent = '';
+            try {
+              if (setup)
+                await live.createOwner(email.value.trim(), password.value, team.value.trim());
+              else await live.signIn(email.value.trim(), password.value);
+              ui.authError = null;
+              await enterWorkspace();
+            } catch (err) {
+              error.textContent = err.status === 401 ? t('auth.bad') : err.message;
+              submitBtn.disabled = false;
+            }
+          },
+        },
+        h('h1', { class: 'page-title' }, setup ? t('auth.setupTitle') : t('auth.loginTitle')),
+        setup ? h('p', { class: 'muted' }, t('auth.setupText')) : null,
+        field('auth_email', t('auth.email'), email),
+        field('auth_password', t('auth.password'), password, setup ? t('auth.passwordHint') : null),
+        setup ? field('auth_team', t('auth.workspace'), team) : null,
+        error,
+        submitBtn
+      )
+    )
+  );
+  email.focus();
+}
+
+async function enterWorkspace() {
+  await live.loadWorkspace(store);
+  ui.auth = null;
+  if (!location.hash) location.hash = '#/automations';
+  parseRoute();
+  render();
+}
+
+function signedOut() {
+  store.automations = [];
+  store.connections = [];
+  store.runs = [];
+  live.session.user = null;
+  live.session.workspace = null;
+  closeModal();
+  ui.auth = 'login';
+  render();
+}
+
+window.addEventListener('opennodes:signed-out', signedOut);
+
+/** Demo: render at once. Live: find out whether to set up, sign in or load. */
+async function boot() {
+  if (!live.isLive) return render();
+  ui.auth = 'loading';
+  render();
+  try {
+    const status = await live.setupStatus();
+    if (!status.bootstrapped) ui.auth = 'setup';
+    else if (!live.session.token) ui.auth = 'login';
+    else return await enterWorkspace();
+  } catch (err) {
+    ui.auth = err.status === 401 ? 'login' : 'offline';
+    // The API may still be starting: keep trying while this screen is shown.
+    if (ui.auth === 'offline') setTimeout(() => ui.auth === 'offline' && boot(), 3000);
+  }
+  render();
+}
+
 // ── Start ─────────────────────────────────────────────────────────────────────
 
 parseRoute();
-render();
+boot();

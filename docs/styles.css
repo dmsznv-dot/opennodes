@@ -1484,3 +1484,44 @@ textarea.input {
     scroll-behavior: auto !important;
   }
 }
+
+/* ── Live mode (connected to an OpenNodes server) ─────────────────────── */
+.toast.error {
+  background: var(--err);
+  color: #fff;
+}
+.auth-page {
+  align-items: center;
+  padding-top: var(--space-8);
+}
+.auth-card {
+  width: min(420px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
+}
+.auth-card .btn-primary {
+  align-self: flex-start;
+}
+.connect-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.trigger-status {
+  margin: 0 var(--space-4) var(--space-2);
+}
+.webhook-url {
+  display: block;
+  word-break: break-all;
+  padding: var(--space-2);
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+}
+.demo-banner[hidden] {
+  display: none;
+}

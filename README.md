@@ -45,6 +45,10 @@ The demo in `docs/` follows a **simple-first** flow: *pick a task → connect a 
 
 Open it locally with any static server, e.g. `python3 -m http.server --directory docs`.
 
+The **same editor is the real web app**: served by the OpenNodes web server (`apps/web`), it
+switches to live mode (`/config.js`) — sign-in, data on the server, real tests and runs. See
+*Run on this computer* below.
+
 ---
 
 ## Monorepo Architecture (13 Packages)
@@ -87,12 +91,39 @@ pnpm test
 node tests/run-e2e.mjs
 ```
 
-### 2. Self-Hosted Docker Compose Deployment
+### 2. Run on this computer (no Docker, Postgres or Redis)
+
+```bash
+pnpm install
+pnpm build
+pnpm start:local
+```
+
+Open http://localhost:3000. The first visit asks you to create the owner account. Data lives in
+`./.data` (embedded Postgres and the encryption key; never commit it). `WEB_PORT`, `API_PORT`,
+`DATA_DIR` and the API's variables (e.g. `SSRF_ALLOWLIST=localhost:1234`) can be set in the
+environment.
+
+What the web app adds to the demo editor, in live mode:
+- **Sign-in and first-run setup**; drafts are saved to the server as you edit.
+- **“Test” runs the steps for real** (in the API, not recorded in history) and asks first when a
+  step would send something outside; “Test step” runs a step with the steps before it.
+- **Turn on** publishes the version and starts its trigger (schedule, Telegram, webhook);
+  **Turn off** pauses it (webhooks answer `409`). Active schedules show their next run, bots show
+  polling errors, webhook steps show their URL. Manual automations get a **Run** button.
+- **Connections** are stored encrypted on the server (Telegram bot token, OpenAI key or a local
+  model server) and can be checked (`getMe`, model list).
+- **History** lists real runs from the server. Steps the server cannot run yet (email, external
+  Postgres) and templates that use them are shown as planned.
+
+### 3. Self-Hosted Docker Compose Deployment
 
 ```bash
 cp .env.example .env
 docker compose up -d --build
 ```
+
+The web app is served on port 3000 and talks to the API through the same origin.
 
 ### How runs are executed
 
@@ -109,7 +140,28 @@ Guarantees, in both modes:
 - **Crash recovery.** A running run heartbeats; if its worker dies, the run is re-queued and resumes after the last finished step, on the same branch.
 - **Cancel works across processes.** `POST /executions/:id/cancel` stops a queued or waiting run, and a running one between steps.
 
-### 3. Local models (Hugging Face GGUF, LM Studio, Ollama, llama.cpp)
+### Schedules and Telegram messages
+
+Publishing a workflow whose trigger is **On a schedule** (`trigger.cron`) or **New Telegram
+message** (`trigger.telegram`) registers it; the worker (or the API in `embedded` mode) starts
+the runs. Publishing a version with another trigger, or rolling back, updates or removes it.
+
+- **Schedule** — config `{ "every": "every15m" | "hourly" | "daily" | "weekly", "time": "09:00", "timezone": "Europe/Moscow" }`,
+  or any 5-field cron in `"cron"` (`@daily`, `0 9 * * 1-5`, …), evaluated in the IANA `timezone` (default `UTC`,
+  daylight saving handled). `$trigger` = `{ scheduledAt, firedAt, timezone, cron }`.
+  A run missed while nothing was running is skipped; set `"catchUp": "once"` to run it once instead.
+- **Telegram** — select a `telegram` connection (`{ "botToken": "…" }`) on the trigger; optional
+  `"onlyCommands": "/start, /ask"`. `$trigger` = `{ text, command, args, chatId, fromName, username, message, … }`.
+  The bot is polled with `getUpdates`, so it must not have a webhook set. Messages sent before the
+  trigger was published are ignored.
+- **Each tick and each message starts exactly one run**, with several workers and across restarts:
+  a schedule tick is claimed together with the run it creates, and a bot's update cursor advances
+  in the same transaction that records its runs (only one process polls a bot at a time).
+- `GET /api/v1/workflows/:id/triggers` shows the next and last run, the last run id and polling errors
+  (e.g. a webhook still set on the bot); `PUT` the same path with `{ "enabled": false | true }` pauses
+  or resumes it — resuming never replays what was missed.
+
+### 4. Local models (Hugging Face GGUF, LM Studio, Ollama, llama.cpp)
 
 OpenNodes does not run models itself. It calls a model server you run, over the
 OpenAI-compatible API, so any model you downloaded can be a step in a workflow.

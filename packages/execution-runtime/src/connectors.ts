@@ -218,6 +218,7 @@ function connectorExecutor(
           input.model = credentials.defaultModel;
         }
       }
+      if (connector.id === 'core.rss' && input.url === undefined) input.url = input.feedUrl;
       if (connector.id === 'ai.openai' && !input.messages && typeof input.prompt === 'string') {
         input.messages = [
           ...(typeof input.system === 'string' && input.system
@@ -254,22 +255,53 @@ function connectorExecutor(
           'ERR_ACTION_EXECUTION'
         );
       }
-      return { output: withText(connector.id, output), activeOutputs: ['main'] };
+      return { output: normalizeOutput(connector.id, input, output), activeOutputs: ['main'] };
     },
   };
 }
 
 /** Adds a plain `text` field to model replies so the next step can use `{{ $nodes.x.output.text }}`. */
-function withText(connectorId: string, output: unknown): unknown {
+/**
+ * Adds the plain fields the editor's steps expose (`text`, `messageId`, `body`, …) next
+ * to each service's raw answer, so `{{ $nodes.x.output.text }}` works for any provider.
+ */
+function normalizeOutput(
+  connectorId: string,
+  input: Record<string, unknown>,
+  output: unknown
+): unknown {
   if (!output || typeof output !== 'object') return output;
   const o = output as Record<string, any>;
-  const text =
-    connectorId === 'ai.openai'
-      ? o.choices?.[0]?.message?.content
-      : connectorId === 'ai.ollama'
-        ? o.response
-        : undefined;
-  return typeof text === 'string' ? { ...o, text } : output;
+  switch (connectorId) {
+    case 'ai.openai': {
+      const text = o.choices?.[0]?.message?.content;
+      return typeof text === 'string' ? { ...o, text } : o;
+    }
+    case 'ai.ollama':
+      return typeof o.response === 'string' ? { ...o, text: o.response } : o;
+    case 'core.telegramBot':
+      return { ...o, messageId: o.result?.message_id ?? null };
+    case 'core.httpRequest':
+      return { ...o, body: o.data };
+    case 'core.outgoingWebhook':
+      return { ...o, status: o.statusCode };
+    case 'core.rss': {
+      const all: Array<Record<string, unknown>> = Array.isArray(o.items) ? o.items : [];
+      const max = Number(input.maxItems);
+      const items = Number.isFinite(max) && max > 0 ? all.slice(0, max) : all;
+      return {
+        ...o,
+        items,
+        count: items.length,
+        titles: items
+          .map((i) => String(i.title ?? ''))
+          .filter(Boolean)
+          .join('\n'),
+      };
+    }
+    default:
+      return o;
+  }
 }
 
 /** Node executors for every packaged connector, keyed by node type (= connector id). */
@@ -277,9 +309,57 @@ export function buildConnectorExecutors(
   options: ConnectorRuntimeOptions
 ): Record<string, NodeExecutor> {
   const all = { ...CORE_CONNECTORS, ...AI_CONNECTORS };
-  return Object.fromEntries(
+  const executors: Record<string, NodeExecutor> = Object.fromEntries(
     Object.values(all).map((connector) => [connector.id, connectorExecutor(connector, options)])
   );
+  executors['ai.classify'] = classifyExecutor(executors['ai.openai']!);
+  return executors;
+}
+
+/** Node types whose connector exists but does not work yet (the step fails honestly). */
+export function notImplementedNodeTypes(): string[] {
+  return Object.keys(NOT_IMPLEMENTED);
+}
+
+/**
+ * "Sort into a category": asks the connection's chat model to pick exactly one of the
+ * listed categories and returns it as `category` (matched back to the list's spelling).
+ */
+function classifyExecutor(chat: NodeExecutor): NodeExecutor {
+  return {
+    async execute(node, config, step) {
+      const categories = String(config.categories ?? '')
+        .split(',')
+        .map((c) => c.trim())
+        .filter(Boolean);
+      if (categories.length < 2) {
+        throw new ActionExecutionError(
+          'Sort into a category: list at least two categories.',
+          'classify',
+          'ai.classify'
+        );
+      }
+      const prompt =
+        `Classify the text into exactly one of these categories: ${categories.join(', ')}.\n` +
+        'Answer with the category name only.\n\n' +
+        `Text:\n${String(config.text ?? '')}`;
+      const result = await chat.execute(
+        { ...node, type: 'ai.openai' },
+        { model: config.model, temperature: 0, prompt },
+        step
+      );
+      const answer = String((result.output as { text?: unknown })?.text ?? '').trim();
+      const plain = answer
+        .toLowerCase()
+        .replace(/[.!"«»]/g, '')
+        .trim();
+      const category =
+        categories.find((c) => c.toLowerCase() === plain) ??
+        categories.find((c) => plain.includes(c.toLowerCase())) ??
+        answer;
+      return { output: { category, answer }, activeOutputs: ['main'] };
+    },
+  };
 }
 
 /**

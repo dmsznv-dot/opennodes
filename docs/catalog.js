@@ -417,7 +417,7 @@ export const ACTIONS = {
     }),
   },
   'ai.classify': {
-    type: 'ai.openai',
+    type: 'ai.classify',
     service: 'ai',
     kind: 'action',
     name: tr('AI: определить категорию', 'AI: classify text'),
@@ -715,7 +715,7 @@ export const ACTIONS = {
     }),
   },
   'logic.filter': {
-    type: 'primitive.filter',
+    type: 'logic.condition',
     service: 'logic',
     kind: 'logic',
     name: tr('Продолжить, только если…', 'Continue only if…'),
@@ -819,7 +819,7 @@ export const ACTIONS = {
     }),
   },
   'text.compose': {
-    type: 'core.jsonTransform',
+    type: 'text.compose',
     service: 'logic',
     kind: 'logic',
     name: tr('Собрать текст или отчёт', 'Compose a text or report'),

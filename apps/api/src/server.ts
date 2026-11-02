@@ -37,7 +37,11 @@ import {
   ExecutionRuntime,
   ExecutionWorker,
   LocalQueueManager,
+  assertWorkflowTrigger,
   listConnectionModels,
+  listWorkflowTriggers,
+  setWorkflowTriggersEnabled,
+  syncWorkflowTriggers,
 } from '@localflow/execution-runtime';
 import { verifyWebhookHmac } from '@localflow/connectors-core';
 import { LocalFlowError, SafeHttpClient, slugifyWorkspaceName } from '@localflow/shared';
@@ -182,6 +186,13 @@ export class LocalFlowApiServer {
         db,
         concurrency: this.config.workerConcurrency,
         recoveryIntervalMs: this.config.recoveryIntervalMs,
+        triggers: {
+          tickMs: this.config.triggerTickMs,
+          telegramApiBase: this.config.telegramApiBase,
+          telegramPollTimeoutSec: this.config.telegramPollTimeoutSec,
+          telegramMinPollIntervalMs: this.config.telegramMinPollIntervalMs,
+          telegramRetryMs: this.config.telegramRetryMs,
+        },
       });
       await worker.start();
     }
@@ -212,6 +223,16 @@ export class LocalFlowApiServer {
     const userId = await repo.createUser(email.trim().toLowerCase(), passwordHash);
     const { token } = await sessions.createSession(userId);
     return { userId, token };
+  }
+
+  /** Test hook: the database, e.g. to move a schedule's next run into the past. */
+  public async database(): Promise<DatabaseInstance> {
+    return (await this.getRuntime()).db;
+  }
+
+  /** Test hook: one scheduler pass (due schedules, polled bots) without waiting for the timer. */
+  public async tickTriggers(): Promise<void> {
+    await (await this.getRuntime()).worker?.scheduler?.tick();
   }
 
   /** Test hook: the ciphertext envelope exactly as stored in the database. */
@@ -355,6 +376,12 @@ export class LocalFlowApiServer {
             message: 'Published workflow not found.',
           });
         }
+        if (!wf.isActive) {
+          return respond(409, {
+            code: 'ERR_WORKFLOW_INACTIVE',
+            message: 'This automation is turned off.',
+          });
+        }
 
         const idempotencyKey = reqHeaders['x-idempotency-key'];
         if (idempotencyKey) {
@@ -413,6 +440,69 @@ export class LocalFlowApiServer {
           code: 'ERR_INVALID_JSON',
           message: 'Request body must be a JSON object.',
         });
+      }
+
+      // 4b. Who am I, sign out, what the server can run
+      if (req.method === 'GET' && pathname === '/api/v1/me') {
+        return respond(200, await rt.repo.getProfile(auth.userId));
+      }
+      if (req.method === 'POST' && pathname === '/api/v1/auth/logout') {
+        const token = (reqHeaders['authorization'] ?? '').replace(/^Bearer\s+/i, '');
+        if (token) await rt.sessions.deleteSession(token);
+        return respond(200, { ok: true });
+      }
+      if (req.method === 'GET' && pathname === '/api/v1/catalog') {
+        return respond(200, rt.execution.catalog());
+      }
+
+      // 4c. Run history of a workspace (optionally one workflow), with steps
+      const wsRunsMatch = pathname.match(/^\/api\/v1\/workspaces\/([^/]+)\/executions$/);
+      if (req.method === 'GET' && wsRunsMatch) {
+        const workspaceId = wsRunsMatch[1]!;
+        await this.requireWorkspacePermission(
+          rt,
+          workspaceId,
+          auth.userId,
+          PERMISSIONS.EXECUTION_VIEW
+        );
+        const workflowId = urlObj.searchParams.get('workflowId') ?? undefined;
+        if (workflowId && !isUuid(workflowId)) return respond(200, { executions: [] });
+        const runs = await rt.repo.listRunsWithSteps(workspaceId, {
+          workflowId,
+          limit: Number(urlObj.searchParams.get('limit')) || 30,
+        });
+        return respond(200, { executions: redact(runs) });
+      }
+
+      // 4d. Remove a connection; check that a connection works
+      const credItemMatch = pathname.match(
+        /^\/api\/v1\/workspaces\/([^/]+)\/credentials\/([^/]+)(\/check)?$/
+      );
+      if (
+        credItemMatch &&
+        ((req.method === 'DELETE' && !credItemMatch[3]) ||
+          (req.method === 'GET' && credItemMatch[3]))
+      ) {
+        const workspaceId = credItemMatch[1]!;
+        await this.requireWorkspacePermission(
+          rt,
+          workspaceId,
+          auth.userId,
+          req.method === 'DELETE' ? PERMISSIONS.CREDENTIAL_DELETE : PERMISSIONS.CREDENTIAL_REFERENCE
+        );
+        const cred = await rt.repo.findCredential(credItemMatch[2]!);
+        if (!cred || cred.workspaceId !== workspaceId) {
+          return respond(404, { code: 'ERR_NOT_FOUND', message: 'Connection not found.' });
+        }
+        if (req.method === 'DELETE') {
+          await rt.repo.deleteCredential(cred.id);
+          return respond(200, { ok: true });
+        }
+        const secrets = await this.encryptionService.decryptJson<Record<string, unknown>>(
+          cred.encryptedPayload,
+          workspaceId
+        );
+        return respond(200, await this.checkConnection(cred.type, secrets));
       }
 
       // 5. Workspace Credentials Vault
@@ -570,7 +660,19 @@ export class LocalFlowApiServer {
           };
           const graph = DraftGraphSchema.safeParse({ nodes: body.nodes, edges: body.edges });
           if (!graph.success) return respond(400, this.graphValidationError(graph.error));
+          const clientId = (body as { id?: unknown }).id;
+          if (clientId !== undefined && (typeof clientId !== 'string' || !isUuid(clientId))) {
+            return respond(400, {
+              code: 'ERR_VALIDATION',
+              message: 'A workflow id chosen by the client must be a UUID.',
+              details: { field: 'id' },
+            });
+          }
+          if (clientId && (await rt.repo.findWorkflow(clientId))) {
+            return respond(409, { code: 'ERR_CONFLICT', message: 'This workflow id is taken.' });
+          }
           const wf = await rt.repo.createWorkflow({
+            id: clientId,
             workspaceId,
             name: body.name ?? 'Untitled Workflow',
             description: body.description ?? '',
@@ -608,7 +710,13 @@ export class LocalFlowApiServer {
         }
         const graph = DraftGraphSchema.safeParse(body);
         if (!graph.success) return respond(400, this.graphValidationError(graph.error));
-        const updated = await rt.repo.updateDraft(wf.id, graph.data.nodes, graph.data.edges);
+        const name = (req.body as { name?: unknown }).name;
+        const updated = await rt.repo.updateDraft(
+          wf.id,
+          graph.data.nodes,
+          graph.data.edges,
+          typeof name === 'string' && name.trim() ? name.trim().slice(0, 255) : undefined
+        );
         return respond(200, updated);
       }
 
@@ -634,6 +742,8 @@ export class LocalFlowApiServer {
           });
         }
 
+        // A schedule or bot trigger that cannot work refuses the publish (422).
+        await assertWorkflowTrigger(rt.db, wf.workspaceId, wf.draft.nodes);
         const snapshotNodes = structuredClone(wf.draft.nodes);
         const snapshotEdges = structuredClone(wf.draft.edges);
         const checksum = computeWorkflowChecksum({ nodes: snapshotNodes, edges: snapshotEdges });
@@ -644,6 +754,16 @@ export class LocalFlowApiServer {
           checksum,
           publishedBy: auth.userId,
         });
+        await syncWorkflowTriggers(rt.db, {
+          workspaceId: wf.workspaceId,
+          workflowId: wf.id,
+          workflowVersionId: versionSnapshot.id,
+          nodes: snapshotNodes,
+          name: wf.name,
+        });
+        // Publishing is "turn on with this version" (also after a pause).
+        await rt.repo.setWorkflowActive(wf.id, true);
+        await setWorkflowTriggersEnabled(rt.db, wf.id, true);
         return respond(201, versionSnapshot);
       }
 
@@ -665,12 +785,179 @@ export class LocalFlowApiServer {
             message: 'Target version not found.',
           });
         }
+        await assertWorkflowTrigger(rt.db, wf.workspaceId, targetSnap.nodes);
         await rt.repo.setActiveVersion(wf.id, targetSnap.id);
+        await syncWorkflowTriggers(rt.db, {
+          workspaceId: wf.workspaceId,
+          workflowId: wf.id,
+          workflowVersionId: targetSnap.id,
+          nodes: targetSnap.nodes,
+          name: wf.name,
+        });
         return respond(200, {
           workflowId: wf.id,
           activeVersion: targetSnap.version,
           snapshot: targetSnap,
         });
+      }
+
+      // One workflow: read, delete
+      const wfItemMatch = pathname.match(/^\/api\/v1\/workflows\/([^/]+)$/);
+      if (wfItemMatch && (req.method === 'GET' || req.method === 'DELETE')) {
+        const wf = await rt.repo.findWorkflow(wfItemMatch[1]!);
+        if (!wf) return respond(404, { code: 'ERR_NOT_FOUND', message: 'Workflow not found.' });
+        await this.requireWorkspacePermission(
+          rt,
+          wf.workspaceId,
+          auth.userId,
+          req.method === 'GET' ? PERMISSIONS.WORKFLOW_VIEW : PERMISSIONS.WORKFLOW_DELETE
+        );
+        if (req.method === 'DELETE') {
+          await rt.repo.deleteWorkflow(wf.id);
+          return respond(200, { ok: true });
+        }
+        return respond(200, { ...wf, triggers: await listWorkflowTriggers(rt.db, wf.id) });
+      }
+
+      // Turn a published workflow on or off (triggers and webhooks)
+      const wfActiveMatch = pathname.match(/^\/api\/v1\/workflows\/([^/]+)\/active$/);
+      if (req.method === 'PUT' && wfActiveMatch) {
+        const wf = await rt.repo.findWorkflow(wfActiveMatch[1]!);
+        if (!wf) return respond(404, { code: 'ERR_NOT_FOUND', message: 'Workflow not found.' });
+        await this.requireWorkspacePermission(
+          rt,
+          wf.workspaceId,
+          auth.userId,
+          PERMISSIONS.WORKFLOW_PUBLISH
+        );
+        const active = (req.body as { active?: unknown }).active;
+        if (typeof active !== 'boolean') {
+          return respond(400, {
+            code: 'ERR_VALIDATION',
+            message: 'Send {"active": true} or {"active": false}.',
+            details: { field: 'active' },
+          });
+        }
+        if (active && wf.activeVersion === null) {
+          return respond(400, {
+            code: 'ERR_WORKFLOW_NOT_PUBLISHED',
+            message: 'Publish the workflow to turn it on.',
+          });
+        }
+        await rt.repo.setWorkflowActive(wf.id, active);
+        await setWorkflowTriggersEnabled(rt.db, wf.id, active);
+        return respond(200, { workflowId: wf.id, isActive: active });
+      }
+
+      // Test the draft (or a graph sent by the editor) with real steps, unrecorded
+      const wfTestMatch = pathname.match(/^\/api\/v1\/workflows\/([^/]+)\/test-run$/);
+      if (req.method === 'POST' && wfTestMatch) {
+        const wf = await rt.repo.findWorkflow(wfTestMatch[1]!);
+        if (!wf) return respond(404, { code: 'ERR_NOT_FOUND', message: 'Workflow not found.' });
+        await this.requireWorkspacePermission(
+          rt,
+          wf.workspaceId,
+          auth.userId,
+          PERMISSIONS.WORKFLOW_EXECUTE
+        );
+        const body = (req.body ?? {}) as {
+          nodes?: unknown;
+          edges?: unknown;
+          payload?: unknown;
+          untilNodeId?: unknown;
+        };
+        const graph = DraftGraphSchema.safeParse(
+          body.nodes !== undefined ? { nodes: body.nodes, edges: body.edges } : wf.draft
+        );
+        if (!graph.success) return respond(400, this.graphValidationError(graph.error));
+        let { nodes, edges } = graph.data;
+        const validation = validateWorkflowGraph(nodes, edges, { requireSingleTrigger: true });
+        if (!validation.valid) {
+          return respond(422, {
+            code: validation.errors[0]?.code ?? 'ERR_GRAPH_INVALID',
+            message: validation.errors[0]?.message ?? 'Workflow graph validation failed.',
+            errors: validation.errors,
+          });
+        }
+        if (typeof body.untilNodeId === 'string') {
+          // Only that step and the steps it depends on.
+          const keep = new Set([body.untilNodeId]);
+          for (let grew = true; grew;) {
+            grew = false;
+            for (const e of edges) {
+              if (keep.has(e.target) && !keep.has(e.source)) {
+                keep.add(e.source);
+                grew = true;
+              }
+            }
+          }
+          nodes = nodes.filter((n) => keep.has(n.id));
+          edges = edges.filter((e) => keep.has(e.source) && keep.has(e.target));
+        }
+        const result = await rt.execution.testRun(
+          {
+            id: wf.id,
+            workspaceId: wf.workspaceId,
+            name: wf.name,
+            schemaVersion: '1.0',
+            nodes,
+            edges,
+            executionPolicy: { executionTimeoutMs: 120_000, maxConcurrency: 1 },
+          },
+          body.payload ?? {}
+        );
+        return respond(200, {
+          execution: redact({
+            status: result.execution.status,
+            errorMessage: result.execution.errorMessage ?? null,
+            errorNodeId: result.execution.errorNodeId ?? null,
+            durationMs: result.durationMs,
+            resumeAt: result.suspension?.resumeAt.toISOString() ?? null,
+          }),
+          steps: redact(
+            result.stepRecords.map((st) => ({
+              nodeId: st.nodeId,
+              nodeType: st.nodeType,
+              status: st.status,
+              inputPayload: st.inputPayload ?? null,
+              outputPayload: st.outputPayload ?? null,
+              errorMessage: st.errorMessage ?? null,
+              durationMs: st.durationMs ?? null,
+            }))
+          ),
+        });
+      }
+
+      // Schedule / Telegram trigger of the live version: next run, last run, errors, pause.
+      const wfTriggersMatch = pathname.match(/^\/api\/v1\/workflows\/([^/]+)\/triggers$/);
+      if ((req.method === 'GET' || req.method === 'PUT') && wfTriggersMatch) {
+        const wf = await rt.repo.findWorkflow(wfTriggersMatch[1]!);
+        if (!wf) return respond(404, { code: 'ERR_NOT_FOUND', message: 'Workflow not found.' });
+        if (req.method === 'PUT') {
+          await this.requireWorkspacePermission(
+            rt,
+            wf.workspaceId,
+            auth.userId,
+            PERMISSIONS.WORKFLOW_PUBLISH
+          );
+          const body = (req.body ?? {}) as { enabled?: unknown };
+          if (typeof body.enabled !== 'boolean') {
+            return respond(400, {
+              code: 'ERR_VALIDATION',
+              message: 'Send {"enabled": true} to resume or {"enabled": false} to pause.',
+              details: { field: 'enabled' },
+            });
+          }
+          await setWorkflowTriggersEnabled(rt.db, wf.id, body.enabled);
+        } else {
+          await this.requireWorkspacePermission(
+            rt,
+            wf.workspaceId,
+            auth.userId,
+            PERMISSIONS.WORKFLOW_VIEW
+          );
+        }
+        return respond(200, { triggers: await listWorkflowTriggers(rt.db, wf.id) });
       }
 
       const wfExecuteMatch = pathname.match(/^\/api\/v1\/workflows\/([^/]+)\/execute$/);
@@ -805,6 +1092,40 @@ export class LocalFlowApiServer {
         .slice(0, 20)
         .map((i) => ({ path: i.path.join('.'), message: i.message })),
     };
+  }
+
+  /** "Check connection": asks the service something harmless with the saved secrets. */
+  private async checkConnection(
+    type: string,
+    secrets: Record<string, unknown>
+  ): Promise<{ ok: boolean; message: string; models?: string[] }> {
+    const http = new SafeHttpClient();
+    try {
+      if (type === 'telegram' || type === 'core.telegramBot') {
+        const token = String(secrets.botToken ?? '');
+        if (!token) return { ok: false, message: 'The connection has no bot token.' };
+        const res = await http.request<{ ok?: boolean; result?: { username?: string } }>({
+          url: `${this.config.telegramApiBase.replace(/\/+$/, '')}/bot${token}/getMe`,
+          allowlist: this.config.ssrfAllowlist,
+        });
+        const body = typeof res.data === 'object' && res.data ? res.data : {};
+        return body.ok && body.result?.username
+          ? { ok: true, message: `@${body.result.username}` }
+          : { ok: false, message: 'Telegram rejected the bot token.' };
+      }
+      if (['openai', 'ai.openai', 'ollama', 'ai.ollama', 'openai-compatible'].includes(type)) {
+        const models = await listConnectionModels(type, secrets, {
+          httpClient: http,
+          ssrfAllowlist: this.config.ssrfAllowlist,
+        });
+        return { ok: true, message: `${models.length} models`, models };
+      }
+      return { ok: true, message: 'Saved. This kind of connection cannot be checked in advance.' };
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : String(err);
+      const token = String(secrets.botToken ?? secrets.apiKey ?? '');
+      return { ok: false, message: token ? raw.split(token).join('***') : raw };
+    }
   }
 
   private async findExecution(

@@ -361,6 +361,37 @@ export class WorkflowEngine {
         continue;
       }
 
+      // A switched-off step is passed over: it does nothing and the flow continues.
+      if (node.data.disabled) {
+        context.setActivePorts(node.id, node.outputs.length ? node.outputs.map((o) => o.id) : ['main']);
+        const now = new Date();
+        const disabledDb = priorRow ?? await journal.createNodeExecution({
+          executionId,
+          nodeId: node.id,
+          nodeType: node.type,
+          nodeName: node.data.label,
+          status: 'SKIPPED',
+          outputPayload: { disabled: true },
+          startedAt: now,
+          finishedAt: now,
+          durationMs: 0,
+        });
+        stepRecords.push({
+          id: disabledDb.id,
+          executionId,
+          nodeId: node.id,
+          nodeType: node.type,
+          nodeName: node.data.label,
+          status: 'SKIPPED',
+          outputPayload: { disabled: true },
+          startedAt: now,
+          completedAt: now,
+          durationMs: 0,
+          retryCount: 0,
+        });
+        continue;
+      }
+
       // Evaluate node config expressions
       const scope = context.buildExpressionScope();
       let evaluatedConfig: Record<string, unknown>;

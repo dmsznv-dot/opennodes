@@ -15,7 +15,22 @@ const UNITS: Array<[key: string, ms: number]> = [
   ['delayDays', 86_400_000],
 ];
 
+/** The editor's "amount + unit" form of a delay. */
+const NAMED_UNITS: Record<string, number> = {
+  seconds: 1000,
+  minutes: 60_000,
+  hours: 3_600_000,
+  days: 86_400_000,
+};
+
 export function parseDelayMs(config: Record<string, unknown>): number {
+  if (config.amount !== undefined && config.amount !== null && config.amount !== '') {
+    const unit = NAMED_UNITS[String(config.unit ?? 'minutes')];
+    if (!unit) {
+      throw new Error(`Delay unit must be one of ${Object.keys(NAMED_UNITS).join(', ')}.`);
+    }
+    return parseDelayMs({ delayMs: Number(config.amount) * unit });
+  }
   for (const [key, unit] of UNITS) {
     const raw = config[key];
     if (raw === undefined || raw === null || raw === '') continue;

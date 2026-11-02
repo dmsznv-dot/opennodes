@@ -1,8 +1,9 @@
-import { pgTable, uuid, varchar, text, boolean, timestamp, jsonb, index } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, varchar, text, boolean, timestamp, jsonb, index, bigint } from 'drizzle-orm/pg-core';
 import { webhookAuthTypeEnum } from './enums.js';
 import { workspaces } from './workspaces.js';
 import { workflows } from './workflows.js';
 import { executions } from './executions.js';
+import { credentials } from './credentials.js';
 
 export const triggers = pgTable(
   'triggers',
@@ -76,3 +77,17 @@ export const webhookSubscriptions = pgTable(
     index('idx_webhook_subs_workflow').on(table.workflowId),
   ]
 );
+
+/** Telegram trigger polling: the getUpdates cursor and the polling lease of one bot. */
+export const telegramBotCursors = pgTable('telegram_bot_cursors', {
+  credentialId: uuid('credential_id')
+    .primaryKey()
+    .references(() => credentials.id, { onDelete: 'cascade' }),
+  updateOffset: bigint('update_offset', { mode: 'number' }).notNull().default(0),
+  leaseHolder: varchar('lease_holder', { length: 100 }),
+  leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true }),
+  lastPolledAt: timestamp('last_polled_at', { withTimezone: true }),
+  lastError: text('last_error'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});

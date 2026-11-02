@@ -5,16 +5,25 @@ import { SafeHttpClient } from '@localflow/shared';
 import {
   CrashRecoveryService,
   DrizzleExecutionJournal,
+  InMemoryExecutionJournal,
   WorkflowEngine,
+  defaultPrimitiveRegistry,
   buildResumptionState,
+  type ExecutionJournal,
   type IQueueConsumer,
   type IWorkflowQueueManager,
   type JournalExecutionRecord,
   type QueueJob,
   type WorkflowExecutionJobPayload,
+  type WorkflowRunResult,
 } from '@localflow/workflow-engine';
-import { buildConnectorExecutors } from './connectors.js';
+import type { WorkflowDefinition } from '@localflow/workflow-schema';
+import { buildConnectorExecutors, notImplementedNodeTypes } from './connectors.js';
+
+/** Triggers the engine starts runs from (they need no executor). */
+const TRIGGER_TYPES = ['trigger.manual', 'trigger.webhook', 'trigger.cron', 'trigger.telegram'];
 import { buildDelayExecutors } from './delay.js';
+import { buildLogicExecutors } from './logic.js';
 import {
   DbCancellationToken,
   claimExecution,
@@ -22,6 +31,7 @@ import {
   failExecution,
   loadPublishedDefinition,
 } from './store.js';
+import { TriggerScheduler, type TriggerSchedulerOptions } from './triggers.js';
 
 export interface RuntimeLogger {
   info(meta: unknown, msg?: string): void;
@@ -66,6 +76,8 @@ export class ExecutionRuntime {
   readonly encryption: AesGcmEncryptionService;
   private readonly heartbeatMs: number;
   readonly staleMs: number;
+  readonly ssrfAllowlist: string[];
+  private readonly executorTypes: string[];
   private readonly logger: RuntimeLogger;
 
   constructor(private readonly options: ExecutionRuntimeOptions) {
@@ -73,23 +85,39 @@ export class ExecutionRuntime {
     this.encryption = new AesGcmEncryptionService(new EnvKeyProvider(options.encryptionKey, 1));
     this.heartbeatMs = options.heartbeatMs ?? 5_000;
     this.staleMs = options.staleMs ?? 45_000;
+    this.ssrfAllowlist = options.ssrfAllowlist ?? [];
     this.logger = options.logger ?? silentLogger;
+    const nodeExecutors = {
+      ...buildConnectorExecutors({
+        httpClient: new SafeHttpClient(),
+        ssrfAllowlist: options.ssrfAllowlist,
+        resolveCredential: createCredentialResolver(options.db, this.encryption),
+      }),
+      ...buildLogicExecutors(),
+      ...buildDelayExecutors({
+        journal: this.journal,
+        inlineMaxMs: options.inlineDelayMaxMs ?? 5_000,
+      }),
+    };
+    this.executorTypes = Object.keys(nodeExecutors);
     this.engine = new WorkflowEngine({
       journal: this.journal,
       strictNodeTypes: true,
       httpClient: new SafeHttpClient(),
-      nodeExecutors: {
-        ...buildConnectorExecutors({
-          httpClient: new SafeHttpClient(),
-          ssrfAllowlist: options.ssrfAllowlist,
-          resolveCredential: createCredentialResolver(options.db, this.encryption),
-        }),
-        ...buildDelayExecutors({
-          journal: this.journal,
-          inlineMaxMs: options.inlineDelayMaxMs ?? 5_000,
-        }),
-      },
+      nodeExecutors,
     });
+  }
+
+  /** Node types this server can run; the editor offers only these. */
+  catalog(): { nodeTypes: string[]; notImplemented: string[] } {
+    const notImplemented = notImplementedNodeTypes();
+    const types = new Set([
+      ...TRIGGER_TYPES,
+      ...defaultPrimitiveRegistry.listCanonical().map((p) => p.type),
+      ...this.executorTypes,
+    ]);
+    for (const t of notImplemented) types.delete(t);
+    return { nodeTypes: [...types].sort(), notImplemented };
   }
 
   /**
@@ -100,28 +128,59 @@ export class ExecutionRuntime {
     queue: IWorkflowQueueManager,
     params: EnqueueExecutionParams
   ): Promise<JournalExecutionRecord> {
-    const executionId = randomUUID();
-    const record = await this.journal.createExecution({
-      id: executionId,
-      ...params,
-      status: 'QUEUED',
-    });
+    const record = await this.recordQueuedRun(this.journal, params);
     try {
-      await queue.executionProducer.add(
-        'runWorkflow',
-        { executionId, ...params, enqueuedAt: Date.now() },
-        // A run must never be replayed blindly: retries could repeat side effects.
-        { jobId: executionId, attempts: 1 }
-      );
+      await this.dispatch(queue, record.id, params);
     } catch (err) {
       await failExecution(
         this.options.db,
-        executionId,
+        record.id,
         `Could not queue the run: ${err instanceof Error ? err.message : String(err)}`
       );
       throw err;
     }
     return record;
+  }
+
+  /**
+   * Inserts the QUEUED row only. Pass a journal bound to a transaction to record the
+   * run atomically with other writes (a trigger advancing its schedule or cursor);
+   * if the process dies before `dispatch`, crash recovery queues the row later.
+   */
+  recordQueuedRun(
+    journal: ExecutionJournal,
+    params: EnqueueExecutionParams
+  ): Promise<JournalExecutionRecord> {
+    return journal.createExecution({ id: randomUUID(), ...params, status: 'QUEUED' });
+  }
+
+  /** Hands a recorded run to the queue; the job carries the unredacted trigger payload. */
+  async dispatch(
+    queue: IWorkflowQueueManager,
+    executionId: string,
+    params: EnqueueExecutionParams
+  ): Promise<void> {
+    await queue.executionProducer.add(
+      'runWorkflow',
+      { executionId, ...params, enqueuedAt: Date.now() },
+      // A run must never be replayed blindly: retries could repeat side effects.
+      { jobId: executionId, attempts: 1 }
+    );
+  }
+
+  /**
+   * Runs a graph that is not published (the editor's "Test") with the real steps, in
+   * this process and without recording it: nothing appears in run history. A delay
+   * longer than the inline limit stops the test with status WAITING.
+   */
+  testRun(definition: WorkflowDefinition, triggerPayload: unknown): Promise<WorkflowRunResult> {
+    return this.engine.executeWorkflow(definition, {
+      executionId: randomUUID(),
+      workflowVersionId: 'draft',
+      triggerType: 'test',
+      triggerPayload,
+      journal: new InMemoryExecutionJournal(),
+    });
   }
 
   /** Queue job handler: claim, run (or resume) the run, re-queue it if it suspended. */
@@ -201,6 +260,8 @@ export interface ExecutionWorkerOptions {
   recoveryIntervalMs?: number;
   /** Runs older than this that never finished are failed instead of resumed. */
   hardTimeoutMs?: number;
+  /** Schedule and Telegram triggers; `false` leaves them to another process. */
+  triggers?: false | Omit<TriggerSchedulerOptions, 'db' | 'runtime' | 'queue' | 'logger'>;
   logger?: RuntimeLogger;
 }
 
@@ -213,6 +274,7 @@ export class ExecutionWorker {
   private timer?: NodeJS.Timeout;
   private readonly recovery: CrashRecoveryService;
   private readonly logger: RuntimeLogger;
+  readonly scheduler?: TriggerScheduler;
 
   constructor(private readonly options: ExecutionWorkerOptions) {
     this.logger = options.logger ?? silentLogger;
@@ -221,6 +283,15 @@ export class ExecutionWorker {
       options.queue.executionProducer,
       this.logger
     );
+    if (options.triggers !== false) {
+      this.scheduler = new TriggerScheduler({
+        ...options.triggers,
+        db: options.db,
+        runtime: options.runtime,
+        queue: options.queue,
+        logger: this.logger,
+      });
+    }
   }
 
   get running(): boolean {
@@ -236,6 +307,7 @@ export class ExecutionWorker {
       { concurrency: this.options.concurrency ?? 4 }
     );
     await this.consumer.start();
+    await this.scheduler?.start();
   }
 
   async scan(): Promise<void> {
@@ -253,6 +325,7 @@ export class ExecutionWorker {
   }
 
   async stop(): Promise<void> {
+    await this.scheduler?.stop();
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
     await this.consumer?.close(false);

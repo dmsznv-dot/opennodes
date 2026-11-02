@@ -4,11 +4,18 @@ import { sql } from 'drizzle-orm';
 import {
   createInMemoryDb,
   executions,
+  triggers,
   workflowVersions,
   workflows,
   workspaces,
 } from '@localflow/db';
-import { claimExecution, LocalQueueManager, parseDelayMs } from '../src/index.js';
+import {
+  ExecutionRuntime,
+  LocalQueueManager,
+  TriggerScheduler,
+  claimExecution,
+  parseDelayMs,
+} from '../src/index.js';
 
 async function seedRun(status: string) {
   const db = await createInMemoryDb();
@@ -109,6 +116,48 @@ describe('@localflow/execution-runtime', () => {
     expect(seen.map((s) => s.id).sort()).toEqual(['a', 'b', 'c', 'd', 'late']);
     expect(seen.find((s) => s.id === 'late')!.at - t0).toBeGreaterThanOrEqual(190);
     expect(peak).toBe(2);
+    await queue.closeAll();
+  });
+
+  it('two schedulers racing over one due schedule start exactly one run', async () => {
+    const { db } = await seedRun('SUCCEEDED');
+    const d = db as any;
+    const [{ workspaceId, workflowId, workflowVersionId }] = await d
+      .select({
+        workspaceId: executions.workspaceId,
+        workflowId: executions.workflowId,
+        workflowVersionId: executions.workflowVersionId,
+      })
+      .from(executions);
+    await d.insert(triggers).values({
+      workspaceId,
+      workflowId,
+      type: 'cron',
+      name: 'every minute',
+      config: {
+        kind: 'cron',
+        nodeId: 't',
+        cron: '* * * * *',
+        timezone: 'UTC',
+        catchUp: 'skip',
+        workflowVersionId,
+      },
+      nextTriggerAt: new Date(Date.now() - 1_000),
+    });
+    const runtime = new ExecutionRuntime({ db, encryptionKey: '0'.repeat(64) });
+    const queue = new LocalQueueManager(); // nobody consumes: we only count queued runs
+    const make = () => new TriggerScheduler({ db, runtime, queue, tickMs: 60_000 });
+    const a = make();
+    const b = make();
+    await Promise.all([a.start(), b.start(), a.tick(), b.tick()]);
+    await Promise.all([a.stop(), b.stop()]);
+    const queued = await d
+      .select()
+      .from(executions)
+      .where(sql`trigger_type = 'cron'`);
+    expect(queued).toHaveLength(1);
+    expect(queued[0].status).toBe('QUEUED');
+    expect(queued[0].idempotencyKey).toMatch(/^cron:/);
     await queue.closeAll();
   });
 });

@@ -11,7 +11,8 @@ export interface WorkerLogger {
 
 /**
  * The execution worker process: consumes runs the API queued, executes them with
- * real connectors, resumes delayed runs and re-queues runs orphaned by a crash.
+ * real connectors, resumes delayed runs, re-queues runs orphaned by a crash, and
+ * starts runs from schedules and Telegram messages.
  */
 export class WorkerDaemon {
   private readonly worker: ExecutionWorker;
@@ -43,6 +44,11 @@ export class WorkerDaemon {
       concurrency: config.WORKER_CONCURRENCY,
       recoveryIntervalMs: config.ORPHAN_SCAN_INTERVAL_MS,
       hardTimeoutMs: config.HARD_TIMEOUT_MS,
+      triggers: {
+        tickMs: config.TRIGGER_TICK_MS,
+        telegramApiBase: config.TELEGRAM_API_BASE,
+        telegramPollTimeoutSec: config.TELEGRAM_POLL_TIMEOUT_SEC,
+      },
       logger,
     });
   }

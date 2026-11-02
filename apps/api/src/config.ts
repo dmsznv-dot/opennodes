@@ -24,6 +24,12 @@ export const ApiConfigSchema = z.object({
   heartbeatMs: z.coerce.number().int().min(50).default(5_000),
   recoveryStaleMs: z.coerce.number().int().min(100).default(45_000),
   recoveryIntervalMs: z.coerce.number().int().min(100).default(60_000),
+  /** How often due schedules are checked (embedded mode; the worker has its own). */
+  triggerTickMs: z.coerce.number().int().min(50).default(5_000),
+  telegramApiBase: z.string().url().default('https://api.telegram.org'),
+  telegramPollTimeoutSec: z.coerce.number().int().min(0).max(50).default(25),
+  telegramMinPollIntervalMs: z.coerce.number().int().min(0).default(1_000),
+  telegramRetryMs: z.coerce.number().int().min(0).default(5_000),
 });
 
 export type ApiConfig = z.infer<typeof ApiConfigSchema>;
@@ -41,6 +47,8 @@ export function loadApiConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     executionMode: env.EXECUTION_MODE,
     workerConcurrency: env.WORKER_CONCURRENCY,
     inlineDelayMaxMs: env.INLINE_DELAY_MAX_MS,
+    triggerTickMs: env.TRIGGER_TICK_MS,
+    telegramApiBase: env.TELEGRAM_API_BASE,
     ssrfAllowlist: (env.SSRF_ALLOWLIST ?? '')
       .split(',')
       .map((h) => h.trim())

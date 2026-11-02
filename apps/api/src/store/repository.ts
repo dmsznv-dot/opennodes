@@ -4,6 +4,7 @@ import {
   credentials,
   executions,
   memberships,
+  nodeExecutions,
   users,
   workflowVersions,
   workflows,
@@ -47,6 +48,8 @@ export interface StoredWorkflow {
   name: string;
   description: string;
   hasWebhookSecret: boolean;
+  /** On: triggers start runs and webhooks are accepted. Publishing turns it on. */
+  isActive: boolean;
   draft: {
     nodes: WorkflowNode[];
     edges: WorkflowEdge[];
@@ -251,6 +254,7 @@ export class ApiRepository {
   // ── Workflows & versions ─────────────────────────────────────────────
 
   public async createWorkflow(input: {
+    id?: string;
     workspaceId: string;
     name: string;
     description: string;
@@ -262,7 +266,7 @@ export class ApiRepository {
     const [row] = await this.db
       .insert(workflows)
       .values({
-        id: randomUUID(),
+        id: input.id ?? randomUUID(),
         workspaceId: input.workspaceId,
         name: input.name,
         description: input.description,
@@ -335,13 +339,93 @@ export class ApiRepository {
   public async updateDraft(
     workflowId: string,
     nodes: WorkflowNode[],
-    edges: WorkflowEdge[]
+    edges: WorkflowEdge[],
+    name?: string
   ): Promise<StoredWorkflow> {
     await this.db
       .update(workflows)
-      .set({ draftNodes: nodes, draftEdges: edges, updatedAt: new Date() })
+      .set({ draftNodes: nodes, draftEdges: edges, ...(name && { name }), updatedAt: new Date() })
       .where(eq(workflows.id, workflowId));
     return (await this.findWorkflow(workflowId))!;
+  }
+
+  public async setWorkflowActive(workflowId: string, active: boolean): Promise<void> {
+    await this.db
+      .update(workflows)
+      .set({ isActive: active, updatedAt: new Date() })
+      .where(eq(workflows.id, workflowId));
+  }
+
+  /** Deletes the workflow with its versions, triggers and run history. */
+  public async deleteWorkflow(workflowId: string): Promise<void> {
+    await this.db.transaction(async (tx: Db) => {
+      // Runs reference versions (restrict), so they go first; steps and logs cascade.
+      await tx.delete(executions).where(eq(executions.workflowId, workflowId));
+      await tx.update(workflows).set({ activeVersionId: null }).where(eq(workflows.id, workflowId));
+      await tx.delete(workflowVersions).where(eq(workflowVersions.workflowId, workflowId));
+      await tx.delete(workflows).where(eq(workflows.id, workflowId));
+    });
+  }
+
+  public async deleteCredential(credentialId: string): Promise<void> {
+    await this.db.delete(credentials).where(eq(credentials.id, credentialId));
+  }
+
+  /** The signed-in user and the workspaces they belong to. */
+  public async getProfile(userId: string): Promise<{
+    user: { id: string; email: string; fullName: string | null };
+    workspaces: Array<{ id: string; name: string; slug: string; role: Role }>;
+  }> {
+    const [user] = await this.db
+      .select({ id: users.id, email: users.email, fullName: users.fullName })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+    const rows = await this.db
+      .select({
+        id: workspaces.id,
+        name: workspaces.name,
+        slug: workspaces.slug,
+        role: memberships.role,
+      })
+      .from(memberships)
+      .innerJoin(workspaces, eq(workspaces.id, memberships.workspaceId))
+      .where(eq(memberships.userId, userId))
+      .orderBy(asc(workspaces.createdAt));
+    return { user, workspaces: rows };
+  }
+
+  /** Recent runs of a workspace (optionally one workflow), newest first, with their steps. */
+  public async listRunsWithSteps(
+    workspaceId: string,
+    options: { workflowId?: string; limit?: number } = {}
+  ): Promise<Array<Record<string, unknown> & { steps: unknown[] }>> {
+    const runs = await this.db
+      .select()
+      .from(executions)
+      .where(
+        and(
+          eq(executions.workspaceId, workspaceId),
+          ...(options.workflowId ? [eq(executions.workflowId, options.workflowId)] : [])
+        )
+      )
+      .orderBy(desc(executions.createdAt))
+      .limit(Math.min(Math.max(options.limit ?? 30, 1), 100));
+    if (!runs.length) return [];
+    const steps = await this.db
+      .select()
+      .from(nodeExecutions)
+      .where(
+        inArray(
+          nodeExecutions.executionId,
+          runs.map((r: Db) => r.id)
+        )
+      )
+      .orderBy(asc(nodeExecutions.createdAt));
+    return runs.map((r: Db) => ({
+      ...r,
+      steps: steps.filter((st: Db) => st.executionId === r.id),
+    }));
   }
 
   /** Appends the next immutable version and makes it active, in one transaction. */
@@ -437,6 +521,7 @@ export class ApiRepository {
       name: row.name,
       description: row.description ?? '',
       hasWebhookSecret: row.webhookSecretEncrypted != null,
+      isActive: row.isActive,
       draft: {
         nodes: row.draftNodes,
         edges: row.draftEdges,

@@ -6,6 +6,7 @@ FROM base AS builder
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml turbo.json tsconfig.base.json ./
 COPY packages ./packages
 COPY apps/web ./apps/web
+COPY docs ./docs
 RUN pnpm install --frozen-lockfile=false
 RUN pnpm --filter @localflow/web... build
 
@@ -15,6 +16,7 @@ ENV NODE_ENV=production
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/packages ./packages
 COPY --from=builder /app/apps/web ./apps/web
+COPY --from=builder /app/docs ./docs
 USER node
 EXPOSE 3000
 CMD ["node", "apps/web/dist/server.js"]

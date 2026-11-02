@@ -504,6 +504,181 @@ const DICT = {
   },
 };
 
+/**
+ * Live mode (served by an OpenNodes server): texts that say "simulation" or "demo"
+ * are replaced, and the sign-in / connection / run screens get their own keys.
+ */
+const LIVE = {
+  ru: {
+    'menu.about': 'О программе',
+    'menu.aboutText':
+      'OpenNodes на вашем сервере: сценарии выполняются по-настоящему, данные хранятся в вашей базе.',
+    'conn.connected': 'Подключено',
+    'conn.whatNeeded': 'Что понадобится',
+    'conn.subtitle':
+      'Сервисы, с которыми работают ваши автоматизации. Секреты шифруются на сервере и больше не показываются.',
+    'hist.subtitle':
+      'Запуски по расписанию, из Telegram, по вебхуку и вручную. Проверки из редактора сюда не попадают.',
+    'hist.empty': 'Запусков пока не было. Включите автоматизацию — запуски появятся здесь.',
+    'hist.output': 'Результат',
+    'hist.running': 'Выполняется',
+    'hist.waiting': 'Ожидает',
+    'ed.checkHint': 'Выполнить шаги по-настоящему, без записи в историю',
+    'ed.activateDemo':
+      'После включения сценарий будет запускаться сам — по своему стартовому событию.',
+    'ed.activated': 'Сценарий включён.',
+    'panel.testResult': 'Результат шага',
+    'run.ok': 'Всё работает: шаги прошли без ошибок.',
+    'run.simulated': 'Проверка',
+    'run.test': 'Проверка',
+    'run.trigger.manual': 'Вручную',
+    'run.trigger.cron': 'По расписанию',
+    'run.trigger.telegram': 'Telegram',
+    'run.trigger.webhook': 'Вебхук',
+    'run.running': 'Выполняется…',
+    'run.waiting': 'Ждёт до {when}',
+    'run.inProgress': 'Сценарий ещё выполняется.',
+    'err.planned': 'Этот шаг пока не поддерживается сервером.',
+    'err.server': '{message}',
+    'common.error': 'Ошибка',
+    'auth.loginTitle': 'Вход в OpenNodes',
+    'auth.setupTitle': 'Первый запуск',
+    'auth.setupText':
+      'Создайте аккаунт владельца — он управляет этой установкой. Остальных можно будет пригласить позже.',
+    'auth.email': 'Почта',
+    'auth.password': 'Пароль',
+    'auth.passwordHint': 'Не короче 8 символов.',
+    'auth.workspace': 'Название команды',
+    'auth.workspaceDefault': 'Моя команда',
+    'auth.login': 'Войти',
+    'auth.create': 'Создать аккаунт',
+    'auth.logout': 'Выйти',
+    'auth.bad': 'Неверная почта или пароль.',
+    'auth.offline': 'Сервер OpenNodes не отвечает.',
+    'auth.offlineText': 'Запустите API и обновите страницу. Локально: pnpm start:local.',
+    'auth.retry': 'Повторить',
+    'auth.signedInAs': 'Вы вошли как {email}',
+    'conn.fieldBotToken': 'Токен бота',
+    'conn.fieldApiKey': 'API-ключ',
+    'conn.fieldBaseUrl': 'Адрес сервера модели',
+    'conn.fieldBaseUrlHint':
+      'Пусто — OpenAI. Локальная модель: LM Studio http://localhost:1234/v1, Ollama http://localhost:11434/v1.',
+    'conn.fieldModel': 'Модель по умолчанию',
+    'conn.fieldName': 'Название подключения',
+    'conn.save': 'Подключить',
+    'conn.saved': 'Подключение сохранено.',
+    'conn.checking': 'Проверяю…',
+    'conn.checkOkLive': 'Работает: {message}',
+    'conn.checkFail': 'Не отвечает: {message}',
+    'conn.needKey': 'Укажите API-ключ или адрес локального сервера модели.',
+    'conn.required': 'Заполните это поле.',
+    'ed.runNow': 'Запустить',
+    'ed.runDone': 'Запуск выполнен — он есть в истории.',
+    'ed.testExternalTitle': 'Проверка выполнит шаги по-настоящему',
+    'ed.testExternal': 'Будут выполнены внешние действия:',
+    'ed.testConfirm': 'Проверить',
+    'ed.webhookUrl': 'Адрес вебхука',
+    'ed.webhookUrlHint': 'Отправляйте сюда POST-запросы с JSON. Работает, когда сценарий включён.',
+    'ed.triggerNext': 'Следующий запуск: {when}',
+    'ed.triggerLast': 'Последний запуск: {when}',
+    'ed.triggerError': 'Не получается читать сообщения бота: {message}',
+    'ed.publishFailed': 'Не удалось включить',
+    'live.saveFailed': 'Не удалось сохранить: {message}',
+    'demo.banner':
+      '«Проверить» выполняет шаги по-настоящему. Перед внешними действиями — сообщениями, письмами, запросами — мы спросим подтверждение.',
+    'list.lastRun': 'Последний запуск: {when}',
+    'onb.s2':
+      'Подключите сервис (токен бота, API-ключ или локальную модель) или заполните поля, отмеченные «Нужна настройка».',
+  },
+  en: {
+    'menu.about': 'About',
+    'menu.aboutText':
+      'OpenNodes on your server: automations really run and data stays in your database.',
+    'conn.connected': 'Connected',
+    'conn.whatNeeded': 'What you need',
+    'conn.subtitle':
+      'Services your automations work with. Secrets are encrypted on the server and never shown again.',
+    'hist.subtitle':
+      'Runs started by a schedule, Telegram, a webhook or by hand. Tests from the editor are not listed.',
+    'hist.empty': 'No runs yet. Turn an automation on and its runs will show up here.',
+    'hist.output': 'Output',
+    'hist.running': 'Running',
+    'hist.waiting': 'Waiting',
+    'ed.checkHint': 'Run the steps for real, without recording it in history',
+    'ed.activateDemo': 'Once on, the automation runs by itself whenever its start event happens.',
+    'ed.activated': 'Automation is on.',
+    'panel.testResult': 'Step result',
+    'run.ok': 'Everything works: all steps passed.',
+    'run.simulated': 'Test',
+    'run.test': 'Test',
+    'run.trigger.manual': 'By hand',
+    'run.trigger.cron': 'Schedule',
+    'run.trigger.telegram': 'Telegram',
+    'run.trigger.webhook': 'Webhook',
+    'run.running': 'Running…',
+    'run.waiting': 'Waiting until {when}',
+    'run.inProgress': 'The automation is still running.',
+    'err.planned': 'This step is not supported by the server yet.',
+    'err.server': '{message}',
+    'common.error': 'Error',
+    'auth.loginTitle': 'Sign in to OpenNodes',
+    'auth.setupTitle': 'First start',
+    'auth.setupText':
+      'Create the owner account — it manages this installation. You can invite others later.',
+    'auth.email': 'Email',
+    'auth.password': 'Password',
+    'auth.passwordHint': 'At least 8 characters.',
+    'auth.workspace': 'Team name',
+    'auth.workspaceDefault': 'My team',
+    'auth.login': 'Sign in',
+    'auth.create': 'Create account',
+    'auth.logout': 'Sign out',
+    'auth.bad': 'Wrong email or password.',
+    'auth.offline': 'The OpenNodes server does not respond.',
+    'auth.offlineText': 'Start the API and reload the page. Locally: pnpm start:local.',
+    'auth.retry': 'Try again',
+    'auth.signedInAs': 'Signed in as {email}',
+    'conn.fieldBotToken': 'Bot token',
+    'conn.fieldApiKey': 'API key',
+    'conn.fieldBaseUrl': 'Model server address',
+    'conn.fieldBaseUrlHint':
+      'Empty — OpenAI. Local model: LM Studio http://localhost:1234/v1, Ollama http://localhost:11434/v1.',
+    'conn.fieldModel': 'Default model',
+    'conn.fieldName': 'Connection name',
+    'conn.save': 'Connect',
+    'conn.saved': 'Connection saved.',
+    'conn.checking': 'Checking…',
+    'conn.checkOkLive': 'Works: {message}',
+    'conn.checkFail': 'No answer: {message}',
+    'conn.needKey': 'Enter an API key or the address of a local model server.',
+    'conn.required': 'Fill in this field.',
+    'ed.runNow': 'Run',
+    'ed.runDone': 'Run finished — it is in the history.',
+    'ed.testExternalTitle': 'The test runs the steps for real',
+    'ed.testExternal': 'These external actions will happen:',
+    'ed.testConfirm': 'Test',
+    'ed.webhookUrl': 'Webhook address',
+    'ed.webhookUrlHint': 'Send POST requests with JSON here. Works while the automation is on.',
+    'ed.triggerNext': 'Next run: {when}',
+    'ed.triggerLast': 'Last run: {when}',
+    'ed.triggerError': 'Cannot read the bot’s messages: {message}',
+    'ed.publishFailed': 'Could not turn on',
+    'live.saveFailed': 'Could not save: {message}',
+    'demo.banner':
+      '“Test” runs the steps for real. Before external actions — messages, emails, requests — we ask you to confirm.',
+    'list.lastRun': 'Last run: {when}',
+    'onb.s2':
+      'Connect the service (a bot token, an API key or a local model) or fill in the fields marked “Needs setup”.',
+  },
+};
+
+let liveMode = false;
+
+/** Switches to the texts of an installation connected to a server. */
+export function setLiveMode(on) {
+  liveMode = Boolean(on);
+}
+
 export const LOCALES = ['ru', 'en'];
 let locale = 'en';
 
@@ -525,7 +700,8 @@ export function getLocale() {
 }
 
 export function t(key, params = {}) {
-  const template = DICT[locale][key] ?? DICT.en[key] ?? key;
+  const live = liveMode ? (LIVE[locale][key] ?? LIVE.en[key]) : undefined;
+  const template = live ?? DICT[locale][key] ?? DICT.en[key] ?? key;
   return template.replace(/\{(\w+)\}/g, (m, name) => (name in params ? String(params[name]) : m));
 }
 
@@ -556,3 +732,4 @@ export function formatDateTime(ts) {
 }
 
 export const __DICT_FOR_TESTS = DICT;
+export const __LIVE_DICT_FOR_TESTS = LIVE;

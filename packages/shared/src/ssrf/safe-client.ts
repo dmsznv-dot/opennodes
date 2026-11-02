@@ -75,7 +75,12 @@ export class SafeHttpClient {
     }
 
     const headers = { ...(options.headers ?? {}) };
-    if (bodyData && typeof bodyData === 'string' && !headers['content-type'] && !headers['Content-Type']) {
+    if (
+      bodyData &&
+      typeof bodyData === 'string' &&
+      !headers['content-type'] &&
+      !headers['Content-Type']
+    ) {
       try {
         JSON.parse(bodyData);
         headers['Content-Type'] = 'application/json';
@@ -132,11 +137,15 @@ export class SafeHttpClient {
     }
 
     const hostname = parsedUrl.hostname;
-    const port = parsedUrl.port ? Number(parsedUrl.port) : parsedUrl.protocol === 'https:' ? 443 : 80;
+    const port = parsedUrl.port
+      ? Number(parsedUrl.port)
+      : parsedUrl.protocol === 'https:'
+        ? 443
+        : 80;
 
     // Check allowlist
     const allowlisted = isAllowlisted(hostname, undefined, port, options.allowlist);
-    let pinnedIp: string;
+    let pinnedIps: string[];
 
     if (!allowlisted) {
       if (isBlockedHostname(hostname)) {
@@ -147,9 +156,11 @@ export class SafeHttpClient {
       const normalizedHostIp = normalizeIp(hostname);
       if (net.isIP(normalizedHostIp)) {
         if (isBlockedIp(normalizedHostIp)) {
-          throw new SsrfBlockedError(`Access to IP address '${hostname}' is blocked by SSRF policy.`);
+          throw new SsrfBlockedError(
+            `Access to IP address '${hostname}' is blocked by SSRF policy.`
+          );
         }
-        pinnedIp = normalizedHostIp;
+        pinnedIps = [normalizedHostIp];
       } else {
         // Resolve DNS and validate ALL addresses
         let records;
@@ -170,22 +181,21 @@ export class SafeHttpClient {
             );
           }
         }
-        pinnedIp = records[0]!.address;
+        pinnedIps = records.map((r) => r.address);
       }
     } else {
       // In allowlist: resolve DNS without blocking
       const normalizedHostIp = normalizeIp(hostname);
       if (net.isIP(normalizedHostIp)) {
-        pinnedIp = normalizedHostIp;
+        pinnedIps = [normalizedHostIp];
       } else {
-        const records = await dns.lookup(hostname);
-        pinnedIp = records.address;
+        pinnedIps = (await dns.lookup(hostname, { all: true })).map((r) => r.address);
       }
     }
 
     // Connect with socket IP pinning
     const isHttps = parsedUrl.protocol === 'https:';
-    const agent = createPinnedAgent({ pinnedIp, isHttps });
+    const agent = createPinnedAgent({ pinnedIps, isHttps });
 
     const client = isHttps ? https : http;
     const reqOptions: https.RequestOptions = {
@@ -210,7 +220,11 @@ export class SafeHttpClient {
           agent.destroy();
           try {
             const redirectTarget = new URL(res.headers.location, parsedUrl).toString();
-            const redirectRes = await this.executeWithRedirects(redirectTarget, options, redirectHop + 1);
+            const redirectRes = await this.executeWithRedirects(
+              redirectTarget,
+              options,
+              redirectHop + 1
+            );
             resolve(redirectRes);
           } catch (err) {
             reject(err);

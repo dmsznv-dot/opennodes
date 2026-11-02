@@ -110,7 +110,7 @@ services:
     environment:
       NODE_ENV: ${NODE_ENV:-production}
       PORT: ${WEB_PORT:-3000}
-      VITE_API_URL: http://localhost:${API_PORT:-4000}
+      API_URL: http://api:4000
     ports:
       - "${WEB_PORT:-3000}:3000"
     healthcheck:

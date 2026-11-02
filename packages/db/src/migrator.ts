@@ -321,6 +321,19 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_resource ON audit_logs(resource_type, 
 
 -- 0001: per-workflow webhook HMAC secret, AES-256-GCM envelope (HMAC needs the secret itself, not a hash)
 ALTER TABLE workflows ADD COLUMN IF NOT EXISTS webhook_secret_encrypted JSONB;
+
+-- 0002: Telegram trigger polling — one cursor and lease per bot connection
+CREATE TABLE IF NOT EXISTS telegram_bot_cursors (
+  credential_id UUID PRIMARY KEY REFERENCES credentials(id) ON DELETE CASCADE,
+  update_offset BIGINT NOT NULL DEFAULT 0,
+  lease_holder VARCHAR(100),
+  lease_expires_at TIMESTAMPTZ,
+  last_polled_at TIMESTAMPTZ,
+  last_error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_triggers_due ON triggers(type, is_enabled, next_trigger_at);
 `;
 }
 
