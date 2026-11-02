@@ -1,13 +1,7 @@
 import type { DatabaseInstance } from '@localflow/db';
-import {
-  CrashRecoveryService,
-  type IQueueConsumer,
-  type IWorkflowQueueManager,
-  type WorkflowEngine,
-} from '@localflow/workflow-engine';
+import type { IWorkflowQueueManager } from '@localflow/workflow-engine';
+import { ExecutionRuntime, ExecutionWorker } from '@localflow/execution-runtime';
 import type { WorkerConfig } from './config.js';
-import { executeWorkflowJob } from './handlers/execution-handler.js';
-import { executeDelayJob } from './handlers/delay-handler.js';
 
 export interface WorkerLogger {
   info(metaOrMsg: unknown, msg?: string): void;
@@ -15,94 +9,69 @@ export interface WorkerLogger {
   error(metaOrMsg: unknown, msg?: string): void;
 }
 
+/**
+ * The execution worker process: consumes runs the API queued, executes them with
+ * real connectors, resumes delayed runs and re-queues runs orphaned by a crash.
+ */
 export class WorkerDaemon {
-  private isRunning = false;
+  private readonly worker: ExecutionWorker;
   private isShuttingDown = false;
-  private orphanScanTimer?: NodeJS.Timeout;
-  private executionConsumer?: IQueueConsumer<any>;
-  private delayConsumer?: IQueueConsumer<any>;
+  private started = false;
 
   constructor(
     private readonly config: WorkerConfig,
-    private readonly db: DatabaseInstance,
+    db: DatabaseInstance,
     private readonly queueManager: IWorkflowQueueManager,
-    private readonly recoveryService: CrashRecoveryService,
-    private readonly logger: WorkerLogger,
-    private readonly engine?: WorkflowEngine
-  ) {}
+    private readonly logger: WorkerLogger
+  ) {
+    const runtime = new ExecutionRuntime({
+      db,
+      encryptionKey: config.ENCRYPTION_KEY,
+      ssrfAllowlist: config.SSRF_ALLOWLIST.split(',')
+        .map((h) => h.trim())
+        .filter(Boolean),
+      allowedFsRoot: config.ALLOWED_FS_ROOT,
+      inlineDelayMaxMs: config.INLINE_DELAY_MAX_MS,
+      heartbeatMs: config.WORKER_HEARTBEAT_INTERVAL_MS,
+      staleMs: config.ORPHAN_THRESHOLD_MS,
+      logger,
+    });
+    this.worker = new ExecutionWorker({
+      runtime,
+      queue: queueManager,
+      db,
+      concurrency: config.WORKER_CONCURRENCY,
+      recoveryIntervalMs: config.ORPHAN_SCAN_INTERVAL_MS,
+      hardTimeoutMs: config.HARD_TIMEOUT_MS,
+      logger,
+    });
+  }
 
   async start(): Promise<void> {
-    if (this.isRunning) return;
-    this.isRunning = true;
-    this.logger.info('Starting LocalFlow Execution Worker Daemon...');
-
-    const recoveryResult = await this.recoveryService.scanAndRecover({
-      staleThresholdMs: this.config.ORPHAN_THRESHOLD_MS,
-      hardTimeoutMs: this.config.HARD_TIMEOUT_MS,
-    });
-    this.logger.info({ recoveryResult }, 'Startup recovery scan complete');
-
-    this.orphanScanTimer = setInterval(async () => {
-      if (this.isShuttingDown) return;
-      try {
-        await this.recoveryService.scanAndRecover({
-          staleThresholdMs: this.config.ORPHAN_THRESHOLD_MS,
-          hardTimeoutMs: this.config.HARD_TIMEOUT_MS,
-        });
-      } catch (err) {
-        this.logger.error({ err }, 'Error in periodic orphan recovery scan');
-      }
-    }, this.config.ORPHAN_SCAN_INTERVAL_MS);
-
-    this.executionConsumer = this.queueManager.createExecutionConsumer(
-      async (job) => executeWorkflowJob(job, this.db, this.engine),
-      { concurrency: this.config.WORKER_CONCURRENCY }
-    );
-    await this.executionConsumer.start();
-
-    this.delayConsumer = this.queueManager.createDelayConsumer(
-      async (job) => executeDelayJob(job, this.queueManager.executionProducer),
-      { concurrency: this.config.WORKER_CONCURRENCY }
-    );
-    await this.delayConsumer.start();
-
+    if (this.started) return;
+    this.started = true;
+    this.logger.info('Starting LocalFlow execution worker...');
+    await this.worker.start();
     this.logger.info(
       { concurrency: this.config.WORKER_CONCURRENCY },
-      'Worker Daemon ready to process execution jobs'
+      'Worker ready to process runs'
     );
   }
 
   get running(): boolean {
-    return this.isRunning && !this.isShuttingDown;
+    return this.started && !this.isShuttingDown && this.worker.running;
   }
 
   async shutdown(): Promise<void> {
     if (this.isShuttingDown) return;
     this.isShuttingDown = true;
-    this.logger.info('Graceful shutdown initiated, draining active jobs...');
-
-    if (this.orphanScanTimer) {
-      clearInterval(this.orphanScanTimer);
-      this.orphanScanTimer = undefined;
-    }
-
-    const drainTimeout = this.config.WORKER_DRAIN_TIMEOUT_MS;
-    const timeoutPromise = new Promise((resolve) => setTimeout(resolve, drainTimeout));
-
-    try {
-      await Promise.race([
-        Promise.all([
-          this.executionConsumer?.close(false),
-          this.delayConsumer?.close(false),
-        ]),
-        timeoutPromise,
-      ]);
-    } catch (err) {
-      this.logger.error({ err }, 'Error closing queue consumers');
-    }
-
+    this.logger.info('Graceful shutdown: finishing active runs...');
+    await Promise.race([
+      this.worker.stop(),
+      new Promise((resolve) => setTimeout(resolve, this.config.WORKER_DRAIN_TIMEOUT_MS)),
+    ]);
     await this.queueManager.closeAll();
-    this.isRunning = false;
-    this.logger.info('Worker Daemon shut down cleanly');
+    this.started = false;
+    this.logger.info('Worker shut down cleanly');
   }
 }

@@ -93,3 +93,38 @@ node tests/run-e2e.mjs
 cp .env.example .env
 docker compose up -d --build
 ```
+
+### How runs are executed
+
+`POST /workflows/:id/execute` and incoming webhooks only **queue** a run (`202`, status `QUEUED`);
+a worker executes it. Poll `GET /executions/:id` or the event stream for the result, or pass
+`{ "wait": true }` to `execute` to get the finished run back (editor test runs).
+
+- **`EXECUTION_MODE=queue`** (Docker Compose): runs go to Redis (BullMQ) and the `worker` service executes them. Scale by running more workers.
+- **`EXECUTION_MODE=embedded`** (default, no Redis): the API runs an in-process queue and worker — the same code, for local runs and tests.
+
+Guarantees, in both modes:
+- **Delays are real.** Up to `INLINE_DELAY_MAX_MS` (5 s) the worker just waits; longer delays pause the run (`WAITING`), free the worker and resume on time — also after a restart.
+- **A run is executed once.** Workers atomically claim a run in the database, so a job delivered twice (retry, recovery) does nothing the second time. Runs are never blindly retried, because steps may have side effects.
+- **Crash recovery.** A running run heartbeats; if its worker dies, the run is re-queued and resumes after the last finished step, on the same branch.
+- **Cancel works across processes.** `POST /executions/:id/cancel` stops a queued or waiting run, and a running one between steps.
+
+### 3. Local models (Hugging Face GGUF, LM Studio, Ollama, llama.cpp)
+
+OpenNodes does not run models itself. It calls a model server you run, over the
+OpenAI-compatible API, so any model you downloaded can be a step in a workflow.
+
+1. Start a server with the model you want:
+   - **LM Studio:** download a model from Hugging Face in the app → *Developer → Start server* (`http://localhost:1234/v1`).
+   - **Ollama:** `ollama pull hf.co/<user>/<repo>:Q4_K_M` (any GGUF on Hugging Face), then use `http://localhost:11434/v1`.
+   - **llama.cpp:** `llama-server -hf <user>/<repo>:Q4_K_M --port 8080` (`http://localhost:8080/v1`).
+   - Also works: Jan, vLLM, LocalAI.
+2. Allow the API to reach it — local and private addresses are blocked by the SSRF policy by default:
+   `SSRF_ALLOWLIST=localhost:1234` (from Docker: `host.docker.internal:1234`).
+3. Add a connection of type `openai-compatible` with secrets
+   `{ "baseUrl": "http://localhost:1234/v1", "defaultModel": "<model id>" }` (`apiKey` only if your server needs one).
+   `GET /api/v1/workspaces/:id/credentials/:credentialId/models` checks the connection and lists the loaded models.
+4. Use an `ai.openai` step with that connection: config `{ "prompt": "…", "system": "…", "model": "<optional>" }`.
+   The reply is available to the next step as `{{ $nodes.<stepId>.output.text }}`.
+
+If the server is down, the model is not loaded, or the address is not allowed, the step fails with the reason — it never reports a fake answer.

@@ -4,6 +4,8 @@ export interface ResumptionState {
   cachedOutputs: Map<string, unknown>;
   completedNodeIds: Set<string>;
   interruptedNodeIds: Set<string>;
+  /** Output handles each completed node activated (from its node:finished event). */
+  completedNodePorts: Map<string, string[]>;
 }
 
 export async function buildResumptionState(
@@ -31,5 +33,18 @@ export async function buildResumptionState(
     }
   }
 
-  return { cachedOutputs, completedNodeIds, interruptedNodeIds };
+  const completedNodePorts = new Map<string, string[]>();
+  for (const evt of await journal.findEvents(executionId)) {
+    const handles = evt.payload?.activeHandles;
+    if (
+      evt.eventType === 'node:finished' &&
+      evt.nodeId &&
+      evt.payload?.status === 'SUCCEEDED' &&
+      Array.isArray(handles)
+    ) {
+      completedNodePorts.set(evt.nodeId, handles.map(String));
+    }
+  }
+
+  return { cachedOutputs, completedNodeIds, interruptedNodeIds, completedNodePorts };
 }

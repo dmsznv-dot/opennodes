@@ -42,3 +42,27 @@ export class CycleDetectedError extends EngineError {
     this.name = 'CycleDetectedError';
   }
 }
+
+export class UnknownNodeTypeError extends EngineError {
+  constructor(nodeType: string) {
+    super(
+      `No executor is registered for node type "${nodeType}", so this step cannot run.`,
+      'ERR_UNKNOWN_NODE_TYPE',
+      422,
+      { nodeType }
+    );
+    this.name = 'UnknownNodeTypeError';
+  }
+}
+
+/**
+ * Thrown by a step to pause the run until `resumeAt` (e.g. a long delay). The engine
+ * marks the step PENDING and the execution WAITING instead of failing; the runtime
+ * re-enqueues the run, and on resume the step runs again and can complete.
+ */
+export class ExecutionSuspendedSignal extends Error {
+  constructor(public readonly resumeAt: Date) {
+    super(`Execution suspended until ${resumeAt.toISOString()}`);
+    this.name = 'ExecutionSuspendedSignal';
+  }
+}

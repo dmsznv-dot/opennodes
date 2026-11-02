@@ -42,17 +42,15 @@ export const openAiChatAction: ConnectorAction<OpenAIChatInput, unknown> = {
       );
     }
     const baseUrl = (input.baseUrl ?? 'https://api.openai.com/v1').replace(/\/+$/, '');
-    const apiKey =
-      input.apiKey ??
-      (ctx.credentials?.apiKey as string | undefined) ??
-      'mock_key';
+    // Local OpenAI-compatible servers (LM Studio, llama.cpp, Ollama /v1, vLLM) need no key.
+    const apiKey = input.apiKey ?? (ctx.credentials?.apiKey as string | undefined);
 
     const resp = await ctx.httpClient.request({
       url: `${baseUrl}/chat/completions`,
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
+        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
       },
       data: {
         model: input.model ?? 'gpt-4o-mini',

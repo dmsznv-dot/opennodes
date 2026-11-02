@@ -145,6 +145,11 @@ export class ApiRepository {
     });
   }
 
+  public async listWorkspaceSlugs(): Promise<string[]> {
+    const rows = await this.db.select({ slug: workspaces.slug }).from(workspaces);
+    return rows.map((r: Db) => r.slug);
+  }
+
   public async findUserByEmail(email: string): Promise<UserRecord | undefined> {
     const rows = await this.db.select().from(users).where(eq(users.email, email)).limit(1);
     return rows[0];

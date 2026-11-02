@@ -10,7 +10,8 @@
     { "path": "../../packages/workflow-schema" },
     { "path": "../../packages/db" },
     { "path": "../../packages/observability" },
-    { "path": "../../packages/workflow-engine" }
+    { "path": "../../packages/workflow-engine" },
+    { "path": "../../packages/execution-runtime" }
   ],
   "include": ["src/**/*"]
 }

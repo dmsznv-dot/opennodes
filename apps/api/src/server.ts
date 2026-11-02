@@ -4,6 +4,7 @@ import {
   AesGcmEncryptionService,
   AlreadyBootstrappedError,
   BootstrapService,
+  type BootstrapResult,
   EnvKeyProvider,
   ForbiddenError,
   PERMISSIONS,
@@ -15,8 +16,11 @@ import {
   type Role,
 } from '@localflow/auth';
 import { closeDb, type DatabaseInstance } from '@localflow/db';
+import { z } from 'zod';
 import { redact } from '@localflow/observability';
 import {
+  WorkflowEdgeSchema,
+  WorkflowNodeSchema,
   computeWorkflowChecksum,
   validateWorkflowGraph,
   type WorkflowDefinition,
@@ -24,15 +28,19 @@ import {
   type WorkflowNode,
 } from '@localflow/workflow-schema';
 import {
-  DrizzleExecutionJournal,
-  SimpleCancellationToken,
-  WorkflowEngine,
-  type ExecutionJournal,
+  BullMQQueueManager,
+  type IWorkflowQueueManager,
   type JournalExecutionRecord,
   type JournalNodeExecutionRecord,
-  type WorkflowExecutionSummary,
 } from '@localflow/workflow-engine';
+import {
+  ExecutionRuntime,
+  ExecutionWorker,
+  LocalQueueManager,
+  listConnectionModels,
+} from '@localflow/execution-runtime';
 import { verifyWebhookHmac } from '@localflow/connectors-core';
+import { LocalFlowError, SafeHttpClient, slugifyWorkspaceName } from '@localflow/shared';
 import { loadApiConfig, type ApiConfig } from './config.js';
 import { openDatabase } from './store/database.js';
 import { ApiRepository, isUuid, type StoredWorkflow } from './store/repository.js';
@@ -45,7 +53,18 @@ export interface InjectRequest {
   url: string;
   headers?: Record<string, string>;
   body?: unknown;
+  /** Exact request bytes as received; webhook signatures are verified against these. */
+  rawBody?: string;
 }
+
+/** Draft graph accepted by PUT /draft and POST /workflows. */
+const DraftGraphSchema = z.object({
+  nodes: z.array(WorkflowNodeSchema).default([]),
+  edges: z.array(WorkflowEdgeSchema).default([]),
+});
+
+/** Runs that can still be stopped; finished runs keep their final status. */
+const CANCELLABLE_STATUSES = new Set(['QUEUED', 'RUNNING', 'WAITING']);
 
 export interface InjectResponse<T = unknown> {
   statusCode: number;
@@ -59,12 +78,17 @@ export interface SseEventMessage {
   data: Record<string, unknown>;
 }
 
+/** Run states after which nothing changes until someone acts (resume, retry, edit). */
+const SETTLED_STATUSES = new Set(['SUCCEEDED', 'FAILED', 'CANCELLED', 'WAITING']);
+
 interface ApiRuntime {
   db: DatabaseInstance;
   repo: ApiRepository;
   sessions: PgSessionStore;
-  journal: ExecutionJournal;
-  engine: WorkflowEngine;
+  execution: ExecutionRuntime;
+  queue: IWorkflowQueueManager;
+  /** Only in embedded mode: the in-process consumer of the queue. */
+  worker?: ExecutionWorker;
   bootstrap: BootstrapService;
 }
 
@@ -77,8 +101,6 @@ export class LocalFlowApiServer {
   private readonly config: ApiConfig;
   private readonly hasher = new ScryptPasswordHasher();
   private readonly encryptionService: AesGcmEncryptionService;
-  /** Live cancellation handles for in-flight runs; meaningless across restarts. */
-  private readonly cancellationTokens = new Map<string, SimpleCancellationToken>();
   private runtime?: ApiRuntime;
   private initPromise?: Promise<ApiRuntime>;
   private httpServer?: http.Server;
@@ -112,37 +134,64 @@ export class LocalFlowApiServer {
   private async initRuntime(): Promise<ApiRuntime> {
     const db = await openDatabase(this.config.databaseUrl);
     const repo = new ApiRepository(db);
-    const journal = new DrizzleExecutionJournal(db);
     const bootstrap = new BootstrapService(
       {
         isSystemBootstrapped: () => repo.isBootstrapped(),
         createOwnerAndWorkspace: async (input) => {
-          const workspaceSlug =
-            input.workspaceName
-              .toLowerCase()
-              .replace(/[^a-z0-9]+/g, '-')
-              .replace(/^-|-$/g, '') || 'primary';
+          const workspaceSlug = slugifyWorkspaceName(
+            input.workspaceName,
+            await repo.listWorkspaceSlugs()
+          );
           const { userId, workspaceId } = await repo.createOwnerAndWorkspace({
             ...input,
             workspaceSlug,
           });
-          return {
+          const result: BootstrapResult & { workspaceSlug: string } = {
             userId,
             email: input.email,
             workspaceId,
             workspaceName: input.workspaceName,
+            workspaceSlug,
             role: 'OWNER',
           };
+          return result;
         },
       },
       this.hasher
     );
+    const execution = new ExecutionRuntime({
+      db,
+      encryptionKey: this.config.encryptionKey,
+      ssrfAllowlist: this.config.ssrfAllowlist,
+      allowedFsRoot: this.config.allowedFsRoot,
+      inlineDelayMaxMs: this.config.inlineDelayMaxMs,
+      staleMs: this.config.recoveryStaleMs,
+      heartbeatMs: this.config.heartbeatMs,
+    });
+    // queue: runs go to Redis and the separate worker process executes them.
+    // embedded: no Redis — an in-process queue and worker run the same code.
+    const queue: IWorkflowQueueManager =
+      this.config.executionMode === 'queue'
+        ? new BullMQQueueManager({ url: this.config.redisUrl })
+        : new LocalQueueManager();
+    let worker: ExecutionWorker | undefined;
+    if (this.config.executionMode === 'embedded') {
+      worker = new ExecutionWorker({
+        runtime: execution,
+        queue,
+        db,
+        concurrency: this.config.workerConcurrency,
+        recoveryIntervalMs: this.config.recoveryIntervalMs,
+      });
+      await worker.start();
+    }
     return {
       db,
       repo,
       sessions: new PgSessionStore(db),
-      journal,
-      engine: new WorkflowEngine({ journal }),
+      execution,
+      queue,
+      worker,
       bootstrap,
     };
   }
@@ -309,7 +358,7 @@ export class LocalFlowApiServer {
 
         const idempotencyKey = reqHeaders['x-idempotency-key'];
         if (idempotencyKey) {
-          const existing = await rt.journal.findExecutionByIdempotencyKey(
+          const existing = await rt.execution.journal.findExecutionByIdempotencyKey(
             wf.workspaceId,
             wf.id,
             idempotencyKey
@@ -330,7 +379,8 @@ export class LocalFlowApiServer {
             reqHeaders['x-hub-signature-256'] ?? reqHeaders['x-localflow-signature'] ?? '';
           const signature = rawSig.startsWith('sha256=') ? rawSig.slice('sha256='.length) : rawSig;
           const rawPayload =
-            typeof req.body === 'string' ? req.body : JSON.stringify(req.body ?? {});
+            req.rawBody ??
+            (typeof req.body === 'string' ? req.body : JSON.stringify(req.body ?? {}));
           if (!verifyWebhookHmac(rawPayload, webhookSecret, signature)) {
             return respond(401, {
               code: 'ERR_WEBHOOK_HMAC_INVALID',
@@ -339,7 +389,7 @@ export class LocalFlowApiServer {
           }
         }
 
-        const execRecord = await this.runPublishedWorkflow(
+        const queued = await this.enqueueRun(
           rt,
           wf,
           'webhook',
@@ -347,9 +397,9 @@ export class LocalFlowApiServer {
           idempotencyKey
         );
         return respond(202, {
-          executionId: execRecord.id,
+          executionId: queued.id,
           deduplicated: false,
-          status: execRecord.status,
+          status: queued.status,
         });
       }
 
@@ -357,6 +407,12 @@ export class LocalFlowApiServer {
       const auth = await this.authenticate(rt, reqHeaders);
       if (!auth) {
         return respond(401, { code: 'ERR_UNAUTHORIZED', message: 'Authentication required.' });
+      }
+      if (typeof req.body === 'string') {
+        return respond(400, {
+          code: 'ERR_INVALID_JSON',
+          message: 'Request body must be a JSON object.',
+        });
       }
 
       // 5. Workspace Credentials Vault
@@ -446,6 +502,45 @@ export class LocalFlowApiServer {
         }
       }
 
+      // 5b. Connection check: which models a (local) model server can serve
+      const credModelsMatch = pathname.match(
+        /^\/api\/v1\/workspaces\/([^/]+)\/credentials\/([^/]+)\/models$/
+      );
+      if (req.method === 'GET' && credModelsMatch) {
+        const [, workspaceId, credentialId] = credModelsMatch as unknown as [
+          string,
+          string,
+          string,
+        ];
+        await this.requireWorkspacePermission(
+          rt,
+          workspaceId,
+          auth.userId,
+          PERMISSIONS.CREDENTIAL_REFERENCE
+        );
+        const cred = await rt.repo.findCredential(credentialId);
+        if (!cred || cred.workspaceId !== workspaceId) {
+          return respond(404, { code: 'ERR_NOT_FOUND', message: 'Connection not found.' });
+        }
+        const secrets = await this.encryptionService.decryptJson<Record<string, unknown>>(
+          cred.encryptedPayload,
+          workspaceId
+        );
+        try {
+          const models = await listConnectionModels(cred.type, secrets, {
+            httpClient: new SafeHttpClient(),
+            ssrfAllowlist: this.config.ssrfAllowlist,
+          });
+          return respond(200, { ok: true, models });
+        } catch (err) {
+          return respond(502, {
+            ok: false,
+            code: 'ERR_CONNECTION_CHECK_FAILED',
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
       // 6. Workspace Workflows Collection
       const wsWorkflowsMatch = pathname.match(/^\/api\/v1\/workspaces\/([^/]+)\/workflows$/);
       if (wsWorkflowsMatch) {
@@ -473,12 +568,14 @@ export class LocalFlowApiServer {
             nodes?: WorkflowNode[];
             edges?: WorkflowEdge[];
           };
+          const graph = DraftGraphSchema.safeParse({ nodes: body.nodes, edges: body.edges });
+          if (!graph.success) return respond(400, this.graphValidationError(graph.error));
           const wf = await rt.repo.createWorkflow({
             workspaceId,
             name: body.name ?? 'Untitled Workflow',
             description: body.description ?? '',
-            nodes: body.nodes ?? [],
-            edges: body.edges ?? [],
+            nodes: graph.data.nodes,
+            edges: graph.data.edges,
             createdBy: auth.userId,
           });
           if (body.webhookSecret) {
@@ -502,12 +599,16 @@ export class LocalFlowApiServer {
           auth.userId,
           PERMISSIONS.WORKFLOW_EDIT
         );
-        const body = (req.body ?? {}) as { nodes: WorkflowNode[]; edges: WorkflowEdge[] };
-        const updated = await rt.repo.updateDraft(
-          wf.id,
-          structuredClone(body.nodes ?? []),
-          structuredClone(body.edges ?? [])
-        );
+        const body = (req.body ?? {}) as { nodes?: unknown; edges?: unknown };
+        if (!Array.isArray(body.nodes) || !Array.isArray(body.edges)) {
+          return respond(400, {
+            code: 'ERR_VALIDATION',
+            message: 'A draft must contain "nodes" and "edges" arrays; the saved draft was kept.',
+          });
+        }
+        const graph = DraftGraphSchema.safeParse(body);
+        if (!graph.success) return respond(400, this.graphValidationError(graph.error));
+        const updated = await rt.repo.updateDraft(wf.id, graph.data.nodes, graph.data.edges);
         return respond(200, updated);
       }
 
@@ -588,10 +689,27 @@ export class LocalFlowApiServer {
             message: 'Publish the workflow before executing.',
           });
         }
-        const body = (req.body ?? {}) as { payload?: Record<string, unknown> };
-        const record = await this.runPublishedWorkflow(rt, wf, 'manual', body.payload ?? {});
-        const steps = await this.findSteps(rt, record.id);
-        return respond(200, { execution: record, steps });
+        const body = (req.body ?? {}) as {
+          payload?: Record<string, unknown>;
+          wait?: boolean;
+          waitTimeoutMs?: number;
+        };
+        const queued = await this.enqueueRun(rt, wf, 'manual', body.payload ?? {});
+        if (!body.wait) {
+          return respond(202, { execution: queued, steps: [] });
+        }
+        // Test runs from the editor want the result; the run itself still goes through
+        // the queue and the worker exactly like any other run.
+        const settled = await this.waitForRun(
+          rt,
+          queued.id,
+          Math.min(Math.max(Number(body.waitTimeoutMs) || 30_000, 0), 120_000)
+        );
+        const steps = await this.findSteps(rt, queued.id);
+        return respond(SETTLED_STATUSES.has(settled.status) ? 200 : 202, {
+          execution: settled,
+          steps,
+        });
       }
 
       // 8. Execution Inspection, Cancellation & SSE Stream
@@ -624,8 +742,18 @@ export class LocalFlowApiServer {
           auth.userId,
           PERMISSIONS.WORKFLOW_CANCEL
         );
-        this.cancellationTokens.get(executionId)?.cancel();
-        const updated = await rt.journal.updateExecution(executionId, { status: 'CANCELLED' });
+        if (!CANCELLABLE_STATUSES.has(exec.status)) {
+          return respond(409, {
+            code: 'ERR_EXECUTION_FINISHED',
+            message: `This run has already finished with status ${exec.status}; it cannot be cancelled.`,
+            status: exec.status,
+          });
+        }
+        // The worker running it sees this on its next heartbeat and stops between steps;
+        // a WAITING or QUEUED run is simply never resumed.
+        const updated = await rt.execution.journal.updateExecution(executionId, {
+          status: 'CANCELLED',
+        });
         return respond(200, { execution: updated });
       }
 
@@ -654,16 +782,36 @@ export class LocalFlowApiServer {
       if (err instanceof ForbiddenError) {
         return respond(403, { code: 'ERR_FORBIDDEN', message: err.message });
       }
+      if (err instanceof LocalFlowError && err.statusCode >= 400 && err.statusCode < 500) {
+        return respond(err.statusCode, {
+          code: err.code,
+          message: err.message,
+          ...(err.details ? { details: err.details } : {}),
+        });
+      }
       const message = err instanceof Error ? err.message : String(err);
       return respond(500, { code: 'ERR_INTERNAL', message });
     }
+  }
+
+  private graphValidationError(error: z.ZodError): Record<string, unknown> {
+    const first = error.issues[0];
+    return {
+      code: 'ERR_VALIDATION',
+      message: first
+        ? `Invalid workflow graph at ${first.path.join('.') || 'body'}: ${first.message}`
+        : 'Invalid workflow graph.',
+      issues: error.issues
+        .slice(0, 20)
+        .map((i) => ({ path: i.path.join('.'), message: i.message })),
+    };
   }
 
   private async findExecution(
     rt: ApiRuntime,
     executionId: string
   ): Promise<JournalExecutionRecord | undefined> {
-    return isUuid(executionId) ? rt.journal.findExecutionById(executionId) : undefined;
+    return isUuid(executionId) ? rt.execution.journal.findExecutionById(executionId) : undefined;
   }
 
   /** Steps in the order they ran (the journal returns them unordered). */
@@ -672,7 +820,7 @@ export class LocalFlowApiServer {
     executionId: string
   ): Promise<JournalNodeExecutionRecord[]> {
     const time = (d?: Date | null) => (d ? new Date(d).getTime() : Number.MAX_SAFE_INTEGER);
-    return (await rt.journal.findNodeExecutions(executionId)).sort(
+    return (await rt.execution.journal.findNodeExecutions(executionId)).sort(
       (a, b) => time(a.startedAt) - time(b.startedAt) || time(a.createdAt) - time(b.createdAt)
     );
   }
@@ -706,44 +854,38 @@ export class LocalFlowApiServer {
     ];
   }
 
-  private async runPublishedWorkflow(
+  private async enqueueRun(
     rt: ApiRuntime,
     wf: StoredWorkflow,
     triggerType: 'manual' | 'cron' | 'webhook' | 'telegram_polling',
     triggerPayload: Record<string, unknown>,
     idempotencyKey?: string
-  ): Promise<WorkflowExecutionSummary> {
+  ): Promise<JournalExecutionRecord> {
     const versionSnap = wf.versions.find((v) => v.version === wf.activeVersion);
     if (!versionSnap) {
       throw new Error(`Published version ${wf.activeVersion} not found.`);
     }
-
-    const definition: WorkflowDefinition = {
-      id: wf.id,
+    return rt.execution.enqueue(rt.queue, {
       workspaceId: wf.workspaceId,
-      name: wf.name,
-      schemaVersion: '1.0',
-      nodes: versionSnap.nodes,
-      edges: versionSnap.edges,
-      executionPolicy: { executionTimeoutMs: 60_000, maxConcurrency: 10 },
-    };
+      workflowId: wf.id,
+      workflowVersionId: versionSnap.id,
+      triggerType,
+      triggerPayload,
+      idempotencyKey,
+    });
+  }
 
-    const executionId = crypto.randomUUID();
-    const token = new SimpleCancellationToken();
-    this.cancellationTokens.set(executionId, token);
-    try {
-      const runResult = await rt.engine.executeWorkflow(definition, {
-        executionId,
-        workflowVersionId: versionSnap.id,
-        triggerType,
-        triggerPayload,
-        idempotencyKey,
-        cancellationToken: token,
-        journal: rt.journal,
-      });
-      return runResult.execution;
-    } finally {
-      this.cancellationTokens.delete(executionId);
+  /** Polls the journal until the run settles or `timeoutMs` passes. */
+  private async waitForRun(
+    rt: ApiRuntime,
+    executionId: string,
+    timeoutMs: number
+  ): Promise<JournalExecutionRecord> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const exec = (await rt.execution.journal.findExecutionById(executionId))!;
+      if (SETTLED_STATUSES.has(exec.status) || Date.now() >= deadline) return exec;
+      await new Promise((r) => setTimeout(r, 100));
     }
   }
 
@@ -773,6 +915,7 @@ export class LocalFlowApiServer {
           url: req.url ?? '/',
           headers,
           body: parsedBody,
+          rawBody,
         });
         res.writeHead(response.statusCode, response.headers);
         res.end(response.rawBody);
@@ -798,6 +941,8 @@ export class LocalFlowApiServer {
     if (rt) {
       this.runtime = undefined;
       this.initPromise = undefined;
+      await rt.worker?.stop();
+      await rt.queue.closeAll();
       await closeDb(rt.db);
     }
   }

@@ -22,6 +22,7 @@
   },
   "dependencies": {
     "@localflow/db": "workspace:*",
+    "@localflow/execution-runtime": "workspace:*",
     "@localflow/observability": "workspace:*",
     "@localflow/shared": "workspace:*",
     "@localflow/workflow-engine": "workspace:*",

@@ -80,7 +80,7 @@ describe('@localflow/api — state survives a restart (BUG-09 / S-1)', () => {
       method: 'POST',
       url: `/api/v1/workflows/${wf.body.id}/execute`,
       headers: auth(token),
-      body: { payload: { name: 'Аня' } },
+      body: { payload: { name: 'Аня' }, wait: true },
     });
     expect(run.body.execution.status).toBe('SUCCEEDED');
     await a.close();
@@ -190,7 +190,7 @@ describe('@localflow/api — state survives a restart (BUG-09 / S-1)', () => {
       method: 'POST',
       url: `/api/v1/workflows/${wf.body.id}/execute`,
       headers: auth(token),
-      body: {},
+      body: { wait: true },
     });
 
     const stranger = await api.createTestUser('stranger@localflow.dev', 'StrongPassword123!');

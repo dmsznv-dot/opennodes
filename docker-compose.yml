@@ -53,6 +53,13 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:-change-me-in-production-min-32-chars-secret-key}
       ALLOWED_FS_ROOT: ${ALLOWED_FS_ROOT:-/data/allowed}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Hosts steps may reach despite the SSRF policy, e.g. a model server on the host:
+      # SSRF_ALLOWLIST=host.docker.internal:1234
+      SSRF_ALLOWLIST: ${SSRF_ALLOWLIST:-}
+      # Runs are queued in Redis and executed by the worker service.
+      EXECUTION_MODE: queue
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${API_PORT:-4000}:4000"
     volumes:
@@ -85,6 +92,10 @@ services:
       ALLOWED_FS_ROOT: ${ALLOWED_FS_ROOT:-/data/allowed}
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-10}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Steps run here, so the worker needs the same allowlist as the API.
+      SSRF_ALLOWLIST: ${SSRF_ALLOWLIST:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - allowed_fs_data:/data/allowed
 

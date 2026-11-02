@@ -11,6 +11,19 @@ export const ApiConfigSchema = z.object({
   sessionSecret: z.string().min(16).default('localflow-default-session-secret-32-chars'),
   allowedFsRoot: z.string().default('/tmp/localflow-allowed'),
   logLevel: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
+  /** Hosts connectors may reach despite the SSRF policy, e.g. `ollama:11434`. */
+  ssrfAllowlist: z.array(z.string()).default([]),
+  /**
+   * `queue`: runs are queued in Redis and executed by the worker process (Docker).
+   * `embedded`: no Redis — the API runs an in-process queue and worker (local, tests).
+   */
+  executionMode: z.enum(['queue', 'embedded']).default('embedded'),
+  workerConcurrency: z.coerce.number().int().min(1).max(100).default(4),
+  /** Delays up to this long run inline; longer ones suspend the run (WAITING). */
+  inlineDelayMaxMs: z.coerce.number().int().min(0).default(5_000),
+  heartbeatMs: z.coerce.number().int().min(50).default(5_000),
+  recoveryStaleMs: z.coerce.number().int().min(100).default(45_000),
+  recoveryIntervalMs: z.coerce.number().int().min(100).default(60_000),
 });
 
 export type ApiConfig = z.infer<typeof ApiConfigSchema>;
@@ -25,5 +38,12 @@ export function loadApiConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     sessionSecret: env.SESSION_SECRET,
     allowedFsRoot: env.ALLOWED_FS_ROOT,
     logLevel: env.LOG_LEVEL ?? 'info',
+    executionMode: env.EXECUTION_MODE,
+    workerConcurrency: env.WORKER_CONCURRENCY,
+    inlineDelayMaxMs: env.INLINE_DELAY_MAX_MS,
+    ssrfAllowlist: (env.SSRF_ALLOWLIST ?? '')
+      .split(',')
+      .map((h) => h.trim())
+      .filter(Boolean),
   });
 }

@@ -10,7 +10,11 @@ import { TopologicalScheduler } from './topological-scheduler.js';
 import { EdgeResolver } from './edge-resolver.js';
 import type { NodeExecutor, StepLogger } from './node-executor.js';
 import { NodeExecutorRegistry } from './node-executor-registry.js';
-import { ExecutionTimeoutError } from './errors.js';
+import {
+  ExecutionSuspendedSignal,
+  ExecutionTimeoutError,
+  UnknownNodeTypeError,
+} from './errors.js';
 
 export interface WorkflowEngineOptions {
   journal?: ExecutionJournal;
@@ -19,6 +23,12 @@ export interface WorkflowEngineOptions {
   defaultTimeoutMs?: number;
   env?: Record<string, string>;
   httpClient?: SafeHttpClient;
+  /**
+   * Fail steps whose type has no executor, primitive or trigger handler instead of
+   * echoing their config as output. Production runtimes must enable this: otherwise
+   * an unknown connector step is reported as SUCCEEDED without doing anything.
+   */
+  strictNodeTypes?: boolean;
 }
 
 export interface WorkflowRunOptions {
@@ -35,6 +45,8 @@ export interface WorkflowRunOptions {
   resumeFromExecutionId?: string;
   cachedNodeOutputs?: ReadonlyMap<string, unknown>;
   completedNodeIds?: ReadonlySet<string>;
+  /** Output handles each completed node activated, so branches resume correctly. */
+  completedNodePorts?: ReadonlyMap<string, readonly string[]>;
   simulateCrashAtNode?: string;
 }
 
@@ -79,6 +91,8 @@ export interface WorkflowRunResult {
   skippedNodes: Set<string>;
   durationMs: number;
   crashedAt?: string;
+  /** Set when a step paused the run (status WAITING); resume at `resumeAt`. */
+  suspension?: { nodeId: string; resumeAt: Date };
 }
 
 export class WorkflowEngine {
@@ -91,6 +105,7 @@ export class WorkflowEngine {
   private readonly defaultTimeoutMs: number;
   private readonly env: Record<string, string>;
   private readonly httpClient?: SafeHttpClient;
+  private readonly strictNodeTypes: boolean;
 
   constructor(options: WorkflowEngineOptions = {}) {
     this.defaultJournal = options.journal ?? new InMemoryExecutionJournal();
@@ -98,6 +113,7 @@ export class WorkflowEngine {
     this.defaultTimeoutMs = options.defaultTimeoutMs ?? 300_000;
     this.env = options.env ?? {};
     this.httpClient = options.httpClient;
+    this.strictNodeTypes = options.strictNodeTypes ?? false;
 
     if (options.nodeExecutors) {
       for (const [type, executor] of Object.entries(options.nodeExecutors)) {
@@ -289,6 +305,7 @@ export class WorkflowEngine {
       // Skip already-completed step during crash resumption
       if (completedIds.has(node.id)) {
         const cachedOut = context.getNodeOutput(node.id);
+        context.setActivePorts(node.id, [...(options.completedNodePorts?.get(node.id) ?? ['main'])]);
         stepRecords.push({
           id: randomUUID(),
           executionId,
@@ -310,10 +327,16 @@ export class WorkflowEngine {
         context
       );
 
+      // On resume a node may already have a journal row (interrupted, waiting or skipped);
+      // reuse it so a run never lists the same step twice.
+      const priorRow = options.resumeFromExecutionId
+        ? await journal.findNodeExecution(executionId, node.id)
+        : undefined;
+
       if (!shouldRun) {
         context.markSkipped(node.id);
         const now = new Date();
-        const skippedDb = await journal.createNodeExecution({
+        const skippedDb = priorRow ?? await journal.createNodeExecution({
           executionId,
           nodeId: node.id,
           nodeType: node.type,
@@ -407,15 +430,17 @@ export class WorkflowEngine {
       const stepStartWall = Date.now();
       const stepStartDate = new Date(stepStartWall);
 
-      const nodeExecRow = await journal.createNodeExecution({
-        executionId,
-        nodeId: node.id,
-        nodeType: node.type,
-        nodeName: node.data.label,
-        status: 'RUNNING',
-        inputPayload: evaluatedConfig,
-        startedAt: stepStartDate,
-      });
+      const nodeExecRow = priorRow
+        ? await journal.updateNodeExecution(priorRow.id, { status: 'RUNNING' })
+        : await journal.createNodeExecution({
+            executionId,
+            nodeId: node.id,
+            nodeType: node.type,
+            nodeName: node.data.label,
+            status: 'RUNNING',
+            inputPayload: evaluatedConfig,
+            startedAt: stepStartDate,
+          });
 
       await journal.createEvent({
         executionId,
@@ -456,6 +481,7 @@ export class WorkflowEngine {
       let lastError: unknown;
       let output: unknown;
       let activeHandles: string[] = ['main'];
+      let suspended: ExecutionSuspendedSignal | undefined;
 
       while (attempt <= maxRetries) {
         try {
@@ -473,6 +499,10 @@ export class WorkflowEngine {
           stepSucceeded = true;
           break;
         } catch (err: unknown) {
+          if (err instanceof ExecutionSuspendedSignal) {
+            suspended = err;
+            break;
+          }
           lastError = err;
           attempt++;
           if (attempt <= maxRetries) {
@@ -481,6 +511,43 @@ export class WorkflowEngine {
             });
           }
         }
+      }
+
+      if (suspended) {
+        const resumeAt = suspended.resumeAt;
+        const waitingRow = await journal.updateNodeExecution(nodeExecRow.id, {
+          status: 'PENDING',
+          outputPayload: { waitingUntil: resumeAt.toISOString() },
+        });
+        execRecord = await journal.updateExecution(executionId, {
+          status: 'WAITING',
+          metadata: { resumeAt: resumeAt.toISOString(), waitingNodeId: node.id },
+        });
+        await journal.createEvent({
+          executionId,
+          eventType: 'execution:waiting',
+          nodeId: node.id,
+          payload: { resumeAt: resumeAt.toISOString() },
+        });
+        stepRecords.push({
+          id: waitingRow.id,
+          executionId,
+          nodeId: node.id,
+          nodeType: node.type,
+          nodeName: node.data.label,
+          status: 'PENDING',
+          startedAt: stepStartDate,
+          outputPayload: waitingRow.outputPayload,
+          retryCount: 0,
+        });
+        return {
+          execution: this.mapExecutionSummary(execRecord),
+          stepRecords,
+          nodeOutputs: context.nodeOutputs,
+          skippedNodes: context.skippedNodes,
+          durationMs: Date.now() - startWall,
+          suspension: { nodeId: node.id, resumeAt },
+        };
       }
 
       const stepFinishWall = Date.now();
@@ -503,7 +570,7 @@ export class WorkflowEngine {
           executionId,
           eventType: 'node:finished',
           nodeId: node.id,
-          payload: { status: 'SUCCEEDED', durationMs: stepDurationMs },
+          payload: { status: 'SUCCEEDED', durationMs: stepDurationMs, activeHandles },
         });
 
         stepRecords.push({
@@ -736,7 +803,10 @@ export class WorkflowEngine {
       };
     }
 
-    // 4. Default pass-through for generic test steps
+    // 4. Default pass-through for generic test steps (never in strict runtimes)
+    if (this.strictNodeTypes) {
+      throw new UnknownNodeTypeError(node.type);
+    }
     return {
       output: { ...evaluatedConfig },
       activeHandles: ['main'],

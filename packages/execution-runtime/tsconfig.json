@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "composite": true
+  },
+  "include": ["src/**/*"],
+  "references": [
+    { "path": "../auth" },
+    { "path": "../connector-sdk" },
+    { "path": "../connectors-ai" },
+    { "path": "../connectors-core" },
+    { "path": "../db" },
+    { "path": "../shared" },
+    { "path": "../workflow-engine" },
+    { "path": "../workflow-schema" }
+  ]
+}

@@ -228,7 +228,7 @@ describe('@localflow/api — Control Plane REST API, RBAC, Versioning, Vault & W
       method: 'POST',
       url: `/api/v1/workflows/${workflowId}/execute`,
       headers: { Authorization: `Bearer ${token}` },
-      body: { payload: { name: 'Alice' } },
+      body: { payload: { name: 'Alice' }, wait: true },
     });
     expect(execRes.statusCode).toBe(200);
     expect(execRes.body.execution.status).toBe('SUCCEEDED');

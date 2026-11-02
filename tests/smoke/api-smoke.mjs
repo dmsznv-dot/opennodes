@@ -151,7 +151,7 @@ if (phase === 'run') {
   check('publish v1', pub.status === 201, `${pub.status} checksum=${pub.body.checksum?.slice(0, 12)}`);
 
   const run = await call('POST', `/api/v1/workflows/${wfId}/execute`, {
-    token, body: { payload: { name: 'Аня' } },
+    token, body: { payload: { name: 'Аня' }, wait: true },
   });
   check('execute returns 200', run.status === 200, `${run.status}`);
   const exec = run.body.execution ?? {};

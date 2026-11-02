@@ -33,16 +33,23 @@ export class CrashRecoveryService {
     const hardTimeoutMs = options.hardTimeoutMs ?? 300_000;
     const staleCutoff = new Date(Date.now() - staleThresholdMs);
 
-    const staleExecutions = await (this.db as any)
+    const staleRows = await (this.db as any)
       .select()
       .from(executions)
       .where(
         and(
-          inArray(executions.status, ['RUNNING', 'QUEUED']),
+          inArray(executions.status, ['RUNNING', 'QUEUED', 'WAITING']),
           lt(executions.updatedAt, staleCutoff)
         )
       )
       .limit(options.batchSize ?? 100);
+    // A WAITING run is only orphaned once its resume time has passed (its delayed
+    // job was lost, e.g. an in-process queue across a restart).
+    const staleExecutions = staleRows.filter((e: { status: string; metadata?: any }) => {
+      if (e.status !== 'WAITING') return true;
+      const resumeAt = Date.parse(String(e.metadata?.resumeAt ?? ''));
+      return Number.isFinite(resumeAt) && resumeAt < staleCutoff.getTime();
+    });
 
     const result: RecoveryScanResult = {
       scannedCount: staleExecutions.length,
@@ -62,7 +69,7 @@ export class CrashRecoveryService {
               : Date.now();
         const totalDurationMs = Date.now() - startedTime;
 
-        if (totalDurationMs > hardTimeoutMs) {
+        if (execution.status !== 'WAITING' && totalDurationMs > hardTimeoutMs) {
           await (this.db as any)
             .update(executions)
             .set({
@@ -92,14 +99,18 @@ export class CrashRecoveryService {
             enqueuedAt: Date.now(),
           },
           {
-            jobId: `resume_${execution.id}`,
+            // Unique per attempt: a queue keeps finished jobs and ignores re-used ids.
+            jobId: `recover_${execution.id}_${Date.now()}`,
             priority: 1,
+            attempts: 1,
           }
         );
 
+        // Back to QUEUED: the next worker that claims it resumes from the journal,
+        // and it is not considered stale again until that worker stops heartbeating.
         await (this.db as any)
           .update(executions)
-          .set({ updatedAt: new Date() })
+          .set({ status: 'QUEUED', updatedAt: new Date() })
           .where(eq(executions.id, execution.id));
 
         result.recoveredCount++;

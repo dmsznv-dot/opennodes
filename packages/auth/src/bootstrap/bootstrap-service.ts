@@ -1,3 +1,4 @@
+import { ValidationError } from '@localflow/shared';
 import { AlreadyBootstrappedError } from './errors.js';
 import type { PasswordHasher } from '../password/hasher.js';
 
@@ -45,10 +46,13 @@ export class BootstrapService {
     }
 
     if (!input.email || !input.email.includes('@')) {
-      throw new Error('Valid email address is required.');
+      throw new ValidationError('Valid email address is required.', { field: 'email' });
     }
     if (!input.password || input.password.length < 8) {
-      throw new Error('Password must be at least 8 characters.');
+      throw new ValidationError('Password must be at least 8 characters.', {
+        field: 'password',
+        minLength: 8,
+      });
     }
 
     const passwordHash = await this.hasher.hash(input.password);

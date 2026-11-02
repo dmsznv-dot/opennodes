@@ -49,6 +49,8 @@ export class BullMQQueueManager implements IWorkflowQueueManager {
           delay: opts.delay,
           attempts: opts.attempts ?? 3,
           backoff: opts.backoff ?? { type: 'exponential', delay: 1000 },
+          removeOnComplete: (opts.removeOnComplete ?? { age: 86_400, count: 1000 }) as never,
+          removeOnFail: (opts.removeOnFail ?? { age: 7 * 86_400 }) as never,
         });
         return {
           id: String(bullJob.id ?? opts.jobId ?? ''),
