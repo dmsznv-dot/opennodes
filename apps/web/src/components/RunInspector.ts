@@ -1,5 +1,6 @@
 import { redact } from '@localflow/observability';
 import { unslopTokens } from '@localflow/ui';
+import { createTranslator, type Locale } from '../i18n/index.js';
 
 export type StepStatus =
   | 'QUEUED'
@@ -66,7 +67,8 @@ export class RunInspectorController {
     return `${(durationMs / 1000).toFixed(2)}s`;
   }
 
-  public static formatStepForDisplay(step: RawExecutionStepLog): InspectorStepViewModel {
+  public static formatStepForDisplay(step: RawExecutionStepLog, locale?: Locale): InspectorStepViewModel {
+    const t = createTranslator(locale);
     const safeInput = redact(step.inputPayload ?? {});
     const safeOutput = redact(step.outputPayload ?? {});
 
@@ -75,11 +77,11 @@ export class RunInspectorController {
       nodeName: step.nodeName,
       status: step.status,
       statusColorHex: this.getStatusColor(step.status),
-      attemptBadge: `Attempt #${step.attempt}`,
+      attemptBadge: t('run.attempt', { attempt: step.attempt }),
       tabularDurationLabel: this.formatTabularDuration(step.durationMs),
       sanitizedInputJson: JSON.stringify(safeInput, null, 2),
       sanitizedOutputJson: JSON.stringify(safeOutput, null, 2),
-      errorDiagnostic: step.status === 'FAILED' ? (step.errorMessage ?? 'Step execution failed') : null,
+      errorDiagnostic: step.status === 'FAILED' ? (step.errorMessage ?? t('run.failedFallback')) : null,
     };
   }
 }

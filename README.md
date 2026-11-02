@@ -10,7 +10,8 @@
 </p>
 
 <p align="center">
-  <a href="https://dmsznv-dot.github.io/opennodes/"><strong>🌐 Launch Interactive Working Prototype on GitHub Pages →</strong></a>
+  <a href="https://dmsznv-dot.github.io/opennodes/"><strong>🌐 Open the interactive UI demo on GitHub Pages →</strong></a><br/>
+  <sub>The demo is a <strong>simulation</strong> running in your browser: it never calls real services and labels every result as an example. Real runs need your own Docker install.</sub>
 </p>
 
 ---
@@ -31,12 +32,27 @@
 
 ---
 
+## Public demo (GitHub Pages)
+
+The demo in `docs/` follows a **simple-first** flow: *pick a task → connect a service → fill 2–5 clear fields → test → turn on*.
+
+- **Home, Templates, Connections, History** — the graph editor is the second, advanced way in.
+- **Readable steps**: actions instead of primitives ("Send a Telegram message"), status chips (*Needs setup / Ready / Error / Disabled*), data from earlier steps inserted as readable chips (`{Step 1: Message text}`) instead of raw `{{ $nodes… }}` expressions.
+- **Honest simulation**: “Test” runs in the browser, says what *would* be sent, and fails with a clear reason when a step is not set up. Activation asks for confirmation and lists external actions.
+- **RU / EN** switch available everywhere (including the first-run screen), light/dark/system theme, mobile layout with an overlay settings panel.
+- **First-run tour** (4 steps, skip/resume/restart) built around a safe template with no external actions.
+- **Developer mode** (profile menu) reveals node types/IDs, raw config JSON, graph checksum and manual connections with cycle validation.
+
+Open it locally with any static server, e.g. `python3 -m http.server --directory docs`.
+
+---
+
 ## Monorepo Architecture (13 Packages)
 
 ```text
 opennodes/
 ├── assets/                 # Official OpenNodes SVG brand lockup & geometric icon mark
-├── docs/                   # Interactive GitHub Pages working prototype (Unslop UI)
+├── docs/                   # GitHub Pages UI demo — simulation only, RU/EN, no backend
 ├── apps/
 │   ├── api/                # Control Plane REST API, SSE stream, Webhook ingress, RBAC & /setup
 │   ├── worker/             # BullMQ Distributed Worker Daemon & Crash-Safe Resumption Engine
