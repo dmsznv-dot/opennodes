@@ -24,6 +24,12 @@ export const workflows = pgTable(
       .$type<Record<string, unknown>>()
       .notNull()
       .default({}),
+    webhookSecretEncrypted: jsonb('webhook_secret_encrypted').$type<{
+      keyVersion: number;
+      iv: string;
+      authTag: string;
+      ciphertext: string;
+    }>(),
     createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

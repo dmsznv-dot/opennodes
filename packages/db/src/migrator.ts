@@ -318,6 +318,9 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 CREATE INDEX IF NOT EXISTS idx_audit_logs_workspace_created ON audit_logs(workspace_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_user ON audit_logs(user_id);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_resource ON audit_logs(resource_type, resource_id);
+
+-- 0001: per-workflow webhook HMAC secret, AES-256-GCM envelope (HMAC needs the secret itself, not a hash)
+ALTER TABLE workflows ADD COLUMN IF NOT EXISTS webhook_secret_encrypted JSONB;
 `;
 }
 

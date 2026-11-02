@@ -37,6 +37,25 @@ export function createPgDb(options: CreatePgDbOptions = {}): PgDatabaseInstance 
 }
 
 /**
+ * Creates an embedded PGlite database. With `dataDir` the data is persisted on disk
+ * (single-process local runs); without it the database lives in memory.
+ * Call `runMigrations` before use.
+ */
+export function createPgliteDb(dataDir?: string): PgliteDatabaseInstance {
+  return drizzlePglite(dataDir ? new PGlite(dataDir) : new PGlite(), { schema });
+}
+
+/**
+ * Releases the connection pool / embedded database behind a Drizzle client.
+ */
+export async function closeDb(db: DatabaseInstance): Promise<void> {
+  const client = (db as { $client?: { end?: () => Promise<void>; close?: () => Promise<void> } })
+    .$client;
+  if (client?.end) await client.end();
+  else if (client?.close) await client.close();
+}
+
+/**
  * Creates an in-memory PGlite database instance for tests,
  * automatically applying the schema DDL so it is immediately ready.
  */

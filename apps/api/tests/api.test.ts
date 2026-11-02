@@ -1,10 +1,20 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import crypto from 'node:crypto';
 import { LocalFlowApiServer } from '../src/index.js';
 
+const servers: LocalFlowApiServer[] = [];
+function newApi(): LocalFlowApiServer {
+  const api = new LocalFlowApiServer({ databaseUrl: 'pglite://memory' });
+  servers.push(api);
+  return api;
+}
+afterEach(async () => {
+  await Promise.all(servers.splice(0).map((s) => s.close()));
+});
+
 describe('@localflow/api — Control Plane REST API, RBAC, Versioning, Vault & Webhooks', () => {
   it('1. serves /health/live and /health/ready endpoints', async () => {
-    const api = new LocalFlowApiServer();
+    const api = newApi();
     const live = await api.inject<{ status: string }>({ method: 'GET', url: '/health/live' });
     expect(live.statusCode).toBe(200);
     expect(live.body.status).toBe('ok');
@@ -19,7 +29,7 @@ describe('@localflow/api — Control Plane REST API, RBAC, Versioning, Vault & W
   });
 
   it('2. bootstraps initial Owner account & workspace on /api/v1/setup and locks repeat calls with 409', async () => {
-    const api = new LocalFlowApiServer();
+    const api = newApi();
     const first = await api.inject<{
       userId: string;
       workspaceId: string;
@@ -51,7 +61,7 @@ describe('@localflow/api — Control Plane REST API, RBAC, Versioning, Vault & W
   });
 
   it('3. enforces 4-role RBAC (Owner, Admin, Editor, Viewer) across workflow & credential endpoints', async () => {
-    const api = new LocalFlowApiServer();
+    const api = newApi();
     const setup = await api.inject<{ workspaceId: string; token: string }>({
       method: 'POST',
       url: '/api/v1/setup',
@@ -60,7 +70,7 @@ describe('@localflow/api — Control Plane REST API, RBAC, Versioning, Vault & W
     const { workspaceId } = setup.body;
 
     const viewer = await api.createTestUser('viewer@localflow.dev', 'ViewerPass123!');
-    api.grantWorkspaceRole(workspaceId, viewer.userId, 'VIEWER');
+    await api.grantWorkspaceRole(workspaceId, viewer.userId, 'VIEWER');
 
     // Viewer can list workflows (200)
     const viewRes = await api.inject({
@@ -82,7 +92,7 @@ describe('@localflow/api — Control Plane REST API, RBAC, Versioning, Vault & W
   });
 
   it('4. encrypts credentials at rest with AES-256-GCM and never returns plaintext secrets', async () => {
-    const api = new LocalFlowApiServer();
+    const api = newApi();
     const setup = await api.inject<{ workspaceId: string; token: string }>({
       method: 'POST',
       url: '/api/v1/setup',
@@ -111,13 +121,13 @@ describe('@localflow/api — Control Plane REST API, RBAC, Versioning, Vault & W
     expect(created.rawBody).not.toContain(rawSecret);
     expect(created.body.maskedHint).toContain('9999');
 
-    const rawEncrypted = api.getRawEncryptedCredential(created.body.id);
+    const rawEncrypted = await api.getRawEncryptedCredential(created.body.id);
     expect(rawEncrypted).toBeDefined();
     expect(rawEncrypted!.ciphertext).not.toContain(rawSecret);
   });
 
   it('5. isolates Draft edits from Published immutable versions, blocks cyclic graphs on publish, and executes with SSE events', async () => {
-    const api = new LocalFlowApiServer();
+    const api = newApi();
     const setup = await api.inject<{ workspaceId: string; token: string }>({
       method: 'POST',
       url: '/api/v1/setup',

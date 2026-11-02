@@ -208,6 +208,9 @@ importers:
       '@localflow/workflow-schema':
         specifier: workspace:*
         version: link:../../packages/workflow-schema
+      drizzle-orm:
+        specifier: ^0.45.4
+        version: 0.45.4(@electric-sql/pglite@0.5.14)(@types/pg@8.23.1)(pg@8.23.1)
       zod:
         specifier: ^3.24.1
         version: 3.25.76
