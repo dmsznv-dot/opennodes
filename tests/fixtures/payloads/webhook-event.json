@@ -1,0 +1,13 @@
+{
+  "id": "evt_test_12345",
+  "object": "event",
+  "type": "customer.subscription.created",
+  "data": {
+    "customer": "cus_99999",
+    "email": "customer@example.com",
+    "plan": "pro_tier",
+    "amount": 4900,
+    "currency": "usd"
+  },
+  "created": 1798885000
+}

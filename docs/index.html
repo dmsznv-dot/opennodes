@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenNodes v1.0 — Visual DAG Workflow Engine</title>
+    <link rel="icon" type="image/svg+xml" href="./logo-mark.svg" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <!-- Top Control & Versioning Bar -->
+    <header class="topbar">
+      <div class="brand-group">
+        <img src="./logo-mark.svg" alt="OpenNodes Logo" class="brand-logo" />
+        <span class="brand-title">OpenNodes</span>
+        <span class="brand-badge">v1.0 MVP</span>
+        <select id="templateSelect" class="select-control" aria-label="Workflow Template">
+          <option value="rss_ai_telegram">Scenario 1: RSS → OpenAI → Telegram Bot</option>
+          <option value="stripe_sql_smtp">Scenario 2: Webhook Payment → SQL Ledger → SMTP</option>
+          <option value="health_ollama_alert">Scenario 3: Server Health → IF → Ollama Alert</option>
+        </select>
+      </div>
+
+      <div class="toolbar-center">
+        <span id="versionBadge" class="version-pill published">PUBLISHED v1</span>
+        <span id="checksumBadge" class="checksum-pill tabular-nums" title="Deterministic Permutation-Invariant SHA-256 Checksum">
+          sha256: computing...
+        </span>
+        <button id="btnPublish" class="btn" title="Validate DAG & Publish Immutable Snapshot">
+          Publish Snapshot
+        </button>
+        <button id="btnRollback" class="btn" title="Restore Active Published Snapshot to Draft">
+          Rollback Draft
+        </button>
+      </div>
+
+      <div class="toolbar-right">
+        <button id="btnVault" class="btn">Credentials Vault (AES-256-GCM)</button>
+        <button id="btnSetupModal" class="btn">/setup Wizard</button>
+        <label class="btn" style="cursor: pointer;">
+          <input type="checkbox" id="chkSimulateSecret" style="margin-right: 4px;" />
+          Inject Secret Test
+        </label>
+        <button id="btnRunWorkflow" class="btn btn-primary">
+          ▶ Run Workflow
+        </button>
+      </div>
+    </header>
+
+    <!-- Main 3-Pane Studio Shell -->
+    <main class="workspace-shell">
+      <!-- Left Palette: Triggers, Primitives, Connectors & Edge Builder -->
+      <aside class="left-sidebar">
+        <div class="panel-section">
+          <div class="section-header">
+            <span>DAG Integrity (Kahn's Algo)</span>
+            <span id="dagStatusBadge" class="tabular-nums" style="color: #10b981;">ACYCLIC ✓</span>
+          </div>
+          <div id="validationBanner" class="alert-banner ok">
+            Single root trigger verified. 0 cycles detected.
+          </div>
+        </div>
+
+        <div class="panel-section">
+          <div class="section-header">
+            <span>Connect Ports (Cycle Guard)</span>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 6px;">
+            <select id="edgeSourceSelect" class="select-control"></select>
+            <select id="edgeTargetSelect" class="select-control"></select>
+            <div style="display: flex; gap: 6px;">
+              <button id="btnConnectEdge" class="btn" style="flex: 1;">+ Connect Edge</button>
+              <button id="btnTestCycle" class="btn btn-danger" title="Attempt to create a backward cycle to verify real-time Kahn rejection">
+                Test Cycle
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel-section">
+          <div class="section-header"><span>Triggers (4)</span></div>
+          <div class="palette-grid" id="paletteTriggers"></div>
+        </div>
+
+        <div class="panel-section">
+          <div class="section-header"><span>Graph Primitives (6)</span></div>
+          <div class="palette-grid" id="palettePrimitives"></div>
+        </div>
+
+        <div class="panel-section">
+          <div class="section-header"><span>Connectors & AI (12)</span></div>
+          <div class="palette-grid" id="paletteConnectors"></div>
+        </div>
+      </aside>
+
+      <!-- Center Interactive DAG Canvas + Bottom Execution Run Inspector -->
+      <section class="canvas-stage">
+        <div class="canvas-hud">
+          <div class="hud-pill">
+            <span>Unslop Ink/Graphite Canvas</span>
+            <span style="color: var(--ink-600);">|</span>
+            <span id="nodeCountLabel" class="tabular-nums">4 nodes · 3 edges</span>
+          </div>
+          <div class="hud-pill">
+            <button id="btnZoomOut" class="btn" style="padding: 2px 8px;">−</button>
+            <span id="zoomLabel" class="tabular-nums">100%</span>
+            <button id="btnZoomIn" class="btn" style="padding: 2px 8px;">+</button>
+            <button id="btnAutoLayout" class="btn" style="padding: 2px 8px;">Auto-Align</button>
+          </div>
+        </div>
+
+        <div id="canvasViewport" class="canvas-viewport">
+          <div id="canvasTransform" class="canvas-transform-layer">
+            <svg id="edgesSvg" class="edges-svg"></svg>
+            <div id="nodesLayer" class="nodes-layer"></div>
+          </div>
+        </div>
+
+        <!-- Bottom Execution Run Inspector -->
+        <section class="run-inspector">
+          <div class="inspector-header">
+            <div style="display: flex; align-items: center; gap: 12px;">
+              <strong style="font-size: 12px;">Execution Run Inspector</strong>
+              <span id="execIdBadge" class="checksum-pill tabular-nums">exec_ready</span>
+              <span id="execStatusBadge" class="version-pill">IDLE</span>
+            </div>
+            <div class="tabular-nums" style="font-size: 12px; color: var(--ink-400);">
+              Total Duration: <strong id="execDurationLabel" style="color: var(--ink-50);">0ms</strong>
+              · Secret Redaction: <strong style="color: #10b981;">ACTIVE ([REDACTED])</strong>
+            </div>
+          </div>
+          <div class="inspector-body">
+            <div id="inspectorStepsList" class="inspector-steps"></div>
+            <div class="inspector-payload-pane">
+              <div class="section-header">
+                <span>Sanitized Step Input JSON</span>
+                <span class="palette-tag">@localflow/observability</span>
+              </div>
+              <pre id="inspectorInputPre" class="code-pre">{}</pre>
+            </div>
+            <div class="inspector-payload-pane" style="border-right: none;">
+              <div class="section-header">
+                <span>Sanitized Step Output / Diagnostic</span>
+                <span id="stepDurationBadge" class="palette-tag tabular-nums">0ms</span>
+              </div>
+              <pre id="inspectorOutputPre" class="code-pre">{}</pre>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <!-- Right 480px Node Configuration Drawer -->
+      <aside id="configDrawer" class="config-drawer">
+        <div class="drawer-header">
+          <div>
+            <div class="palette-tag" id="drawerNodeType">ai.openai</div>
+            <h2 id="drawerNodeTitle" style="font-size: 16px; font-weight: 700; margin-top: 4px;">
+              Summarize Article
+            </h2>
+          </div>
+          <span class="checksum-pill tabular-nums">480px Drawer</span>
+        </div>
+
+        <div class="field-group">
+          <label class="field-label" for="drawerLabelInput">
+            <span>Node Label</span>
+            <span class="palette-tag" id="drawerNodeId">node_1</span>
+          </label>
+          <input id="drawerLabelInput" class="input-control" type="text" />
+        </div>
+
+        <div class="field-group">
+          <label class="field-label" for="drawerCredentialSelect">
+            <span>Workspace Credential Vault Reference</span>
+            <span class="palette-tag">AES-256-GCM</span>
+          </label>
+          <select id="drawerCredentialSelect" class="select-control"></select>
+        </div>
+
+        <div id="drawerDynamicFields" style="display: flex; flex-direction: column; gap: 12px;"></div>
+
+        <div class="field-group">
+          <div class="field-label">
+            <span>Upstream Expression Autocomplete (Zero-Eval AST)</span>
+          </div>
+          <div id="drawerAutocompleteList" class="autocomplete-list"></div>
+        </div>
+
+        <div id="drawerValidationBox" class="alert-banner ok">
+          All required schema fields satisfied.
+        </div>
+
+        <div style="display: flex; justify-content: space-between; margin-top: auto; padding-top: 12px; border-top: 1px solid var(--ink-800);">
+          <button id="btnDeleteNode" class="btn btn-danger">Delete Node & Cascade Edges</button>
+          <button id="btnSaveNode" class="btn btn-primary">Save Node Config</button>
+        </div>
+      </aside>
+    </main>
+
+    <!-- Modal: Credentials Vault & /setup Wizard -->
+    <div id="modalBackdrop" class="modal-backdrop">
+      <div class="modal-card">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <h3 id="modalTitle" style="font-size: 16px; font-weight: 700;">Workspace Credentials Vault</h3>
+          <button id="btnCloseModal" class="btn">Close ✕</button>
+        </div>
+        <div id="modalContent" style="display: flex; flex-direction: column; gap: 12px;"></div>
+      </div>
+    </div>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

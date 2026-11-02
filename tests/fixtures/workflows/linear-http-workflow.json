@@ -1,0 +1,45 @@
+{
+  "id": "wf_linear_001",
+  "workspaceId": "ws_test_001",
+  "name": "Linear HTTP Ingestion Pipeline",
+  "description": "Trigger -> HTTP GET -> JSON Parse -> DB Store",
+  "nodes": [
+    {
+      "id": "node_trigger_1",
+      "type": "trigger.manual",
+      "data": { "label": "Manual Start", "config": {} },
+      "inputs": [],
+      "outputs": [{ "id": "p_trig_out", "name": "main", "type": "trigger", "direction": "output" }]
+    },
+    {
+      "id": "node_http_1",
+      "type": "core.httpRequest",
+      "data": {
+        "label": "Fetch API Data",
+        "config": {
+          "url": "https://api.example.com/data",
+          "method": "GET"
+        }
+      },
+      "inputs": [{ "id": "p_http_in", "name": "main", "type": "trigger", "direction": "input" }],
+      "outputs": [{ "id": "p_http_out", "name": "main", "type": "json", "direction": "output" }]
+    },
+    {
+      "id": "node_json_1",
+      "type": "core.jsonTransform",
+      "data": {
+        "label": "Transform Payload",
+        "config": {
+          "mode": "extract",
+          "expression": "{{ $nodes.node_http_1.output.data }}"
+        }
+      },
+      "inputs": [{ "id": "p_json_in", "name": "main", "type": "json", "direction": "input" }],
+      "outputs": [{ "id": "p_json_out", "name": "main", "type": "json", "direction": "output" }]
+    }
+  ],
+  "edges": [
+    { "id": "edge_1_2", "source": "node_trigger_1", "sourceHandle": "main", "target": "node_http_1", "targetHandle": "main" },
+    { "id": "edge_2_3", "source": "node_http_1", "sourceHandle": "main", "target": "node_json_1", "targetHandle": "main" }
+  ]
+}

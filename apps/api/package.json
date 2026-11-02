@@ -1,0 +1,37 @@
+{
+  "name": "@localflow/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@localflow/auth": "workspace:*",
+    "@localflow/connector-sdk": "workspace:*",
+    "@localflow/connectors-ai": "workspace:*",
+    "@localflow/connectors-core": "workspace:*",
+    "@localflow/db": "workspace:*",
+    "@localflow/observability": "workspace:*",
+    "@localflow/shared": "workspace:*",
+    "@localflow/workflow-engine": "workspace:*",
+    "@localflow/workflow-schema": "workspace:*",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.4"
+  }
+}

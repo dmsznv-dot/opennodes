@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "composite": true
+  },
+  "references": [
+    { "path": "../shared" },
+    { "path": "../workflow-schema" },
+    { "path": "../db" },
+    { "path": "../observability" },
+    { "path": "../connector-sdk" }
+  ],
+  "include": ["src/**/*"]
+}

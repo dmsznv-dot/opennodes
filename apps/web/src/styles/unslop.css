@@ -1,0 +1,76 @@
+/*
+ * LocalFlow v1 — Unslop Design System Stylesheet
+ * Principles:
+ * - Ink / Graphite dark-first neutral ramp (#090a0b -> #121417 -> #1a1d21)
+ * - Electric Cobalt (#3b82f6) strictly < 2% surface area (primary CTA + active focus ring)
+ * - 4px spacing grid: 4px, 8px, 12px, 16px, 24px, 32px, 48px
+ * - Nested geometric radii: outer=12px, card=8px, control=4px
+ * - Zero purple/neon gradients, zero decorative blurs, tabular numerals for telemetry
+ */
+
+:root {
+  --lf-ink-950: #090a0b;
+  --lf-ink-900: #121417;
+  --lf-ink-850: #1a1d21;
+  --lf-ink-800: #22262c;
+  --lf-ink-700: #333942;
+  --lf-ink-600: #4e5664;
+  --lf-ink-400: #8b94a5;
+  --lf-ink-200: #cbd1dc;
+  --lf-ink-50: #f8f9fa;
+
+  --lf-accent-cobalt: #3b82f6;
+  --lf-accent-cobalt-hover: #2563eb;
+
+  --lf-status-queued: #8b94a5;
+  --lf-status-running: #3b82f6;
+  --lf-status-waiting: #eab308;
+  --lf-status-succeeded: #10b981;
+  --lf-status-failed: #ef4444;
+  --lf-status-cancelled: #6b7280;
+
+  --lf-space-1: 4px;
+  --lf-space-2: 8px;
+  --lf-space-3: 12px;
+  --lf-space-4: 16px;
+  --lf-space-6: 24px;
+  --lf-space-8: 32px;
+  --lf-space-12: 48px;
+
+  --lf-radius-sm: 4px;
+  --lf-radius-md: 8px;
+  --lf-radius-lg: 12px;
+
+  --lf-drawer-width: 480px;
+}
+
+.lf-root {
+  margin: 0;
+  background-color: var(--lf-ink-950);
+  color: var(--lf-ink-50);
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.lf-tabular-nums {
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.lf-config-drawer {
+  width: var(--lf-drawer-width);
+  background-color: var(--lf-ink-850);
+  border-left: 1px solid var(--lf-ink-800);
+  padding: var(--lf-space-6);
+}
+
+.lf-node-card {
+  background-color: var(--lf-ink-900);
+  border: 1px solid var(--lf-ink-800);
+  border-radius: var(--lf-radius-md);
+  padding: var(--lf-space-3);
+}
+
+.lf-node-card--selected {
+  border-color: var(--lf-accent-cobalt);
+}
