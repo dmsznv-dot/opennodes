@@ -39,6 +39,7 @@ import {
   LocalQueueManager,
   assertWorkflowTrigger,
   listConnectionModels,
+  listMcpTools,
   listWorkflowTriggers,
   setWorkflowTriggersEnabled,
   syncWorkflowTriggers,
@@ -1099,7 +1100,7 @@ export class LocalFlowApiServer {
   private async checkConnection(
     type: string,
     secrets: Record<string, unknown>
-  ): Promise<{ ok: boolean; message: string; models?: string[] }> {
+  ): Promise<{ ok: boolean; message: string; models?: string[]; tools?: string[] }> {
     const http = new SafeHttpClient();
     try {
       if (type === 'telegram' || type === 'core.telegramBot') {
@@ -1114,6 +1115,15 @@ export class LocalFlowApiServer {
           ? { ok: true, message: `@${body.result.username}` }
           : { ok: false, message: 'Telegram rejected the bot token.' };
       }
+      if (type === 'mcp') {
+        const tools = await listMcpTools(secrets, http, this.config.ssrfAllowlist);
+        const names = tools.map((t) => t.name);
+        return {
+          ok: true,
+          message: `${names.length} tools${names.length ? `: ${names.slice(0, 8).join(', ')}${names.length > 8 ? ', …' : ''}` : ''}`,
+          tools: names,
+        };
+      }
       if (['openai', 'ai.openai', 'ollama', 'ai.ollama', 'openai-compatible'].includes(type)) {
         const models = await listConnectionModels(type, secrets, {
           httpClient: http,
@@ -1123,9 +1133,13 @@ export class LocalFlowApiServer {
       }
       return { ok: true, message: 'Saved. This kind of connection cannot be checked in advance.' };
     } catch (err) {
-      const raw = err instanceof Error ? err.message : String(err);
-      const token = String(secrets.botToken ?? secrets.apiKey ?? '');
-      return { ok: false, message: token ? raw.split(token).join('***') : raw };
+      // Secrets (and an MCP URL, which may carry a key) never come back in the message.
+      let message = err instanceof Error ? err.message : String(err);
+      for (const key of ['botToken', 'apiKey', 'token', 'url']) {
+        const v = typeof secrets[key] === 'string' ? (secrets[key] as string) : '';
+        if (v.length >= 6) message = message.split(v).join('***');
+      }
+      return { ok: false, message };
     }
   }
 

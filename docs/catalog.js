@@ -68,6 +68,24 @@ export const SERVICES = {
       ['SMTP server host and port.', 'Login and an app password (not your main mailbox password).']
     ),
   },
+  mcp: {
+    name: tr('MCP-серверы', 'MCP servers'),
+    icon: 'MCP',
+    color: '#0f766e',
+    auth: true,
+    needs: tr(
+      [
+        'Адрес MCP-сервера (Streamable HTTP), например из Composio, Zapier MCP или вашего сервера.',
+        'Токен доступа, если сервер его требует.',
+        'Через MCP AI-агент работает с Google Документами, Notion, GitHub и другими сервисами.',
+      ],
+      [
+        'The MCP server address (Streamable HTTP), e.g. from Composio, Zapier MCP or your own server.',
+        'An access token if the server needs one.',
+        'Through MCP the AI agent works with Google Docs, Notion, GitHub and other services.',
+      ]
+    ),
+  },
   rss: { name: tr('RSS-лента', 'RSS feed'), icon: 'RSS', color: '#f97316', auth: false },
   webhook: {
     name: tr('Вебхук / форма', 'Webhook / form'),
@@ -127,6 +145,7 @@ export const SERVICES = {
 export const SERVICE_ORDER = [
   'telegram',
   'ai',
+  'mcp',
   'email',
   'ollama',
   'rss',
@@ -466,6 +485,104 @@ export const ACTIONS = {
         ),
       };
     },
+  },
+  'ai.agent': {
+    type: 'ai.agent',
+    service: 'ai',
+    kind: 'action',
+    external: true,
+    name: tr('AI-агент с инструментами (MCP)', 'AI agent with tools (MCP)'),
+    desc: tr(
+      'Модель сама выполняет задачу через инструменты MCP-серверов: Google Документы, Notion, GitHub…',
+      'The model does the task itself with the tools of MCP servers: Google Docs, Notion, GitHub…'
+    ),
+    keywords:
+      'агент mcp инструменты google документы docs notion github ai ии нейросеть agent tools автоматически',
+    fields: [
+      {
+        key: 'prompt',
+        type: 'textarea',
+        required: true,
+        basic: true,
+        acceptsData: true,
+        label: tr('Задача', 'Task'),
+        placeholder: tr(
+          'Создай Google-документ «Итоги дня» и запиши туда: {Шаг 1: Текст}',
+          'Create a Google Doc “Daily notes” and write into it: {Step 1: Text}'
+        ),
+      },
+      {
+        key: 'servers',
+        type: 'connections',
+        service: 'mcp',
+        required: true,
+        basic: true,
+        label: tr('MCP-серверы, которыми можно пользоваться', 'MCP servers the agent may use'),
+      },
+      {
+        key: 'model',
+        type: 'text',
+        required: false,
+        basic: false,
+        label: tr('Модель', 'Model'),
+        placeholder: 'gpt-4o-mini',
+        help: tr(
+          'Нужна модель с вызовом инструментов. Пусто — модель по умолчанию из подключения AI.',
+          'Needs a model with tool calling. Empty — the default model of the AI connection.'
+        ),
+      },
+      {
+        key: 'allowedTools',
+        type: 'text',
+        required: false,
+        basic: false,
+        label: tr('Разрешённые инструменты', 'Allowed tools'),
+        placeholder: 'create_document, append_text',
+        help: tr(
+          'Через запятую. Пусто — все инструменты выбранных серверов.',
+          'Comma-separated. Empty — every tool of the chosen servers.'
+        ),
+      },
+      {
+        key: 'maxSteps',
+        type: 'number',
+        required: false,
+        basic: false,
+        label: tr('Максимум шагов агента', 'Max agent steps'),
+        default: 6,
+        help: tr(
+          'Сколько раз модель может обратиться к инструментам (до 20).',
+          'How many times the model may use tools (up to 20).'
+        ),
+      },
+      {
+        key: 'system',
+        type: 'textarea',
+        required: false,
+        basic: false,
+        label: tr('Инструкция для агента', 'Agent instructions'),
+      },
+    ],
+    outputs: [
+      {
+        key: 'text',
+        label: tr('Ответ агента', 'Agent answer'),
+        example: tr(
+          'Создал документ «Итоги дня» и записал в него 3 пункта.',
+          'Created the “Daily notes” doc with 3 points.'
+        ),
+      },
+    ],
+    simulate: (c) => ({
+      output: {
+        text: L(tr('Готово (симуляция): задача выполнена.', 'Done (simulation): task completed.')),
+        toolCalls: [],
+      },
+      summary: tr(
+        `Агент выполнил бы задачу «${clip(c.prompt, 60)}» через MCP. В демо инструменты не вызываются.`,
+        `The agent would do “${clip(c.prompt, 60)}” via MCP. Tools are not called in the demo.`
+      ),
+    }),
   },
   'ollama.reply': {
     type: 'ai.ollama',

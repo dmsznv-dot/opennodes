@@ -17,8 +17,9 @@ import {
   parseDelayMs,
 } from '../src/index.js';
 
-async function seedRun(status: string) {
-  const db = await createInMemoryDb();
+/** A run in a fresh database, or another run in `existing` (each PGlite boot is slow). */
+async function seedRun(status: string, existing?: Awaited<ReturnType<typeof createInMemoryDb>>) {
+  const db = existing ?? (await createInMemoryDb());
   const ws = randomUUID();
   const wf = randomUUID();
   const ver = randomUUID();
@@ -67,8 +68,8 @@ describe('@localflow/execution-runtime', () => {
     expect(await claimExecution(db, exec, new Date(Date.now() - 60_000))).toBeDefined();
 
     for (const status of ['SUCCEEDED', 'FAILED', 'CANCELLED']) {
-      const run = await seedRun(status);
-      expect(await claimExecution(run.db, run.exec, new Date())).toBeUndefined();
+      const run = await seedRun(status, db);
+      expect(await claimExecution(db, run.exec, new Date())).toBeUndefined();
     }
     expect(await claimExecution(db, 'not-a-uuid', new Date())).toBeUndefined();
   });

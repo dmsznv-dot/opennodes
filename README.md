@@ -176,6 +176,24 @@ Template **RSS → AI → post to a Telegram channel**: a schedule reads a feed,
   "Disable link previews" now works. *Send a photo or file* sends a picture or document by link.
 - The bot must be an **admin of the channel** allowed to post; use `@channel` or the `-100…` id.
 
+### AI agent with MCP tools
+
+The **AI agent** step gives a chat model the tools of the MCP servers you choose (Google Docs, Notion,
+GitHub, … — any remote MCP server) and lets it work until the task is done.
+
+1. Add an **AI** connection whose model supports tool calling (OpenAI, OpenRouter, the OpenAI-compatible
+   endpoints of Gemini or Claude, Ollama with a tool-capable model…).
+2. Add an **MCP server** connection: its Streamable HTTP address (often ending in `/mcp`) and a token if
+   it needs one. Both are stored encrypted. “Check” lists the server's tools. Hosted MCP gateways such
+   as Composio, Zapier MCP or Pipedream give ready addresses for Google Workspace and many other apps.
+3. In the step: the task (with data from earlier steps), the servers, and optionally allowed tools,
+   max steps (default 6, up to 20) and instructions.
+
+The step's output has `text` (the answer) and `toolCalls` — every call with server, tool, arguments,
+success and a result excerpt — so the run history shows exactly what the agent did. MCP addresses obey
+the SSRF policy (`SSRF_ALLOWLIST` for local servers). Only remote (HTTP) MCP servers are supported;
+local stdio servers need an HTTP bridge.
+
 ### 4. Local models (Hugging Face GGUF, LM Studio, Ollama, llama.cpp)
 
 OpenNodes does not run models itself. It calls a model server you run, over the

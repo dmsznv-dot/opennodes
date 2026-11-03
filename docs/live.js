@@ -186,6 +186,7 @@ const TYPE_TO_SERVICE = {
   ollama: 'ollama',
   smtp: 'email',
   postgres: 'postgres',
+  mcp: 'mcp',
 };
 
 function toConnection(c) {
@@ -212,6 +213,17 @@ export const CONNECT_FIELDS = {
     },
     { key: 'defaultModel', label: 'conn.fieldModel', placeholder: 'gpt-4o-mini' },
   ],
+  mcp: [
+    {
+      key: 'url',
+      label: 'conn.fieldMcpUrl',
+      help: 'conn.fieldMcpUrlHint',
+      placeholder: 'https://example.com/mcp',
+      secret: true,
+      required: true,
+    },
+    { key: 'token', label: 'conn.fieldMcpToken', secret: true },
+  ],
 };
 
 /** Saves a connection on the server and checks it. Returns the store entry. */
@@ -220,6 +232,10 @@ export async function createConnection(serviceId, name, values) {
   let secrets = {};
   if (serviceId === 'telegram') {
     secrets = { botToken: values.botToken.trim() };
+  } else if (serviceId === 'mcp') {
+    secrets = Object.fromEntries(
+      Object.entries({ url: values.url?.trim(), token: values.token?.trim() }).filter(([, v]) => v)
+    );
   } else if (serviceId === 'ai') {
     const baseUrl = values.baseUrl?.trim();
     type = baseUrl ? 'openai-compatible' : 'openai';

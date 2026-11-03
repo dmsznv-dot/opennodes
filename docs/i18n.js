@@ -211,6 +211,7 @@ const DICT = {
     'panel.close': 'Закрыть',
     'panel.account': 'Аккаунт',
     'panel.connectNew': 'Подключить {service}',
+    'panel.noConnectionsYet': 'Пока ничего не подключено.',
     'panel.chooseAccount': '— выберите аккаунт —',
     'panel.basic': 'Основные',
     'panel.advanced': 'Дополнительно',
@@ -484,6 +485,7 @@ const DICT = {
     'panel.close': 'Close',
     'panel.account': 'Account',
     'panel.connectNew': 'Connect {service}',
+    'panel.noConnectionsYet': 'Nothing connected yet.',
     'panel.chooseAccount': '— choose an account —',
     'panel.basic': 'Main settings',
     'panel.advanced': 'Advanced',
@@ -616,6 +618,10 @@ const LIVE = {
     'conn.fieldBaseUrlHint':
       'Пусто — OpenAI. Локальная модель: LM Studio http://localhost:1234/v1, Ollama http://localhost:11434/v1.',
     'conn.fieldModel': 'Модель по умолчанию',
+    'conn.fieldMcpUrl': 'Адрес MCP-сервера',
+    'conn.fieldMcpUrlHint':
+      'Streamable HTTP, обычно оканчивается на /mcp. Если в адресе есть ключ, он тоже хранится зашифрованным.',
+    'conn.fieldMcpToken': 'Токен доступа (если нужен)',
     'conn.fieldName': 'Название подключения',
     'conn.save': 'Подключить',
     'conn.saved': 'Подключение сохранено.',
@@ -706,6 +712,10 @@ const LIVE = {
     'conn.fieldBaseUrlHint':
       'Empty — OpenAI. Local model: LM Studio http://localhost:1234/v1, Ollama http://localhost:11434/v1.',
     'conn.fieldModel': 'Default model',
+    'conn.fieldMcpUrl': 'MCP server address',
+    'conn.fieldMcpUrlHint':
+      'Streamable HTTP, usually ending in /mcp. A key inside the address is stored encrypted too.',
+    'conn.fieldMcpToken': 'Access token (if needed)',
     'conn.fieldName': 'Connection name',
     'conn.save': 'Connect',
     'conn.saved': 'Connection saved.',

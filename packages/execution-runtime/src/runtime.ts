@@ -25,6 +25,7 @@ const TRIGGER_TYPES = ['trigger.manual', 'trigger.webhook', 'trigger.cron', 'tri
 import { buildDelayExecutors } from './delay.js';
 import { buildLogicExecutors } from './logic.js';
 import { settleRssItems, withOnlyNewItems } from './rss.js';
+import { buildAgentExecutor } from './agent.js';
 import {
   DbCancellationToken,
   claimExecution,
@@ -97,6 +98,11 @@ export class ExecutionRuntime {
       resolveCredential: createCredentialResolver(options.db, this.encryption),
     });
     connectors['core.rss'] = withOnlyNewItems(connectors['core.rss']!, options.db);
+    connectors['ai.agent'] = buildAgentExecutor({
+      httpClient: new SafeHttpClient(),
+      ssrfAllowlist: options.ssrfAllowlist,
+      resolveCredential: createCredentialResolver(options.db, this.encryption),
+    });
     const nodeExecutors = {
       ...connectors,
       ...buildLogicExecutors(),

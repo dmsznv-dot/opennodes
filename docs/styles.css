@@ -1767,3 +1767,17 @@ textarea.input {
     animation: none;
   }
 }
+
+/* ── Connections picker (e.g. the MCP servers of an AI agent) ─────────── */
+.conn-picks {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+.conn-pick {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+}

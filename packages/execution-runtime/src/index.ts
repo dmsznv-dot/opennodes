@@ -7,3 +7,5 @@ export * from './cron.js';
 export * from './triggers.js';
 export * from './logic.js';
 export * from './rss.js';
+export * from './mcp-client.js';
+export * from './agent.js';

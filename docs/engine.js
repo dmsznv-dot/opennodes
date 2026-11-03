@@ -107,6 +107,11 @@ export function layout(a, cardH = CARD_H) {
 const EXPRESSION_RE = /^\s*\{\{[\s\S]*\}\}\s*$/;
 
 export function parseFieldInput(field, raw) {
+  if (field.type === 'connections') {
+    const ids = (Array.isArray(raw) ? raw : []).map(String).filter(Boolean);
+    if (ids.length) return { ok: true, value: ids };
+    return field.required ? { ok: false, code: 'required' } : { ok: true, omitted: true };
+  }
   if (field.type === 'boolean') {
     if (typeof raw === 'boolean') return { ok: true, value: raw };
     if (raw === 'true' || raw === 'false') return { ok: true, value: raw === 'true' };
@@ -268,7 +273,12 @@ export function nodeIssues(a, node, connections) {
       issues.push({ key: 'err.connectionMissing', params: { service: L(service.name) } });
   }
   for (const f of action.fields ?? []) {
-    const v = node.config?.[f.key];
+    let v = node.config?.[f.key];
+    // A list of connections counts only the ones that still exist.
+    if (f.type === 'connections') {
+      v = (Array.isArray(v) ? v : []).filter((id) => connections.some((c) => c.id === id));
+      if (!v.length) v = undefined;
+    }
     if (f.required && (v === undefined || v === null || v === ''))
       issues.push({ key: 'err.field', params: { label: L(f.label) }, field: f.key });
   }

@@ -2066,6 +2066,46 @@ function nodePanel(a, node) {
           h('option', { value: o.value, selected: String(val ?? '') === o.value }, L(o.label))
         )
       );
+    } else if (f.type === 'connections') {
+      // Several connections of one service, e.g. the MCP servers an agent may use.
+      const chosen = new Set(Array.isArray(val) ? val : []);
+      const conns = store.connections.filter((c) => c.service === f.service);
+      control = h(
+        'div',
+        { id, class: 'conn-picks', role: 'group' },
+        conns.length
+          ? conns.map((c) =>
+              h(
+                'label',
+                { class: 'conn-pick' },
+                h('input', {
+                  type: 'checkbox',
+                  class: 'switch',
+                  value: c.id,
+                  checked: chosen.has(c.id),
+                  onchange: markDirty,
+                }),
+                c.name
+              )
+            )
+          : h('p', { class: 'small muted' }, t('panel.noConnectionsYet')),
+        h(
+          'button',
+          {
+            type: 'button',
+            class: 'btn btn-ghost btn-small',
+            onclick: () =>
+              openConnect(f.service, (conn) => {
+                node.config = {
+                  ...node.config,
+                  [f.key]: [...(Array.isArray(val) ? val : []), conn.id],
+                };
+                touch(a);
+              }),
+          },
+          `＋ ${t('panel.connectNew', { service: L(SERVICES[f.service].name) })}`
+        )
+      );
     } else if (f.type === 'json') {
       control = h('textarea', {
         id,
@@ -2272,7 +2312,12 @@ function nodePanel(a, node) {
     });
     for (const f of fields) {
       const c = controls.get(f.key);
-      let v = f.type === 'boolean' ? c.checked : c.value;
+      let v =
+        f.type === 'boolean'
+          ? c.checked
+          : f.type === 'connections'
+            ? [...c.querySelectorAll('input:checked')].map((i) => i.value)
+            : c.value;
       if ((f.type === 'text' || f.type === 'textarea') && typeof v === 'string') {
         const conv = fromHuman(a, v);
         if (conv.bad.length) {
