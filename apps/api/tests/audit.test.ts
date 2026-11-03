@@ -59,6 +59,17 @@ function telegram(method: string, body: any): { status: number; json: any } {
     if (problem) return { status: 400, json: { ok: false, error_code: 400, description: problem } };
   }
   tgSent.push({ method, body });
+  // Telegram refuses a photo it cannot fetch as an image.
+  if (method === 'sendPhoto' && /bad-image|\n/.test(String(body.photo))) {
+    return {
+      status: 400,
+      json: {
+        ok: false,
+        error_code: 400,
+        description: 'Bad Request: wrong type of the web page content',
+      },
+    };
+  }
   return { status: 200, json: { ok: true, result: { message_id: 500 + tgSent.length } } };
 }
 
@@ -1738,6 +1749,34 @@ describe('posts — formatting, pictures and one post per item', () => {
     expect(r2.step('ai').outputPayload.items[0]).toMatchObject({
       postTitle: 'Own title',
       postText: 'Только текст.',
+    });
+  });
+
+  it('a list of pictures in the picture field: the first one is used', async () => {
+    reset();
+    await testRun(ctx, [
+      trig(),
+      tgSend('tg', {
+        text: 'Пост',
+        imageUrl: 'https://example.com/1.jpg\nhttps://example.com/2.jpg',
+      }),
+    ]);
+    expect(tgSent.map((x) => [x.method, x.body.photo])).toEqual([
+      ['sendPhoto', 'https://example.com/1.jpg'],
+    ]);
+  });
+
+  it('a picture Telegram refuses still leaves the post: the picture goes above the text', async () => {
+    reset();
+    const r = await testRun(ctx, [
+      trig(),
+      tgSend('tg', { text: '**Пост**', imageUrl: 'https://example.com/bad-image' }),
+    ]);
+    expect(r.execution.status, r.execution.errorMessage ?? '').toBe('SUCCEEDED');
+    expect(tgSent.map((x) => x.method)).toEqual(['sendPhoto', 'sendMessage']);
+    expect(tgSent[1]!.body).toMatchObject({
+      text: '<b>Пост</b>',
+      link_preview_options: { url: 'https://example.com/bad-image', show_above_text: true },
     });
   });
 });

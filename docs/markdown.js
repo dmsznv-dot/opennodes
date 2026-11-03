@@ -58,6 +58,7 @@ export function markdownNodes(md) {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (line.startsWith('```')) {
+      br();
       const code = [];
       for (i++; i < lines.length && !lines[i].startsWith('```'); i++) code.push(lines[i]);
       out.push(h('pre', {}, code.join('\n')));
@@ -70,6 +71,7 @@ export function markdownNodes(md) {
         quote.push(...inline(lines[i].replace(/^>\s?/, '')));
       }
       i--;
+      br();
       out.push(h('blockquote', {}, quote));
       continue;
     }

@@ -241,7 +241,7 @@ const DICT = {
     'cv.cycle': 'Так связать нельзя: получится замкнутый круг.',
     'cv.triggerNoInput': 'К стартовому событию нельзя провести связь — с него всё начинается.',
     'panel.dataPickerHint':
-      'Данные прошлых шагов вставляются кнопкой «+ Данные» у поля или клавишей {. Нажмите на вставленный блок, чтобы изменить формат.',
+      'Теги — данные прошлых шагов — вставляются кнопкой «+ Данные» или клавишей {. Тег можно перетащить мышью; нажмите на него, чтобы сменить формат или сделать ссылкой.',
     'dpick.search': 'Найти данные…',
     'dpick.dateTime': 'Дата и время',
     'dpick.run': 'Запуск',
@@ -262,9 +262,9 @@ const DICT = {
     'dpick.howto1':
       'Тег — это место в тексте, куда при запуске подставятся данные: заголовок новости, ответ ИИ, сегодняшняя дата. В поле он выглядит как плашка с номером шага.',
     'dpick.howto2':
-      '«Готовые посты» вставляют сразу целый блок: заголовок, текст, ссылку, а если у шага есть картинка — заполняют и её. Вставленное можно править как обычный текст.',
+      '«Готовые посты» вставляют заголовок и текст сразу. Картинка и ссылка — отдельные цветные теги: картинка (зелёная) идёт в поле «Картинка», ссылку (голубую) ставьте куда нужно или сделайте её словами — «Читать далее». Вставленное правится как обычный текст.',
     'dpick.howto3':
-      'Если в шаге несколько записей (RSS), есть два пути: одним сообщением — блоки «Все записи…», или отдельным постом на каждую — включите «Для каждой записи» в настройках шага, и появятся «Готовые посты — для каждой записи».',
+      'Если в шаге несколько записей (RSS), есть два пути: все одним сообщением — теги «Все записи…» шага RSS, или отдельный пост на каждую — в настройках шага выберите «Для каждой записи», тогда появится «Текущая запись».',
     'dpick.howto4':
       '**Жирный**, *курсив*, [ссылка](адрес) и > цитата в тексте и в ответе ИИ станут оформлением в Telegram, Discord, Slack и письме.',
     'dpick.withImage': '+ картинка',
@@ -276,6 +276,9 @@ const DICT = {
     'tok.linkMore': 'Подробнее →',
     'tok.linkSource': 'Источник',
     'tok.asLinkOk': 'Сделать ссылкой',
+    'tok.linkEdit': 'Изменить слова ссылки…',
+    'tok.bold': 'Жирным',
+    'tok.linkPlain': 'Показать адрес вместо слов',
     'common.cancel': 'Отмена',
     'common.ok': 'Готово',
     'ed.webhookUrl': 'Адрес вебхука',
@@ -291,6 +294,10 @@ const DICT = {
     'dpick.aiSwitch': 'Заголовок и текст:',
     'dpick.fromAi': 'от ИИ (шаг {n})',
     'dpick.fromItem': 'из записи, без ИИ',
+    'dpick.textSwitch': 'Текст:',
+    'dpick.toPicture': 'Картинка поставлена в поле «Картинка» — в посте она будет над текстом.',
+    'dpick.textFull': 'полностью',
+    'dpick.textShort': 'кратко (до 280 знаков)',
     'dpick.favorite': 'В избранное',
     'dpick.unfavorite': 'Убрать из избранного',
     'fe.processed':
@@ -312,7 +319,7 @@ const DICT = {
       'Заменить можно только на одно значение — блоки вставляются через «+ Данные».',
     'fe.label': 'Как выполнить шаг',
     'fe.once': 'Один раз — одним сообщением',
-    'fe.each': 'Для каждой записи: {list}',
+    'fe.each': 'Для каждой записи {list}',
     'fe.help':
       'Для каждой записи шаг выполнится отдельно — например, отдельный пост на каждую новость. Поля записи — в «+ Данные» → «Текущая запись».',
     'fe.nudge':
@@ -629,7 +636,7 @@ const DICT = {
     'cv.cycle': 'Cannot connect like that: it would make a loop.',
     'cv.triggerNoInput': 'Nothing can lead into the start event — everything begins there.',
     'panel.dataPickerHint':
-      'Insert data from earlier steps with “+ Data” next to a field, or the { key. Click an inserted block to change its format.',
+      'Tags — data from earlier steps — go in with “+ Data” or the { key. Drag a tag with the mouse; click it to change its format or make it a link.',
     'dpick.search': 'Find data…',
     'dpick.dateTime': 'Date and time',
     'dpick.run': 'Run',
@@ -650,9 +657,9 @@ const DICT = {
     'dpick.howto1':
       'A tag is a spot in the text that gets data when the automation runs: a story title, an AI answer, today’s date. In the field it looks like a chip with the step number.',
     'dpick.howto2':
-      '“Ready-made posts” insert a whole block: title, text, link — and fill the picture too when the step has one. What they insert can be edited like any text.',
+      '“Ready-made posts” insert the title and text at once. The picture and the link are separate colored tags: the picture (green) goes into the “Picture” field, put the link (blue) where you want or turn it into words — “Read more”. Edit what is inserted like any text.',
     'dpick.howto3':
-      'When a step gives several items (RSS) you can send them in one message — the “All items…” blocks — or one post each: turn on “For each item” in the step settings and “Ready-made posts — for each item” appear.',
+      'When a step gives several items (RSS) you can send them all in one message — the RSS step’s “All items…” tags — or one post each: choose “For each item” in the step settings and “Current item” appears.',
     'dpick.howto4':
       '**Bold**, *italic*, [link](url) and > quote in the text and in AI answers become formatting in Telegram, Discord, Slack and email.',
     'dpick.withImage': '+ picture',
@@ -664,6 +671,9 @@ const DICT = {
     'tok.linkMore': 'Details →',
     'tok.linkSource': 'Source',
     'tok.asLinkOk': 'Make it a link',
+    'tok.linkEdit': 'Change the link’s words…',
+    'tok.bold': 'Bold',
+    'tok.linkPlain': 'Show the address instead of words',
     'common.cancel': 'Cancel',
     'common.ok': 'Done',
     'ed.webhookUrl': 'Webhook address',
@@ -679,6 +689,11 @@ const DICT = {
     'dpick.aiSwitch': 'Title and text:',
     'dpick.fromAi': 'from the AI (step {n})',
     'dpick.fromItem': 'from the item, no AI',
+    'dpick.textSwitch': 'Text:',
+    'dpick.toPicture':
+      'The picture went into the “Picture” field — the post shows it above the text.',
+    'dpick.textFull': 'full',
+    'dpick.textShort': 'short (up to 280 chars)',
     'dpick.favorite': 'Add to favourites',
     'dpick.unfavorite': 'Remove from favourites',
     'fe.processed':
@@ -700,7 +715,7 @@ const DICT = {
       'A chip can be replaced by one value only — blocks are inserted with “+ Data”.',
     'fe.label': 'How to run the step',
     'fe.once': 'Once — one message',
-    'fe.each': 'For each item: {list}',
+    'fe.each': 'For each item {list}',
     'fe.help':
       'The step runs separately for each item — e.g. one post per story. The item’s fields are in “+ Data” → “Current item”.',
     'fe.nudge':

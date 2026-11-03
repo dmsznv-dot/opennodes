@@ -21,7 +21,15 @@ import {
 import * as live from './live.js';
 import { tokenField, parseExpr, buildExpr } from './tokens.js';
 import { attachCanvas, isTyping } from './canvas.js';
-import { tagCategories, listChoices, listSource, choiceFor, targetInfo, GROUPS } from './tags.js';
+import {
+  tagCategories,
+  listChoices,
+  listSource,
+  choiceFor,
+  targetInfo,
+  valueKind,
+  GROUPS,
+} from './tags.js';
 import { markdownNodes } from './markdown.js';
 import {
   ACTIONS,
@@ -2582,6 +2590,7 @@ function stepFields(a, node, act) {
       key: 'forEach',
       type: 'forEach',
       required: false,
+      noOptionalMark: true, // a choice with a default, not something to fill in
       basic: true,
       label: t('fe.label'),
       help: t('fe.help'),
@@ -2629,7 +2638,8 @@ function nodePanel(a, node) {
         id,
         type: 'checkbox',
         class: 'switch',
-        checked: val === true,
+        // Unset (a switch added after the step was made) means its default, not “off”.
+        checked: (val ?? f.default) === true,
         onchange: markDirty,
       });
     } else if (f.type === 'forEach') {
@@ -2829,7 +2839,9 @@ function nodePanel(a, node) {
       'label',
       { for: id, class: 'field-label' },
       L(f.label),
-      f.required ? null : h('span', { class: 'muted small' }, ` (${t('panel.optional')})`)
+      f.required || f.noOptionalMark
+        ? null
+        : h('span', { class: 'muted small' }, ` (${t('panel.optional')})`)
     );
     const labelRow =
       f.acceptsData && hasUpstream
@@ -3264,7 +3276,15 @@ function tokenSourceNode(a, p) {
 }
 
 /** How a chip looks: icon, step number, name; broken when its step is gone. */
+/** A chip: its look, plus a color for pictures and links so they stand out in the text. */
 function describeToken(a, expr) {
+  const d = describeTokenBase(a, expr);
+  const kind = d.broken ? '' : valueKind(expr);
+  if (!kind) return d;
+  return { ...d, kind, icon: h('span', { class: 'token-sys' }, kind === 'image' ? '🖼' : '🔗') };
+}
+
+function describeTokenBase(a, expr) {
   const p = parseExpr(expr);
   if (!p) {
     return {
@@ -3349,6 +3369,7 @@ function openDataPicker(a, node, field, opts = {}) {
       forEach: ui.panelForEach?.() ?? '',
       seenKeys,
       useAi: ui.pickerUseAi !== false,
+      short: ui.pickerShort === true,
     }).map((c) => ({
       ...c,
       entries: replace
@@ -3382,12 +3403,21 @@ function openDataPicker(a, node, field, opts = {}) {
   let all = [];
   const rebuild = () => {
     const fav = favCat();
-    all = [...(fav.entries.length ? [fav] : []), ...cats.filter((c) => c.entries.length), howto];
+    const fit = cats.filter((c) => c.id === 'fit' && c.entries.length);
+    all = [
+      ...fit,
+      ...(fav.entries.length ? [fav] : []),
+      ...cats.filter((c) => c.id !== 'fit' && c.entries.length),
+      howto,
+    ];
     if (!all.some((c) => c.id === current)) current = all[0]?.id ?? 'howto';
     renderNav();
     renderMain();
   };
-  let current = favs.size ? 'fav' : (cats.find((c) => c.entries.length)?.id ?? 'howto');
+  // Open on what fits this field, else the current item, else favourites, else the first.
+  let current =
+    ['fit', 'item'].find((id) => cats.some((c) => c.id === id && c.entries.length)) ??
+    (favs.size ? 'fav' : (cats.find((c) => c.entries.length)?.id ?? 'howto'));
   let query = '';
 
   const entryTitle = (e) => (e.i18nKey ? t(e.i18nKey) : L(e.title));
@@ -3427,6 +3457,19 @@ function openDataPicker(a, node, field, opts = {}) {
       field.replaceToken(replace, e.expr);
       return;
     }
+    // A picture in a message's text would only be its address: it goes to the picture field.
+    const pictureField = target.imageField && ui.panelControls?.get(target.imageField);
+    if (
+      e.kind === 'data' &&
+      valueKind(e.expr) === 'image' &&
+      pictureField &&
+      fieldKey !== target.imageField
+    ) {
+      pictureField.value = `{{ ${e.expr} }}`;
+      ui.panelChanged?.();
+      toast(t('dpick.toPicture'));
+      return;
+    }
     if (e.kind === 'data') field.insertToken(e.expr);
     else field.insertTemplate(e.template);
     for (const [key, value] of Object.entries(e.extra ?? {})) {
@@ -3461,7 +3504,12 @@ function openDataPicker(a, node, field, opts = {}) {
     const sample = sampleOf(e);
     const text = typeof sample === 'object' && sample !== null ? JSON.stringify(sample) : sample;
     const imageKey = Object.keys(e.extra ?? {})[0];
-    const image = imageKey ? previewTemplate(a, e.extra[imageKey]).trim() : '';
+    // A block that fills the picture, or a value that is a picture: show it.
+    const image = imageKey
+      ? previewTemplate(a, e.extra[imageKey]).trim()
+      : e.kind === 'data' && /\.(image|postImage)$/.test(e.expr ?? '') && typeof text === 'string'
+        ? text.trim()
+        : '';
     const imageLabel = imageKey
       ? (ACTIONS[node.action]?.fields ?? []).find((f) => f.key === imageKey)?.label
       : null;
@@ -3469,7 +3517,12 @@ function openDataPicker(a, node, field, opts = {}) {
       'button',
       {
         type: 'button',
-        class: ['tag-card', `tag-${e.kind}`, e.group === 'emoji' && 'tag-emoji'],
+        class: [
+          'tag-card',
+          `tag-${e.kind}`,
+          e.group === 'emoji' && 'tag-emoji',
+          e.kind === 'data' && valueKind(e.expr) && `tag-kind-${valueKind(e.expr)}`,
+        ],
         title: imageKey ? t('dpick.fillsImage', { field: L(imageLabel) }) : entryTitle(e),
         onclick: () => pick(e),
       },
@@ -3504,16 +3557,33 @@ function openDataPicker(a, node, field, opts = {}) {
     );
   };
 
-  // Whose words the posts take after an AI step: the AI's, or the item's own.
+  // Whose words the posts take after an AI step, and how much of the item's text.
   const aiSwitch = ({ on, step }) =>
-    h(
-      'div',
-      { class: 'seg', role: 'radiogroup', 'aria-label': t('dpick.aiSwitch') },
-      h('span', { class: 'seg-label' }, t('dpick.aiSwitch')),
+    segSwitch(
+      t('dpick.aiSwitch'),
+      on,
       [
         [true, t('dpick.fromAi', { n: step })],
         [false, t('dpick.fromItem')],
-      ].map(([value, label]) =>
+      ],
+      (v) => (ui.pickerUseAi = v)
+    );
+  const shortSwitch = ({ on }) =>
+    segSwitch(
+      t('dpick.textSwitch'),
+      on,
+      [
+        [false, t('dpick.textFull')],
+        [true, t('dpick.textShort')],
+      ],
+      (v) => (ui.pickerShort = v)
+    );
+  const segSwitch = (title, on, options, set) =>
+    h(
+      'div',
+      { class: 'seg', role: 'radiogroup', 'aria-label': title },
+      h('span', { class: 'seg-label' }, title),
+      options.map(([value, label]) =>
         h(
           'button',
           {
@@ -3522,7 +3592,7 @@ function openDataPicker(a, node, field, opts = {}) {
             'aria-checked': String(on === value),
             class: ['seg-btn', on === value && 'active'],
             onclick: () => {
-              ui.pickerUseAi = value;
+              set(value);
               cats = build();
               rebuild();
             },
@@ -3569,12 +3639,17 @@ function openDataPicker(a, node, field, opts = {}) {
   const renderMain = () => {
     clear(main);
     if (current === 'howto' && !query) {
+      // Element.append prints null and arrays as text: hand it nodes only.
       main.append(
-        h('h3', { class: 'tag-main-title' }, t('dpick.howto')),
-        ['dpick.howto1', 'dpick.howto2', 'dpick.howto3', 'dpick.howto4'].map((k) =>
-          h('p', { class: 'tag-howto' }, markdownNodes(t(k)))
-        ),
-        replace ? h('p', { class: 'alert info' }, t('dpick.replaceOnly')) : null
+        ...[
+          h('h3', { class: 'tag-main-title' }, t('dpick.howto')),
+          ['dpick.howto1', 'dpick.howto2', 'dpick.howto3', 'dpick.howto4'].map((k) =>
+            h('p', { class: 'tag-howto' }, markdownNodes(t(k)))
+          ),
+          replace ? h('p', { class: 'alert info' }, t('dpick.replaceOnly')) : null,
+        ]
+          .flat()
+          .filter(Boolean)
       );
       return;
     }
@@ -3586,11 +3661,14 @@ function openDataPicker(a, node, field, opts = {}) {
       if (!entries.length) continue;
       any = true;
       main.append(
-        h('h3', { class: 'tag-main-title' }, catIcon(c), L(c.title)),
-        c.aiToggle && !query ? aiSwitch(c.aiToggle) : null,
-        c.hint && !query
-          ? h('p', { class: ['small tag-main-hint', c.warn ? 'fe-nudge' : 'muted'] }, L(c.hint))
-          : null
+        ...[
+          h('h3', { class: 'tag-main-title' }, catIcon(c), L(c.title)),
+          c.aiToggle && !query ? aiSwitch(c.aiToggle) : null,
+          c.shortToggle && !query ? shortSwitch(c.shortToggle) : null,
+          c.hint && !query
+            ? h('p', { class: ['small tag-main-hint', c.warn ? 'fe-nudge' : 'muted'] }, L(c.hint))
+            : null,
+        ].filter(Boolean)
       );
       const groups = [...new Set(entries.map((e) => e.group))];
       for (const g of groups) {
@@ -3684,13 +3762,13 @@ function askText({ title, label, help, value = '', quick = [] }, onOk) {
 }
 
 /** Asks for the words a link shows: “Read more”, “Source”… */
-function askLinkText(onOk) {
+function askLinkText(onOk, current = '') {
   askText(
     {
-      title: t('tok.asLink'),
+      title: current ? t('tok.linkEdit') : t('tok.asLink'),
       label: t('tok.linkWords'),
       help: t('tok.asLinkHelp'),
-      value: t('tok.linkDefault'),
+      value: current || t('tok.linkDefault'),
       quick: [t('tok.linkDefault'), t('tok.linkMore'), t('tok.linkSource'), '🔗'],
     },
     (v) => {
@@ -3706,7 +3784,30 @@ function openTokenMenu(a, node, chip, field) {
   const expr = chip.dataset.expr;
   const p = parseExpr(expr);
   const items = [];
-  if (p) {
+  const kind = chip.dataset.linkText ? 'link' : valueKind(expr);
+  // Bold: on/off, for text tags (not a picture, not a link with words).
+  if (kind !== 'image' && !chip.dataset.linkText) {
+    const bold = Boolean(chip.dataset.bold);
+    items.push(
+      h(
+        'button',
+        {
+          type: 'button',
+          role: 'menuitemcheckbox',
+          class: 'menu-item',
+          'aria-checked': String(bold),
+          onclick: () => {
+            closePopover();
+            field.replaceWithTemplate(chip, bold ? `{{ ${expr} }}` : `**{{ ${expr} }}**`);
+          },
+        },
+        `${bold ? '☑' : '☐'} ${t('tok.bold')}`
+      ),
+      h('div', { class: 'menu-sep', role: 'separator' })
+    );
+  }
+  // Upper/lower case and length make sense for text, not for a link or a picture.
+  if (p && !kind) {
     items.push(h('div', { class: 'menu-label' }, t('tok.format')));
     for (const fmt of FORMATS) {
       items.push(
@@ -3750,26 +3851,30 @@ function openTokenMenu(a, node, chip, field) {
         class: 'menu-item',
         onclick: () => {
           closePopover();
-          askLinkText((words) => {
-            // Already a link — `[old words](chip)`: only the words change.
-            const before = chip.previousSibling;
-            const after = chip.nextSibling;
-            const wrapped =
-              before?.nodeType === Node.TEXT_NODE &&
-              after?.nodeType === Node.TEXT_NODE &&
-              /\[[^\]\n]*\]\($/.test(before.textContent) &&
-              after.textContent.startsWith(')');
-            if (wrapped) {
-              before.textContent = before.textContent.replace(/\[[^\]\n]*\]\($/, `[${words}](`);
-              field.dispatchEvent(new Event('input'));
-            } else {
-              field.replaceWithTemplate(chip, `[${words}]({{ ${expr} }})`);
-            }
-          });
+          // A link chip keeps its address and gets new words; any other chip becomes one.
+          askLinkText(
+            (words) => field.replaceWithTemplate(chip, `[${words}]({{ ${expr} }})`),
+            chip.dataset.linkText
+          );
         },
       },
-      t('tok.asLink')
+      chip.dataset.linkText ? t('tok.linkEdit') : t('tok.asLink')
     ),
+    chip.dataset.linkText
+      ? h(
+          'button',
+          {
+            type: 'button',
+            role: 'menuitem',
+            class: 'menu-item',
+            onclick: () => {
+              closePopover();
+              field.replaceWithTemplate(chip, `{{ ${expr} }}`);
+            },
+          },
+          t('tok.linkPlain')
+        )
+      : null,
     h(
       'button',
       {

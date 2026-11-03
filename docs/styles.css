@@ -2416,3 +2416,22 @@ textarea.input {
   cursor: grabbing;
   opacity: 0.45;
 }
+
+/* Pictures and links stand out among the chips */
+.token.token-image {
+  border-color: color-mix(in srgb, #16a34a 45%, transparent);
+  background: color-mix(in srgb, #16a34a 14%, transparent);
+}
+.token.token-link {
+  border-color: color-mix(in srgb, #0ea5e9 50%, transparent);
+  background: color-mix(in srgb, #0ea5e9 14%, transparent);
+}
+.tag-card.tag-kind-image {
+  border-left: 3px solid #16a34a;
+}
+.tag-card.tag-kind-link {
+  border-left: 3px solid #0ea5e9;
+}
+.token.token-bold .token-label {
+  font-weight: 700;
+}

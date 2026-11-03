@@ -16,7 +16,6 @@ import { buildExpr } from './tokens.js';
 
 const tr = (ru, en) => ({ ru, en });
 const tok = (p) => `{{ ${buildExpr(p)} }}`;
-const lowerFirst = (s) => s.charAt(0).toLowerCase() + s.slice(1);
 
 /** Fields whose text supports formatting: posts and messages (Markdown → each service's own). */
 const RICH_TEXT = {
@@ -34,20 +33,21 @@ const IMAGE_FIELD = {
   'slack.sendMessage': 'imageUrl',
 };
 
-/** Output keys that are not text for a message (ids, counters, lists). */
-const NOT_TEXT = new Set([
-  'count',
-  'status',
-  'messageId',
-  'rowCount',
-  'length',
-  'chatId',
-  'firedAt',
-  'items',
-  'outputs',
-  'total',
-  'skipped',
-]);
+/** Data that fits a field by its kind: `.image` (not `.images`), a chat, an email… */
+const FITS = {
+  imageUrl: /\.(image|postImage)$/,
+  fileUrl: /\.(image|link|url)$/,
+  chatId: /\.chatId$/,
+  to: /\.email$/,
+};
+
+/** What a value is, for its chip's color: a picture, a link, or plain data. */
+export function valueKind(expr) {
+  const key = String(expr ?? '').match(/\.(\w+)(?:\.\w+\(.*\))?$/)?.[1] ?? '';
+  if (/^(image|images|postImage|photo)$/.test(key)) return 'image';
+  if (/^(link|links|url|fileUrl)$/.test(key)) return 'link';
+  return '';
+}
 
 export function targetInfo(node, fieldKey) {
   const fields = ACTIONS[node.action]?.fields ?? [];
@@ -91,6 +91,7 @@ export function listSource(a, expr, seen = new Set()) {
         { ...RESULT_FIELD, label: resultLabel(a, node) },
       ],
       processedBy: [...(inner.processedBy ?? []), node],
+      rootN: inner.rootN ?? inner.n,
       label: inner.label,
     };
   }
@@ -126,9 +127,10 @@ export function listChoices(a, node) {
       choices.push({
         expr: best,
         root,
+        // “For each item from step 2 (RSS feed) + the result of step 3”.
         label: tr(
-          `Шаг ${nums.get(id)} · ${nodeTitle(u)}${via ? ` — с результатом шага ${steps}` : ''}`,
-          `Step ${nums.get(id)} · ${nodeTitle(u)}${via ? ` — with the result of step ${steps}` : ''}`
+          `из шага ${nums.get(id)} (${L(SERVICES[ACTIONS[u.action]?.service]?.name)})${via ? ` + результат шага ${steps}` : ''}`,
+          `from step ${nums.get(id)} (${L(SERVICES[ACTIONS[u.action]?.service]?.name)})${via ? ` + the result of step ${steps}` : ''}`
         ),
       });
     }
@@ -160,108 +162,25 @@ export function choiceFor(a, node, expr) {
 
 // ── Ready-made posts from the fields of one item ────────────────────────────────
 
-const BODY_NAMES = {
-  ai: tr('текст', 'text'),
-  result: tr('результат', 'result'),
-  summary: tr('кратко', 'summary'),
-  text: tr('текст', 'text'),
-};
-
 /**
- * Layouts of a post. `{T}` title, `{B}` body (text / summary / AI result), `{L}` link,
- * `{D}` date. The body-less ones come once; the others once per body.
+ * Layouts of a post — words only. The picture and the link are separate colored tags the
+ * person puts where they want (the picture goes to the step's picture field), so a
+ * layout never decides them. `{T}` title, `{B}` text, `{D}` date.
  */
 const LAYOUTS = [
-  { id: 'tb', group: 'main', name: tr('Заголовок + {b}', 'Title + {b}'), tpl: '**{T}**\n\n{B}' },
-  {
-    id: 'tbl',
-    group: 'main',
-    name: tr('Заголовок + {b} + ссылка', 'Title + {b} + link'),
-    tpl: '**{T}**\n\n{B}\n\n{L}',
-  },
-  {
-    id: 'tlb',
-    group: 'main',
-    name: tr('Заголовок-ссылка + {b}', 'Linked title + {b}'),
-    tpl: '**[{T}]({L})**\n\n{B}',
-  },
-  {
-    id: 'more',
-    group: 'main',
-    name: tr('Заголовок + {b} + «Читать полностью →»', 'Title + {b} + “Read more →”'),
-    tpl: tr('**{T}**\n\n{B}\n\n[Читать полностью →]({L})', '**{T}**\n\n{B}\n\n[Read more →]({L})'),
-  },
+  { id: 'tb', name: tr('Заголовок + текст', 'Title + text'), tpl: '**{T}**\n\n{B}' },
   {
     id: 'dated',
-    group: 'main',
-    name: tr('Заголовок + дата + {b} + ссылка', 'Title + date + {b} + link'),
-    tpl: '**{T}**\n_{D}_\n\n{B}\n\n{L}',
+    name: tr('Заголовок + дата + текст', 'Title + date + text'),
+    tpl: '**{T}**\n_{D}_\n\n{B}',
     needs: ['date'],
   },
-  {
-    id: 'emoji',
-    group: 'styled',
-    name: tr('📰 Заголовок + {b} + 🔗 ссылка', '📰 Title + {b} + 🔗 link'),
-    tpl: '📰 **{T}**\n\n{B}\n\n🔗 {L}',
-  },
-  {
-    id: 'announce',
-    group: 'styled',
-    name: tr('🔥 Анонс: заголовок + {b} + 👉 Подробнее', '🔥 Teaser: title + {b} + 👉 More'),
-    tpl: tr('🔥 **{T}**\n\n{B}\n\n👉 [Подробнее]({L})', '🔥 **{T}**\n\n{B}\n\n👉 [More]({L})'),
-  },
-  {
-    id: 'quote',
-    group: 'styled',
-    name: tr('Цитата: {b} — заголовок-ссылка', 'Quote: {b} — linked title'),
-    tpl: '> {B}\n\n— [{T}]({L})',
-  },
-  { id: 'body', group: 'short', name: tr('Только {b}', '{b} only'), tpl: '{B}' },
-  {
-    id: 't',
-    group: 'short',
-    name: tr('Только заголовок', 'Title only'),
-    tpl: '**{T}**',
-    bodyless: true,
-  },
-  {
-    id: 'tl',
-    group: 'short',
-    name: tr('Заголовок + ссылка', 'Title + link'),
-    tpl: '**{T}**\n{L}',
-    bodyless: true,
-  },
-  {
-    id: 'dash',
-    group: 'short',
-    name: tr('Заголовок — ссылка (одной строкой)', 'Title — link (one line)'),
-    tpl: '{T} — {L}',
-    bodyless: true,
-  },
-  {
-    id: 'bullet',
-    group: 'short',
-    name: tr('• Заголовок-ссылка (строка списка)', '• Linked title (a list line)'),
-    tpl: '• [{T}]({L})',
-    bodyless: true,
-  },
-  {
-    id: 'td',
-    group: 'short',
-    name: tr('Заголовок + дата', 'Title + date'),
-    tpl: '**{T}**\n_{D}_',
-    bodyless: true,
-    needs: ['date'],
-  },
-  { id: 'l', group: 'short', name: tr('Только ссылка', 'Link only'), tpl: '{L}', bodyless: true },
+  // Bold title alone; without formatting it would be the plain title field itself.
+  { id: 't', name: tr('Заголовок жирным', 'Title in bold'), tpl: '**{T}**', richOnly: true },
 ];
 
 export const GROUPS = {
-  top: tr('Популярные', 'Popular'),
-  main: tr('Заголовок, текст, ссылка', 'Title, text, link'),
-  image: tr('С картинкой', 'With a picture'),
-  styled: tr('Оформленные', 'Styled'),
-  short: tr('Короткие', 'Short'),
+  posts: tr('Готовые посты', 'Ready-made posts'),
   all: tr('Все записи одним сообщением', 'All items in one message'),
   links: tr('Ссылка с вашим текстом', 'A link with your own words'),
   data: tr('Данные', 'Data'),
@@ -270,80 +189,50 @@ export const GROUPS = {
 
 /**
  * Posts made of an item's fields. `field(key)` gives the token of a field (or null when
- * the list has no such field). With a picture field on the step, each layout also comes
- * “+ picture”: the block fills that field with the item's picture.
+ * the list has no such field). After an AI step the posts take its title and text
+ * (`useAi`), else the item's own — its full text, or its summary (`short`).
  */
-export function postPresets({ field, keys, imageField, rich = true, prefix = 'p', useAi = true }) {
+export function postPresets({
+  field,
+  keys,
+  imageField,
+  rich = true,
+  prefix = 'p',
+  useAi = true,
+  short = false,
+}) {
   const has = (k) => keys.includes(k) && field(k);
-  // After an AI step, the same posts take its title and text (“from the AI”) — or, switched
-  // off, the item's own (“from the feed”).
   const ai = useAi && has('postTitle') && has('postText');
-  const bodies = ai ? ['ai'] : ['summary', 'text'].filter(has);
+  const titleKey = ai ? 'postTitle' : 'title';
+  const bodyKey = ai
+    ? 'postText'
+    : short && has('summary')
+      ? 'summary'
+      : has('text')
+        ? 'text'
+        : 'summary';
+  if (!has(titleKey)) return [];
   const out = [];
-  const add = (layout, body) => {
-    if ((layout.needs ?? []).some((k) => !has(k))) return;
-    if (!has('title') && /\{T\}/.test(L(layout.tpl))) return;
-    if (!has('link') && /\{L\}/.test(L(layout.tpl))) return;
-    const titleKey = ai ? 'postTitle' : 'title';
-    const bodyKey = body === 'ai' ? 'postText' : body;
-    const fill = (s) =>
-      s
-        .replace(/\{T\}/g, field(titleKey))
-        .replace(/\{B\}/g, body ? field(bodyKey) : '')
-        .replace(/\{L\}/g, field('link') ?? '')
-        .replace(/\{D\}/g, field('date') ?? '');
-    const template = (rich ? (s) => s : plain)(fill(L(layout.tpl)));
-    const name = (lang) => layout.name[lang].replace('{b}', body ? BODY_NAMES[body][lang] : '');
-    const base = {
-      id: `${prefix}.${layout.id}${body ? `.${body}` : ''}`,
-      kind: 'preset',
-      title: tr(name('ru'), name('en')),
-      template,
-    };
-    out.push({ ...base, group: layout.group });
-    if (imageField && has('image') && layout.id !== 'l') {
-      out.push({
-        ...base,
-        id: `${base.id}.img`,
-        group: 'image',
-        title: tr(`${base.title.ru} + картинка`, `${base.title.en} + picture`),
-        extra: { [imageField]: field('image') },
-      });
-    }
-  };
   for (const layout of LAYOUTS) {
-    if (layout.bodyless) add(layout, null);
-    else for (const body of bodies) add(layout, body);
-  }
-  if (imageField && has('image')) {
+    const tpl = L(layout.tpl);
+    if ((layout.needs ?? []).some((k) => !has(k))) continue;
+    if (layout.richOnly && !rich) continue;
+    if (/\{B\}/.test(tpl) && !has(bodyKey)) continue;
+    const template = (rich ? (x) => x : plain)(
+      tpl
+        .replace(/\{T\}/g, field(titleKey))
+        .replace(/\{B\}/g, field(bodyKey) ?? '')
+        .replace(/\{D\}/g, field('date') ?? '')
+    );
     out.push({
-      id: `${prefix}.photo`,
+      id: `${prefix}.${layout.id}`,
       kind: 'preset',
-      group: 'image',
-      title: tr('Картинка + заголовок подписью', 'Picture + title as the caption'),
-      template: rich
-        ? `**${field(ai ? 'postTitle' : 'title')}**`
-        : field(ai ? 'postTitle' : 'title'),
-      extra: { [imageField]: field('image') },
+      group: 'posts',
+      title: layout.name,
+      template,
     });
   }
-  // The ladder people reach for first: title + text, + link, + picture — at the top.
-  const body = bodies[0];
-  const top = [
-    `tb.${body}`,
-    `tbl.${body}`,
-    `tbl.${body}.img`,
-    `more.${body}.img`,
-    'tb.text',
-    'tbl.text',
-    'tbl.text.img',
-  ]
-    .map((id) => out.find((x) => x.id === `${prefix}.${id}`))
-    .filter((x, i, arr) => x && arr.indexOf(x) === i);
-  for (const x of top) x.group = 'top';
-  const order = ['top', 'main', 'image', 'styled', 'short'];
-  const rank = (x) => (x.group === 'top' ? top.indexOf(x) : 0);
-  return out.sort((x, y) => order.indexOf(x.group) - order.indexOf(y.group) || rank(x) - rank(y));
+  return out;
 }
 
 /** Markdown markers out, for fields that do not format text (prompts, webhooks…). */
@@ -354,38 +243,6 @@ const plain = (s) =>
     .replace(/\*\*([^*]+)\*\*/g, '$1')
     .replace(/(^|\n)_([^_\n]+)_(?=\n|$)/g, '$1$2')
     .replace(/(^|\n)> /g, '$1');
-
-// ── Text values of a step: as is, bold, quoted… ─────────────────────────────────
-
-function textPresets(token, label, { rich, prefix }) {
-  const r = (md, txt) => (rich ? md : txt);
-  return [
-    { id: `${prefix}.bold`, title: tr('Жирным', 'Bold'), template: r(`**${token}**`, token) },
-    {
-      id: `${prefix}.titled`,
-      title: tr(`С заголовком «${label.ru}»`, `With a heading “${label.en}”`),
-      template: tr(
-        r(`**${label.ru}**\n\n${token}`, `${label.ru}:\n${token}`),
-        r(`**${label.en}**\n\n${token}`, `${label.en}:\n${token}`)
-      ),
-    },
-    {
-      id: `${prefix}.quote`,
-      title: tr('Цитатой', 'As a quote'),
-      template: r(`> ${token}`, `«${token}»`),
-    },
-    {
-      id: `${prefix}.dated`,
-      title: tr('С датой сверху', 'With the date on top'),
-      template: `📅 ${tok({ scope: 'now', key: 'dateRu' })}\n\n${token}`,
-    },
-    {
-      id: `${prefix}.code`,
-      title: tr('Моноширинным блоком', 'As a code block'),
-      template: r(`\`\`\`\n${token}\n\`\`\``, token),
-    },
-  ].map((x) => ({ ...x, kind: 'preset', group: 'blocks', title: x.title }));
-}
 
 const firstTokens = (nodeId) => {
   const map = {
@@ -416,36 +273,6 @@ function allItemsPresets(nodeId, { rich, imageField }) {
       ),
     },
     {
-      id: 'all.postsWithLinks',
-      title: tr('Все записи: заголовок + кратко + ссылка', 'All items: title + summary + link'),
-      template: k('postsWithLinks'),
-    },
-    {
-      id: 'all.postsWithLinks.img',
-      title: tr(
-        'Все записи: заголовок + кратко + ссылка + картинка первой',
-        'All items: title + summary + link + first picture'
-      ),
-      template: k('postsWithLinks'),
-      extra: imageField ? { [imageField]: k('image') } : null,
-      needsImage: true,
-    },
-    {
-      id: 'all.postsShort',
-      title: tr('Все записи: заголовок + кратко', 'All items: title + summary'),
-      template: k('postsShort'),
-    },
-    {
-      id: 'all.posts',
-      title: tr('Все записи: заголовок + текст', 'All items: title + text'),
-      template: k('posts'),
-    },
-    {
-      id: 'all.titleLinks',
-      title: tr('Список заголовков-ссылок', 'List of linked titles'),
-      template: k('titleLinks'),
-    },
-    {
       id: 'all.numbered',
       title: tr('Нумерованный список с заголовком', 'Numbered list with a heading'),
       template: tr(
@@ -453,20 +280,6 @@ function allItemsPresets(nodeId, { rich, imageField }) {
         md(`**New in the feed**\n\n${k('numbered')}`)
       ),
     },
-    {
-      id: 'all.count',
-      title: tr('«🆕 Новых записей: 3» + список', '“🆕 New items: 3” + list'),
-      template: tr(
-        `🆕 Новых записей: ${k('count')}\n\n${k('bullets')}`,
-        `🆕 New items: ${k('count')}\n\n${k('bullets')}`
-      ),
-    },
-    {
-      id: 'all.bullets',
-      title: tr('Заголовки с точками •', 'Titles with bullets •'),
-      template: k('bullets'),
-    },
-    { id: 'all.links', title: tr('Только ссылки', 'Links only'), template: k('links') },
     {
       id: 'all.forAi',
       title: tr('Для ИИ: заголовки и тексты со ссылками', 'For AI: titles and texts with links'),
@@ -484,8 +297,6 @@ const LINK_WORDS = [
   tr('Читать полностью →', 'Read the full story →'),
   tr('Подробнее', 'Details'),
   tr('Источник', 'Source'),
-  tr('🔗 Ссылка на статью', '🔗 Link to the article'),
-  tr('👉 Открыть', '👉 Open'),
   tr('ваш текст', 'your text'),
 ];
 
@@ -609,7 +420,11 @@ const EMOJI = [
  * `{ id, kind: 'data'|'preset'|'snippet', group, title, template, extra?, hint? }` —
  * `template` goes into the field, `extra` fills other fields (the picture).
  */
-export function tagCategories(a, node, { fieldKey, forEach, seenKeys = {}, useAi = true } = {}) {
+export function tagCategories(
+  a,
+  node,
+  { fieldKey, forEach, seenKeys = {}, useAi = true, short = false } = {}
+) {
   const target = targetInfo(node, fieldKey);
   const rich = target.rich;
   const nums = stepNumbers(a);
@@ -620,32 +435,61 @@ export function tagCategories(a, node, { fieldKey, forEach, seenKeys = {}, useAi
     .reverse();
   const cats = [];
 
-  // 1. With “for each item”: the item's fields and posts made of them.
+  // 1. With “for each item”: the item's own fields first — like a mapping panel — then
+  // a few ready-made posts made of them.
   const source = forEach ? listSource(a, forEach) : null;
   if (source) {
     const keys = source.fields.map((f) => f.key);
     const field = (k) => (keys.includes(k) ? tok({ scope: 'item', key: k }) : null);
     const hasAi = keys.includes('postTitle');
     const by = (source.processedBy ?? []).map((p) => nums.get(p.id)).join(', ');
+    const FIELD_ORDER = [
+      'postTitle',
+      'postText',
+      'title',
+      'image',
+      'text',
+      'summary',
+      'link',
+      'date',
+    ];
+    const rank = (k) => (FIELD_ORDER.includes(k) ? FIELD_ORDER.indexOf(k) : 99);
+    cats.push({
+      id: 'item',
+      title: tr('Текущая запись', 'Current item'),
+      icon: '◆',
+      hint: tr(
+        `Поля записи, для которой выполняется шаг (из шага ${source.rootN ?? source.n}${by ? `, с результатом шага ${by}` : ''}). Вставляйте по одному и пишите текст между ними.`,
+        `Fields of the item the step runs for (from step ${source.rootN ?? source.n}${by ? `, with the result of step ${by}` : ''}). Insert them one by one and type text in between.`
+      ),
+      entries: [...source.fields]
+        .sort((x, y) => rank(x.key) - rank(y.key))
+        .map((f) => ({
+          id: `item.${f.key}`,
+          kind: 'data',
+          group: 'data',
+          title: f.label,
+          template: tok({ scope: 'item', key: f.key }),
+          expr: buildExpr({ scope: 'item', key: f.key }),
+          sample: f.example,
+        })),
+    });
+    const ai = hasAi && useAi;
     cats.push({
       id: 'posts.item',
-      title: tr('Готовые посты — для каждой записи', 'Ready-made posts — for each item'),
+      title: tr('Готовые посты', 'Ready-made posts'),
       icon: '✦',
-      // With an AI step before: one switch says whose words the posts take.
+      // Whose words the posts take after an AI step, and how much of the item's text.
       aiToggle: hasAi ? { on: useAi, step: by } : null,
-      hint: hasAi
-        ? useAi
-          ? tr(
-              `Заголовок и текст — от ИИ (шаг ${by}), картинка, ссылка и дата — из записи.`,
-              `Title and text from the AI (step ${by}); picture, link and date from the item.`
-            )
-          : tr(
-              'Заголовок и текст — из самой записи, без обработки ИИ.',
-              'Title and text from the item itself, without the AI.'
-            )
+      shortToggle: !ai && keys.includes('summary') ? { on: short } : null,
+      hint: ai
+        ? tr(
+            `Заголовок и текст — от ИИ (шаг ${by}), картинка и ссылка — из записи.`,
+            `Title and text from the AI (step ${by}); picture and link from the item.`
+          )
         : tr(
-            `Шаг выполнится для каждой записи из шага ${source.n}; блок соберёт пост из её полей.`,
-            `The step runs for each item of step ${source.n}; a block builds the post from its fields.`
+            'Целый пост из полей записи. Вставленное можно править как обычный текст.',
+            'A whole post from the item’s fields. Edit what it inserts like any text.'
           ),
       entries: postPresets({
         field,
@@ -654,25 +498,8 @@ export function tagCategories(a, node, { fieldKey, forEach, seenKeys = {}, useAi
         rich,
         prefix: 'item',
         useAi,
+        short,
       }),
-    });
-    cats.push({
-      id: 'item',
-      title: tr('Текущая запись', 'Current item'),
-      icon: '◆',
-      hint: tr(
-        'Поля той записи, для которой сейчас выполняется шаг.',
-        'Fields of the item the step is running for.'
-      ),
-      entries: source.fields.map((f) => ({
-        id: `item.${f.key}`,
-        kind: 'data',
-        group: 'data',
-        title: f.label,
-        template: tok({ scope: 'item', key: f.key }),
-        expr: buildExpr({ scope: 'item', key: f.key }),
-        sample: f.example,
-      })),
     });
   }
 
@@ -686,6 +513,8 @@ export function tagCategories(a, node, { fieldKey, forEach, seenKeys = {}, useAi
     });
   }
   for (const u of upstream) {
+    // Per item, a list step's “first item” link would be the same in every post.
+    if (source && listOut0(ACTIONS[u.action])) continue;
     for (const o of ACTIONS[u.action]?.outputs ?? []) {
       if (!['link', 'url'].includes(o.key)) continue;
       const isTrigger = ACTIONS[u.action]?.kind === 'trigger';
@@ -761,6 +590,7 @@ export function tagCategories(a, node, { fieldKey, forEach, seenKeys = {}, useAi
             imageField: target.imageField,
             rich,
             prefix: `${u.id}.first`,
+            short,
           }).map((x) => ({
             ...x,
             title: tr(`Первая запись: ${x.title.ru}`, `First item: ${x.title.en}`),
@@ -768,18 +598,6 @@ export function tagCategories(a, node, { fieldKey, forEach, seenKeys = {}, useAi
         );
       }
       blocks.push(...allItemsPresets(u.id, { rich, imageField: target.imageField }));
-    }
-    const texts = data.filter((d) => !NOT_TEXT.has(d.ref.key) && !listOut);
-    for (const d of texts.slice(0, 4)) {
-      blocks.push(
-        ...textPresets(d.template, d.title, { rich, prefix: d.id }).map((x) => ({
-          ...x,
-          title: tr(
-            `${d.title.ru}: ${lowerFirst(x.title.ru)}`,
-            `${d.title.en}: ${lowerFirst(x.title.en)}`
-          ),
-        }))
-      );
     }
     if (data.length >= 2 && !listOut) {
       blocks.push({
@@ -900,6 +718,26 @@ export function tagCategories(a, node, { fieldKey, forEach, seenKeys = {}, useAi
         })),
       ],
     });
+  }
+  // What fits this very field first: for the picture, only pictures (one each — the list of
+  // all pictures is not one picture); for the chat, the chat; for “To”, the email.
+  const fits = FITS[fieldKey];
+  if (fits) {
+    const seen = new Set();
+    const entries = cats
+      .flatMap((c) => c.entries)
+      .filter(
+        (e) => e.kind === 'data' && fits.test(e.expr ?? '') && !seen.has(e.expr) && seen.add(e.expr)
+      )
+      .map((e) => ({ ...e, group: 'data' }));
+    if (entries.length) {
+      cats.unshift({
+        id: 'fit',
+        title: tr('Подходит для этого поля', 'Fits this field'),
+        icon: '✓',
+        entries,
+      });
+    }
   }
   // Blocks are written per language; the field gets the one for the interface language.
   return cats

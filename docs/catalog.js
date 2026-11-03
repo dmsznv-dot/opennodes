@@ -39,7 +39,7 @@ export const LIST_FIELDS = {
     { key: 'link', label: tr('Ссылка', 'Link'), example: 'https://example.com/1' },
     {
       key: 'image',
-      label: tr('Картинка (ссылка)', 'Picture (link)'),
+      label: tr('Картинка', 'Picture'),
       example: 'https://example.com/1.jpg',
     },
     { key: 'date', label: tr('Дата публикации', 'Published'), example: '03.11.2026 10:15' },
@@ -1048,7 +1048,7 @@ export const ACTIONS = {
         required: false,
         basic: true,
         acceptsData: true,
-        label: tr('Картинка (ссылка)', 'Picture (link)'),
+        label: tr('Картинка', 'Picture'),
         placeholder: 'https://example.com/cover.jpg',
         help: tr(
           'Пост выйдет одним сообщением: до 1024 символов — фото с подписью, длиннее — картинка над текстом.',
@@ -1368,7 +1368,10 @@ export const ACTIONS = {
       },
       {
         key: 'images',
-        label: tr('Картинки всех записей (ссылки)', 'Pictures of all items (links)'),
+        label: tr(
+          'Все картинки списком (не для поля «Картинка»)',
+          'All pictures as a list (not for “Picture”)'
+        ),
         example: 'https://example.com/1.jpg\nhttps://example.com/2.jpg',
       },
       {
@@ -1393,7 +1396,7 @@ export const ACTIONS = {
       },
       {
         key: 'image',
-        label: tr('Первая запись: картинка', 'First item: picture'),
+        label: tr('Картинка первой записи', 'Picture of the first item'),
         example: 'https://example.com/cover.jpg',
       },
       {
@@ -1847,7 +1850,7 @@ export const ACTIONS = {
         required: false,
         basic: false,
         acceptsData: true,
-        label: tr('Картинка (ссылка)', 'Picture (link)'),
+        label: tr('Картинка', 'Picture'),
       },
     ],
     outputs: [{ key: 'status', label: tr('Код ответа', 'Response code'), example: '200' }],
@@ -1886,7 +1889,7 @@ export const ACTIONS = {
         required: false,
         basic: false,
         acceptsData: true,
-        label: tr('Картинка (ссылка)', 'Picture (link)'),
+        label: tr('Картинка', 'Picture'),
       },
       {
         key: 'username',

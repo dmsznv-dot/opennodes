@@ -503,8 +503,10 @@ export const telegramBotAction: ConnectorAction<
     const parse_mode = markdown ? 'HTML' : mode === 'plain' ? undefined : mode;
     // Markdown is converted after cutting, so no part ends inside a tag.
     const render = (part: string) => (markdown ? markdownToTelegramHtml(part) : part);
-    const imageUrl = String(input.imageUrl ?? '').trim();
-    const fileUrl = String(input.fileUrl ?? '').trim();
+    // One address per field: a list of pictures (one per line) or text around it gives the first.
+    const firstUrl = (v: unknown) => String(v ?? '').match(/https?:\/\/\S+/)?.[0] ?? '';
+    const imageUrl = firstUrl(input.imageUrl);
+    const fileUrl = firstUrl(input.fileUrl);
     const call = async (method: string, data: Record<string, unknown>) =>
       (await ctx.httpClient.request({ url: `${base}/${method}`, method: 'POST', data })).data as {
         ok?: boolean;
@@ -552,11 +554,24 @@ export const telegramBotAction: ConnectorAction<
     const fits = text.length <= TELEGRAM_CAPTION_MAX;
     // A picture with a long text: one post, the picture above the text (link preview).
     if (imageUrl && !fits) return sendText(text, false, imageUrl);
-    const media = await call(method, {
-      chat_id: input.chatId,
-      [field]: url,
-      ...(fits && text && { caption: render(text), parse_mode }),
-    });
+    let media: { ok?: boolean };
+    try {
+      media = await call(method, {
+        chat_id: input.chatId,
+        [field]: url,
+        ...(fits && text && { caption: render(text), parse_mode }),
+      });
+    } catch (err) {
+      // Telegram could not take the picture (a page, not an image; too big; unreachable):
+      // the post still goes out, with the picture shown above the text as a link preview.
+      if (!imageUrl || !text.trim()) throw err;
+      const retry = await sendText(text, false, imageUrl);
+      return { ...retry, pictureAsPreview: true };
+    }
+    if (imageUrl && media.ok === false && text.trim()) {
+      const retry = await sendText(text, false, imageUrl);
+      return retry.ok === false ? media : { ...retry, pictureAsPreview: true };
+    }
     if (fits || media.ok === false) return media;
     const message = await sendText(text, true);
     return message.ok === false ? message : { ...message, media };
@@ -569,8 +584,11 @@ export function splitTelegramText(text: string, max = 4096): string[] {
   let rest = text;
   while (rest.length > max) {
     const head = rest.slice(0, max);
-    const cut = Math.max(head.lastIndexOf('\n\n'), head.lastIndexOf('\n'), head.lastIndexOf(' '));
-    const at = cut > max * 0.5 ? cut : max;
+    // Between paragraphs first, then lines, then words — a title stays with its text.
+    const at =
+      [head.lastIndexOf('\n\n'), head.lastIndexOf('\n'), head.lastIndexOf(' ')].find(
+        (i) => i > max * 0.5
+      ) ?? max;
     parts.push(rest.slice(0, at).trimEnd());
     rest = rest.slice(at).trimStart();
   }

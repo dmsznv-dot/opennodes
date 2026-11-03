@@ -28,35 +28,61 @@ describe('data picker — ready-made blocks', () => {
   const a = fromTemplate('rss_ai_channel');
   const tg = a.nodes.find((n: Node) => n.id === 'tg_1');
 
-  it('a post per item: the title + text, + link, + picture ladder comes first', () => {
+  it('a post per item: plain fields first, then a few posts of words only', () => {
     const cats = tagCategories(a, tg, { fieldKey: 'text', forEach: tg.config.forEach });
-    const posts = cats.find((c: { id: string }) => c.id === 'posts.item');
-    expect(posts.entries.length).toBeGreaterThanOrEqual(20);
-    const top = posts.entries.filter((e: { group: string }) => e.group === 'top');
-    // After an AI step the same posts as ever, with the AI's title and text in them.
-    expect(top.map((e: { title: { ru: string } }) => e.title.ru).slice(0, 3)).toEqual([
-      'Заголовок + текст',
-      'Заголовок + текст + ссылка',
-      'Заголовок + текст + ссылка + картинка',
+    // Like a mapping panel: the item's fields come before any ready-made combination.
+    expect(cats.map((c: { id: string }) => c.id).slice(0, 2)).toEqual(['item', 'posts.item']);
+    const item = cats[0];
+    expect(item.entries.map((e: { expr: string }) => e.expr).slice(0, 4)).toEqual([
+      '$item.postTitle',
+      '$item.postText',
+      '$item.title',
+      '$item.image',
     ]);
-    expect(top[0].template).toBe('**{{ $item.postTitle }}**\n\n{{ $item.postText }}');
+    const posts = cats[1];
+    expect(posts.entries.length).toBeGreaterThanOrEqual(2);
+    expect(posts.entries.length).toBeLessThanOrEqual(4);
+    // The picture and the link are separate colored tags, never inside a post.
+    for (const e of posts.entries) {
+      expect(e.extra, e.id).toBeUndefined();
+      expect(e.template, e.id).not.toMatch(/\.(image|link)\b/);
+    }
+    // No emoji copies of the same post.
+    expect(posts.entries.some((e: { template: string }) => /[📰🔥👉]/u.test(e.template))).toBe(
+      false
+    );
+    expect(posts.entries.map((e: { title: { ru: string } }) => e.title.ru)).toEqual([
+      'Заголовок + текст',
+      'Заголовок + дата + текст',
+      'Заголовок жирным',
+    ]);
+    // After an AI step: its title and text.
+    expect(posts.entries[0].template).toBe('**{{ $item.postTitle }}**\n\n{{ $item.postText }}');
     expect(posts.aiToggle).toMatchObject({ on: true, step: '3' });
-    // Switched to “from the item”: the item's own title and text, same layouts.
-    const plain = tagCategories(a, tg, {
+    // “From the item”: its own title and text, full or short.
+    const own = tagCategories(a, tg, {
       fieldKey: 'text',
       forEach: tg.config.forEach,
       useAi: false,
-    })[0];
-    expect(plain.entries.some((e: { template: string }) => e.template.includes('postText'))).toBe(
-      false
-    );
-    expect(plain.entries[0].template).toMatch(/\$item\.title/);
-    // A block with a picture fills the step's picture field with the item's picture.
-    expect(top[2].extra).toEqual({ imageUrl: '{{ $item.image }}' });
-    const item = cats.find((c: { id: string }) => c.id === 'item');
-    expect(item.entries.map((e: { expr: string }) => e.expr).slice(0, 2)).toEqual([
-      '$item.postTitle',
-      '$item.postText',
+    })[1];
+    expect(own.entries[0].template).toBe('**{{ $item.title }}**\n\n{{ $item.text }}');
+    expect(own.shortToggle).toEqual({ on: false });
+    const short = tagCategories(a, tg, {
+      fieldKey: 'text',
+      forEach: tg.config.forEach,
+      useAi: false,
+      short: true,
+    })[1];
+    expect(short.entries[0].template).toBe('**{{ $item.title }}**\n\n{{ $item.summary }}');
+  });
+
+  it('the picture field opens on pictures — one each, not the list of all of them', () => {
+    const cats = tagCategories(a, tg, { fieldKey: 'imageUrl', forEach: tg.config.forEach });
+    expect(cats[0].id).toBe('fit');
+    expect(cats[0].entries.map((e: { expr: string }) => e.expr)).toEqual(['$item.image']);
+    const none = tagCategories(a, tg, { fieldKey: 'imageUrl', forEach: '' });
+    expect(none[0].entries.map((e: { expr: string }) => e.expr)).toEqual([
+      '$nodes.rss_1.output.image',
     ]);
   });
 
@@ -76,7 +102,7 @@ describe('data picker — ready-made blocks', () => {
     expect(choices.map((c: { expr: string }) => c.expr)).toEqual([
       '{{ $nodes.ai_1.output.items }}',
     ]);
-    expect(choices[0].label.ru).toMatch(/^Шаг 2 · .+ — с результатом шага 3$/);
+    expect(choices[0].label.ru).toMatch(/^из шага 2 \(.+\) \+ результат шага 3$/);
     // The AI step itself repeats for the raw items.
     const ai = a.nodes.find((n: Node) => n.id === 'ai_1');
     expect(listChoices(a, ai).map((c: { expr: string }) => c.expr)).toEqual([
@@ -87,7 +113,7 @@ describe('data picker — ready-made blocks', () => {
   it('without “for each item” an RSS step offers first-item and all-items blocks', () => {
     const cats = tagCategories(a, tg, { fieldKey: 'text', forEach: '' });
     const rss = cats.find((c: { id: string }) => c.id === 'step.rss_1');
-    expect(rss.entries.length).toBeGreaterThanOrEqual(40);
+    expect(rss.entries.length).toBeGreaterThanOrEqual(20);
     expect(rss.entries.some((e: { id: string }) => e.id === 'all.digest')).toBe(true);
     expect(cats.some((c: { id: string }) => c.id === 'posts.item')).toBe(false);
   });
@@ -184,10 +210,10 @@ describe('data picker — ready-made blocks', () => {
     const cats = tagCategories(a, tg, { fieldKey: 'text', forEach: tg.config.forEach });
     const links = cats.find((c: { id: string }) => c.id === 'links');
     const templates = links.entries.map((e: { template: string }) => e.template);
-    expect(templates.length).toBeGreaterThanOrEqual(7);
+    expect(templates.length).toBeGreaterThanOrEqual(5);
     for (const tpl of templates)
       expect(tpl).toMatch(/^\[[^\]]+\]\(\{\{ \$(item\.link|nodes\.rss_1\.output\.link) \}\}\)$/);
-    expect(templates.filter((x: string) => x.includes('$item.link'))).toHaveLength(7);
+    expect(templates.filter((x: string) => x.includes('$item.link'))).toHaveLength(5);
   });
 
   it('favourites are kept by step kind, so they work in every automation', () => {

@@ -129,7 +129,15 @@ describe('@localflow/web — Unslop Design System, React Flow Canvas, Config Dra
         data: { label: 'Webhook', config: {} },
         position: { x: 0, y: 0 },
         inputs: [],
-        outputs: [{ id: 'payload', name: 'Payload', type: 'json' as const, direction: 'output' as const, required: false }],
+        outputs: [
+          {
+            id: 'payload',
+            name: 'Payload',
+            type: 'json' as const,
+            direction: 'output' as const,
+            required: false,
+          },
+        ],
       },
       {
         id: 'openai_1',
@@ -140,12 +148,34 @@ describe('@localflow/web — Unslop Design System, React Flow Canvas, Config Dra
           credentialId: '00000000-0000-0000-0000-000000000001',
         },
         position: { x: 240, y: 0 },
-        inputs: [{ id: 'in', name: 'In', type: 'json' as const, direction: 'input' as const, required: false }],
-        outputs: [{ id: 'text', name: 'Text', type: 'string' as const, direction: 'output' as const, required: false }],
+        inputs: [
+          {
+            id: 'in',
+            name: 'In',
+            type: 'json' as const,
+            direction: 'input' as const,
+            required: false,
+          },
+        ],
+        outputs: [
+          {
+            id: 'text',
+            name: 'Text',
+            type: 'string' as const,
+            direction: 'output' as const,
+            required: false,
+          },
+        ],
       },
     ];
     const edges = [
-      { id: 'e1', source: 'trig_1', sourceHandle: 'payload', target: 'openai_1', targetHandle: 'in' },
+      {
+        id: 'e1',
+        source: 'trig_1',
+        sourceHandle: 'payload',
+        target: 'openai_1',
+        targetHandle: 'in',
+      },
     ];
 
     const vm = NodeConfigDrawerController.createViewModel({

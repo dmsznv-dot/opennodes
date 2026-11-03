@@ -60,6 +60,25 @@ function caretAt(x, y) {
   return r;
 }
 
+/**
+ * Parts of a template as a field shows them: text, `{{ … }}` tokens, links with words —
+ * `[Read more]({{ … }})`, one link chip with those words — and bold tags `**{{ … }}**`.
+ */
+export function splitForField(value) {
+  const parts = [];
+  // `[words]({{ … }})` — a link with words; `**{{ … }}**` — a tag in bold.
+  const re = /\[([^\]\n]+)\]\(\{\{\s*([^{}]+?)\s*\}\}\)|\*\*\{\{\s*([^{}]+?)\s*\}\}\*\*/g;
+  let last = 0;
+  const str = String(value ?? '');
+  for (const m of str.matchAll(re)) {
+    if (m.index > last) parts.push(...splitTemplate(str.slice(last, m.index)));
+    parts.push(m[3] ? { expr: m[3], bold: true } : { expr: m[2], linkText: m[1] });
+    last = m.index + m[0].length;
+  }
+  if (last < str.length) parts.push(...splitTemplate(str.slice(last)));
+  return parts;
+}
+
 /** Parts of a template: text and `{{ … }}` tokens, in order. */
 export function splitTemplate(value) {
   const parts = [];
@@ -93,20 +112,28 @@ export function tokenField(opts) {
   });
   let saved = null;
 
-  const chip = (expr) => {
+  const chip = (expr, linkText, bold) => {
     const d = opts.describe(expr);
+    // A link with words shows the words: “🔗 Read more”; its address is the tag inside.
     const el = h(
       'span',
       {
-        class: ['token', d.broken && 'broken'],
+        class: [
+          'token',
+          d.broken && 'broken',
+          linkText ? 'token-link' : d.kind && `token-${d.kind}`,
+          bold && 'token-bold',
+        ],
         contenteditable: 'false',
         'data-expr': expr,
-        title: d.title,
+        'data-link-text': linkText || null,
+        'data-bold': bold ? '1' : null,
+        title: linkText ? `«${linkText}» → ${d.title}` : d.title,
         tabindex: '-1',
       },
-      d.icon,
-      d.step != null ? h('span', { class: 'token-step' }, String(d.step)) : null,
-      h('span', { class: 'token-label' }, d.label)
+      linkText ? h('span', { class: 'token-sys' }, '🔗') : d.icon,
+      !linkText && d.step != null ? h('span', { class: 'token-step' }, String(d.step)) : null,
+      h('span', { class: 'token-label' }, linkText || d.label)
     );
     el.addEventListener('mousedown', (e) => e.preventDefault());
     // Drag a chip to another place in the text; a plain click opens its menu.
@@ -167,7 +194,9 @@ export function tokenField(opts) {
 
   const render = (value) => {
     field.replaceChildren(
-      ...splitTemplate(value).map((p) => (p.expr ? chip(p.expr) : document.createTextNode(p.text)))
+      ...splitForField(value).map((p) =>
+        p.expr ? chip(p.expr, p.linkText, p.bold) : document.createTextNode(p.text)
+      )
     );
     field.classList.toggle('empty', !field.textContent && !field.querySelector('.token'));
   };
@@ -176,7 +205,11 @@ export function tokenField(opts) {
     let out = '';
     for (const c of node.childNodes) {
       if (c.nodeType === Node.TEXT_NODE) out += c.textContent;
+      else if (c.dataset?.linkText) out += `[${c.dataset.linkText}]({{ ${c.dataset.expr} }})`;
+      else if (c.dataset?.bold) out += `**{{ ${c.dataset.expr} }}**`;
       else if (c.dataset?.expr) out += `{{ ${c.dataset.expr} }}`;
+      else if (c.dataset?.tail)
+        continue; // keeps a trailing line break visible; not text
       else if (c.nodeName === 'BR') out += '\n';
       else {
         // Browsers wrap new lines in <div>; each one starts a line.
@@ -198,9 +231,12 @@ export function tokenField(opts) {
   };
 
   const insertNode = (node) => {
-    field.focus();
     const sel = window.getSelection();
-    let range = saved && field.contains(saved.startContainer) ? saved : null;
+    // Where the caret is now; the remembered spot only when focus is elsewhere (a picker).
+    const live =
+      sel?.rangeCount && field.contains(sel.anchorNode) ? sel.getRangeAt(0).cloneRange() : null;
+    field.focus();
+    let range = live ?? (saved && field.contains(saved.startContainer) ? saved : null);
     if (!range) {
       range = document.createRange();
       range.selectNodeContents(field);
@@ -208,11 +244,21 @@ export function tokenField(opts) {
     }
     range.deleteContents();
     range.insertNode(node);
-    range.setStartAfter(node);
-    range.collapse(true);
+    // A line break at the very end shows (and takes the caret) only with something after
+    // it. The helper is moved before the caret is placed, so the caret does not shift.
+    field.querySelectorAll('br[data-tail]').forEach((b) => b.remove());
+    // Splitting a text node leaves empty ones behind; they would hide that this is the end.
+    for (const c of [...field.childNodes]) {
+      if (c !== node && c.nodeType === Node.TEXT_NODE && c.textContent === '') c.remove();
+    }
+    const last = node.nodeType === Node.TEXT_NODE && !node.nextSibling;
+    if (last && node.textContent.endsWith('\n')) node.after(h('br', { 'data-tail': '1' }));
+    const caret = document.createRange();
+    caret.setStartAfter(node);
+    caret.collapse(true);
     sel.removeAllRanges();
-    sel.addRange(range);
-    saved = range.cloneRange();
+    sel.addRange(caret);
+    saved = caret.cloneRange();
   };
 
   const insertText = (text) => insertNode(document.createTextNode(text));
@@ -242,16 +288,16 @@ export function tokenField(opts) {
     const text = e.clipboardData?.getData('text/plain') ?? '';
     // Pasted templates keep their tokens.
     remember();
-    for (const p of splitTemplate(text))
-      insertNode(p.expr ? chip(p.expr) : document.createTextNode(p.text));
+    for (const p of splitForField(text))
+      insertNode(p.expr ? chip(p.expr, p.linkText, p.bold) : document.createTextNode(p.text));
     changed();
   });
 
   /** A ready-made block: text with tokens, e.g. `**{{ $item.title }}**\n{{ $item.link }}`. */
   field.insertTemplate = (template) => {
     remember();
-    for (const p of splitTemplate(template))
-      insertNode(p.expr ? chip(p.expr) : document.createTextNode(p.text));
+    for (const p of splitForField(template))
+      insertNode(p.expr ? chip(p.expr, p.linkText, p.bold) : document.createTextNode(p.text));
     changed();
   };
   field.insertToken = (expr) => {
@@ -261,13 +307,14 @@ export function tokenField(opts) {
   /** A chip becomes a template, e.g. the link chip → `[Read more]({{ … }})`. */
   field.replaceWithTemplate = (el, template) => {
     const frag = document.createDocumentFragment();
-    for (const p of splitTemplate(template))
-      frag.append(p.expr ? chip(p.expr) : document.createTextNode(p.text));
+    for (const p of splitForField(template))
+      frag.append(p.expr ? chip(p.expr, p.linkText, p.bold) : document.createTextNode(p.text));
     el.replaceWith(frag);
     changed();
   };
   field.replaceToken = (el, expr) => {
-    el.replaceWith(chip(expr));
+    // A link keeps its words, a bold tag stays bold.
+    el.replaceWith(chip(expr, el.dataset.linkText, el.dataset.bold));
     changed();
   };
   field.removeToken = (el) => {
