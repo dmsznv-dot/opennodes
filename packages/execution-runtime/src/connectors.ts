@@ -111,6 +111,16 @@ function describeHttpError(data: unknown): string {
  * status is its output, turns 4xx/5xx into a step failure. The error never echoes
  * the request URL, which for Telegram contains the bot token.
  */
+/**
+ * How long a step waits for its service. The HTTP client's 10 s default suits APIs, but a
+ * language model often needs longer to write an answer, and a local one longer still.
+ */
+const STEP_TIMEOUT_MS: Record<string, number> = {
+  'ai.openai': 120_000,
+  'ai.ollama': 300_000,
+  'core.rss': 30_000,
+};
+
 function stepHttpClient(
   base: SafeHttpClient,
   connector: ConnectorDefinition,
@@ -119,12 +129,22 @@ function stepHttpClient(
   return {
     request: async <T>(options: HttpRequestOptions): Promise<HttpResponse<T>> => {
       let res: HttpResponse<T>;
+      const timeoutMs = options.timeoutMs ?? STEP_TIMEOUT_MS[connector.id];
       try {
         res = await base.request<T>({
           ...options,
+          ...(timeoutMs && { timeoutMs }),
           allowlist: [...(options.allowlist ?? []), ...(allowlist ?? [])],
         });
       } catch (err) {
+        if (err instanceof Error && /timed out/i.test(err.message)) {
+          const seconds = Math.round((timeoutMs ?? 10_000) / 1000);
+          throw new ActionExecutionError(
+            `${connector.name}: no answer within ${seconds} s. The service or model is busy or slow — try again, or pick a faster model.`,
+            Object.keys(connector.actions)[0] ?? connector.id,
+            connector.id
+          );
+        }
         if (err instanceof SsrfBlockedError) {
           let target = 'this host';
           try {
