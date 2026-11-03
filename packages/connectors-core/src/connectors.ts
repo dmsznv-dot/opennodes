@@ -236,6 +236,7 @@ export const httpRequestAction: ConnectorAction<
     headers?: Record<string, string>;
     body?: unknown;
     data?: unknown;
+    timeoutMs?: number | string;
   },
   { status: number; statusText: string; headers: Record<string, string>; data: unknown }
 > = {
@@ -247,6 +248,7 @@ export const httpRequestAction: ConnectorAction<
       method: input.method ?? 'GET',
       headers: input.headers,
       data: input.body ?? input.data,
+      ...(Number(input.timeoutMs) > 0 && { timeoutMs: Number(input.timeoutMs) }),
     });
     return {
       status: resp.status,
@@ -497,6 +499,25 @@ export const telegramBotAction: ConnectorAction<
         ok?: boolean;
       };
 
+    const disablePreview = input.disablePreview === true || input.disablePreview === 'true';
+    /** Text of any length: Telegram takes 4096 characters per message, so longer text goes in parts. */
+    const sendText = async (body: string, noPreview: boolean) => {
+      let first: { ok?: boolean } | undefined;
+      let last: { ok?: boolean } = { ok: true };
+      const parts = splitTelegramText(body);
+      for (const part of parts) {
+        last = await call('sendMessage', {
+          chat_id: input.chatId,
+          text: part,
+          parse_mode,
+          link_preview_options: { is_disabled: noPreview },
+        });
+        if (last.ok === false) return last;
+        first ??= last;
+      }
+      return parts.length > 1 ? { ...first, parts: parts.length } : last;
+    };
+
     if (!imageUrl && !fileUrl) {
       if (!text.trim()) {
         throw new ActionExecutionError(
@@ -505,14 +526,7 @@ export const telegramBotAction: ConnectorAction<
           'core.telegramBot'
         );
       }
-      return call('sendMessage', {
-        chat_id: input.chatId,
-        text,
-        parse_mode,
-        link_preview_options: {
-          is_disabled: input.disablePreview === true || input.disablePreview === 'true',
-        },
-      });
+      return sendText(text, disablePreview);
     }
 
     const [method, field, url] = imageUrl
@@ -525,15 +539,25 @@ export const telegramBotAction: ConnectorAction<
       ...(fits && text && { caption: text, parse_mode }),
     });
     if (fits || media.ok === false) return media;
-    const message = await call('sendMessage', {
-      chat_id: input.chatId,
-      text,
-      parse_mode,
-      link_preview_options: { is_disabled: true },
-    });
+    const message = await sendText(text, true);
     return message.ok === false ? message : { ...message, media };
   },
 };
+
+/** Parts of at most 4096 characters, cut at paragraph, line or word breaks. */
+export function splitTelegramText(text: string, max = 4096): string[] {
+  const parts: string[] = [];
+  let rest = text;
+  while (rest.length > max) {
+    const head = rest.slice(0, max);
+    const cut = Math.max(head.lastIndexOf('\n\n'), head.lastIndexOf('\n'), head.lastIndexOf(' '));
+    const at = cut > max * 0.5 ? cut : max;
+    parts.push(rest.slice(0, at).trimEnd());
+    rest = rest.slice(at).trimStart();
+  }
+  if (rest) parts.push(rest);
+  return parts;
+}
 
 // 10. F35: Controlled Filesystem
 export const filesystemAction: ConnectorAction<

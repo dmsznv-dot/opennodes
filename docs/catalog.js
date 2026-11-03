@@ -131,13 +131,37 @@ export const SERVICES = {
     planned: true,
   },
   notion: { name: tr('Notion', 'Notion'), icon: 'N', color: '#111827', auth: true, planned: true },
-  slack: { name: tr('Slack', 'Slack'), icon: 'SL', color: '#4a154b', auth: true, planned: true },
+  slack: {
+    name: tr('Slack', 'Slack'),
+    icon: 'SL',
+    color: '#4a154b',
+    auth: true,
+    needs: tr(
+      [
+        'В Slack: Apps → Incoming Webhooks → Add New Webhook, выберите канал.',
+        'Скопируйте адрес вебхука (https://hooks.slack.com/…).',
+      ],
+      [
+        'In Slack: Apps → Incoming Webhooks → Add New Webhook, pick a channel.',
+        'Copy the webhook address (https://hooks.slack.com/…).',
+      ]
+    ),
+  },
   discord: {
     name: tr('Discord', 'Discord'),
     icon: 'DC',
     color: '#5865f2',
     auth: true,
-    planned: true,
+    needs: tr(
+      [
+        'В Discord: настройки канала → Интеграции → Вебхуки → Новый вебхук.',
+        'Скопируйте URL вебхука (https://discord.com/api/webhooks/…).',
+      ],
+      [
+        'In Discord: channel settings → Integrations → Webhooks → New Webhook.',
+        'Copy the webhook URL (https://discord.com/api/webhooks/…).',
+      ]
+    ),
   },
 };
 
@@ -485,6 +509,102 @@ export const ACTIONS = {
         ),
       };
     },
+  },
+  'ai.process': {
+    type: 'ai.process',
+    service: 'ai',
+    kind: 'action',
+    name: tr('AI: обработать данные по инструкции', 'AI: process data by instruction'),
+    desc: tr(
+      'Данные из прошлых шагов + что с ними сделать: пересказать, перевести, оформить. Может прочитать статьи по ссылкам.',
+      'Data from earlier steps + what to do with it: summarize, translate, format. Can read the linked articles.'
+    ),
+    keywords:
+      'обработать данные инструкция промпт саммари пересказ перевод перевести оформить статья ссылка prompt summary translate process format article link',
+    fields: [
+      {
+        key: 'input',
+        type: 'textarea',
+        required: true,
+        basic: true,
+        acceptsData: true,
+        label: tr('Данные', 'Data'),
+        placeholder: tr('{Шаг 2: Список: заголовок — ссылка}', '{Step 2: List: title — link}'),
+        help: tr(
+          'Что обрабатывать: вставьте данные прошлых шагов кнопками ниже.',
+          'What to process: insert data from earlier steps with the buttons below.'
+        ),
+      },
+      {
+        key: 'instruction',
+        type: 'textarea',
+        required: true,
+        basic: true,
+        acceptsData: true,
+        label: tr('Что сделать', 'Instruction'),
+        placeholder: tr(
+          'Сделай саммари каждой статьи и переведи на русский: заголовок, под ним 2–3 предложения.',
+          'Summarize each article: the title, then 2–3 sentences under it.'
+        ),
+      },
+      {
+        key: 'readLinks',
+        type: 'boolean',
+        required: false,
+        basic: true,
+        label: tr('Открыть ссылки и прочитать статьи', 'Open the links and read the articles'),
+        help: tr(
+          'Модель сама ссылки не открывает. Сервер скачает страницы по ссылкам из данных и передаст ей текст статей.',
+          'A model cannot open links. The server fetches the pages linked in the data and gives it the article text.'
+        ),
+        default: false,
+      },
+      {
+        key: 'maxLinks',
+        type: 'number',
+        required: false,
+        basic: false,
+        label: tr('Сколько ссылок читать', 'How many links to read'),
+        default: 3,
+      },
+      {
+        key: 'model',
+        type: 'text',
+        required: false,
+        basic: false,
+        label: tr('Модель', 'Model'),
+        placeholder: 'gpt-4o-mini',
+        help: tr(
+          'Пусто — модель по умолчанию из подключения AI.',
+          'Empty — the default model of the AI connection.'
+        ),
+      },
+    ],
+    outputs: [
+      {
+        key: 'text',
+        label: tr('Результат', 'Result'),
+        example: tr(
+          'Алекс Рорисон: фото как объект\nФотограф работает с отпечатками как с материалом…',
+          'Alex Rorison: photos as objects\nThe photographer treats prints as material…'
+        ),
+      },
+    ],
+    simulate: (c) => ({
+      output: {
+        text: L(
+          tr(
+            'Пример результата (симуляция) по инструкции.',
+            'Sample result (simulation) per the instruction.'
+          )
+        ),
+        sources: [],
+      },
+      summary: tr(
+        `AI выполнил бы «${clip(c.instruction, 60)}»${c.readLinks ? ', прочитав статьи по ссылкам' : ''}. В демо модель не вызывается.`,
+        `AI would do “${clip(c.instruction, 60)}”${c.readLinks ? ', reading the linked articles' : ''}. The model is not called in the demo.`
+      ),
+    }),
   },
   'ai.agent': {
     type: 'ai.agent',
@@ -1059,6 +1179,102 @@ export const ACTIONS = {
       ),
     }),
   },
+  'text.format': {
+    type: 'text.format',
+    service: 'logic',
+    kind: 'logic',
+    name: tr('Текст: обработать', 'Text: process'),
+    desc: tr(
+      'Убрать HTML, обрезать до лимита, заменить, вытащить ссылки, сменить регистр.',
+      'Strip HTML, cut to a limit, replace, pull out links, change case.'
+    ),
+    keywords:
+      'текст обработать обрезать сократить лимит html убрать заменить ссылки регистр formatter format text truncate strip replace links case',
+    fields: [
+      {
+        key: 'input',
+        type: 'textarea',
+        required: true,
+        basic: true,
+        acceptsData: true,
+        label: tr('Текст', 'Text'),
+      },
+      {
+        key: 'operation',
+        type: 'select',
+        required: true,
+        basic: true,
+        label: tr('Что сделать', 'Operation'),
+        default: 'stripHtml',
+        options: [
+          { value: 'stripHtml', label: tr('Убрать HTML-разметку', 'Strip HTML') },
+          { value: 'truncate', label: tr('Обрезать до N символов', 'Cut to N characters') },
+          { value: 'replace', label: tr('Заменить текст', 'Replace text') },
+          { value: 'extractLinks', label: tr('Вытащить ссылки', 'Pull out links') },
+          {
+            value: 'extractRegex',
+            label: tr('Найти по шаблону (regex)', 'Find by pattern (regex)'),
+          },
+          { value: 'upper', label: tr('ЗАГЛАВНЫМИ', 'UPPERCASE') },
+          { value: 'lower', label: tr('строчными', 'lowercase') },
+          {
+            value: 'trim',
+            label: tr('Убрать пустые строки и пробелы', 'Remove blank lines and spaces'),
+          },
+          { value: 'firstLine', label: tr('Только первая строка', 'First line only') },
+        ],
+      },
+      {
+        key: 'maxLength',
+        type: 'number',
+        required: false,
+        basic: true,
+        label: tr('N символов (для «Обрезать»)', 'N characters (for “Cut”)'),
+        default: 1000,
+        help: tr(
+          'Telegram: сообщение до 4096, подпись к фото до 1024.',
+          'Telegram: message up to 4096, photo caption up to 1024.'
+        ),
+      },
+      {
+        key: 'find',
+        type: 'text',
+        required: false,
+        basic: false,
+        label: tr('Что заменить', 'Find'),
+      },
+      {
+        key: 'replaceWith',
+        type: 'text',
+        required: false,
+        basic: false,
+        label: tr('На что заменить', 'Replace with'),
+      },
+      {
+        key: 'pattern',
+        type: 'text',
+        required: false,
+        basic: false,
+        label: tr('Шаблон (regex)', 'Pattern (regex)'),
+        placeholder: '(\\d+) ₽',
+      },
+    ],
+    outputs: [
+      {
+        key: 'result',
+        label: tr('Готовый текст', 'Result'),
+        example: tr('Текст без разметки', 'Text without markup'),
+      },
+      { key: 'length', label: tr('Длина', 'Length'), example: '120' },
+    ],
+    simulate: (c) => ({
+      output: {
+        result: L(tr('Обработанный текст (пример)', 'Processed text (example)')),
+        length: 30,
+      },
+      summary: tr('Текст обработан (симуляция).', 'Text processed (simulation).'),
+    }),
+  },
   'text.compose': {
     type: 'text.compose',
     service: 'logic',
@@ -1262,20 +1478,84 @@ export const ACTIONS = {
     keywords: 'notion страница заметка page note database',
   },
   'slack.sendMessage': {
+    type: 'slack.sendMessage',
     service: 'slack',
     kind: 'action',
-    planned: true,
+    external: true,
     name: tr('Отправить сообщение в Slack', 'Send a Slack message'),
-    desc: tr('Сообщение в канал.', 'A message to a channel.'),
+    desc: tr('Сообщение в канал через вебхук.', 'A message to a channel via a webhook.'),
     keywords: 'slack сообщение канал message channel notify',
+    fields: [
+      {
+        key: 'text',
+        type: 'textarea',
+        required: true,
+        basic: true,
+        acceptsData: true,
+        label: tr('Текст сообщения', 'Message text'),
+      },
+      {
+        key: 'imageUrl',
+        type: 'text',
+        required: false,
+        basic: false,
+        acceptsData: true,
+        label: tr('Картинка (ссылка)', 'Picture (link)'),
+      },
+    ],
+    outputs: [{ key: 'status', label: tr('Код ответа', 'Response code'), example: '200' }],
+    simulate: (c) => ({
+      output: { simulated: true, text: c.text },
+      summary: tr(
+        `В Slack ушло бы: «${clip(c.text)}». В демо ничего не отправлено.`,
+        `Would post to Slack: “${clip(c.text)}”. Nothing was sent in the demo.`
+      ),
+    }),
   },
   'discord.sendMessage': {
+    type: 'discord.sendMessage',
     service: 'discord',
     kind: 'action',
-    planned: true,
+    external: true,
     name: tr('Отправить сообщение в Discord', 'Send a Discord message'),
-    desc: tr('Сообщение в канал сервера.', 'A message to a server channel.'),
+    desc: tr(
+      'Сообщение в канал сервера через вебхук.',
+      'A message to a server channel via a webhook.'
+    ),
     keywords: 'discord сообщение канал message channel notify',
+    fields: [
+      {
+        key: 'text',
+        type: 'textarea',
+        required: true,
+        basic: true,
+        acceptsData: true,
+        label: tr('Текст сообщения (до 2000 символов)', 'Message text (up to 2000 characters)'),
+      },
+      {
+        key: 'imageUrl',
+        type: 'text',
+        required: false,
+        basic: false,
+        acceptsData: true,
+        label: tr('Картинка (ссылка)', 'Picture (link)'),
+      },
+      {
+        key: 'username',
+        type: 'text',
+        required: false,
+        basic: false,
+        label: tr('Имя отправителя', 'Sender name'),
+      },
+    ],
+    outputs: [{ key: 'messageId', label: tr('ID сообщения', 'Message ID'), example: '1234567890' }],
+    simulate: (c) => ({
+      output: { simulated: true, text: c.text },
+      summary: tr(
+        `В Discord ушло бы: «${clip(c.text)}». В демо ничего не отправлено.`,
+        `Would post to Discord: “${clip(c.text)}”. Nothing was sent in the demo.`
+      ),
+    }),
   },
 };
 
@@ -1515,12 +1795,15 @@ export const TEMPLATES = [
       },
       {
         id: 'ai_1',
-        action: 'ai.reply',
+        action: 'ai.process',
         config: {
-          prompt: tr(
-            'Напиши пост для Telegram-канала на русском по этим новостям: 2–4 предложения, без хэштегов, в конце ссылки списком.\n\n{{ $nodes.rss_1.output.digest }}',
-            'Write a Telegram channel post about these stories: 2–4 sentences, no hashtags, links listed at the end.\n\n{{ $nodes.rss_1.output.digest }}'
+          input: '{{ $nodes.rss_1.output.digest }}',
+          instruction: tr(
+            'Для каждой статьи: заголовок на русском, под ним 2–3 предложения — о чём статья, по её тексту. В конце каждого пункта ссылка. Без хэштегов и вступлений.',
+            'For each article: its title, then 2–3 sentences on what it says, from its text. The link at the end of each item. No hashtags, no intro.'
           ),
+          readLinks: true,
+          maxLinks: 3,
         },
       },
       {

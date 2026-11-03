@@ -33,6 +33,11 @@ export async function buildResumptionState(
     }
   }
 
+  // The journal's step outputs are redacted for history; resume with the real values.
+  for (const [nodeId, raw] of (await journal.findRawNodeOutputs?.(executionId)) ?? []) {
+    if (completedNodeIds.has(nodeId)) cachedOutputs.set(nodeId, raw);
+  }
+
   const completedNodePorts = new Map<string, string[]>();
   for (const evt of await journal.findEvents(executionId)) {
     const handles = evt.payload?.activeHandles;

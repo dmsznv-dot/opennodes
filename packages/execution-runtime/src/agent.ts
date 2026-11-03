@@ -2,6 +2,7 @@ import { ActionExecutionError } from '@localflow/connector-sdk';
 import type { SafeHttpClient } from '@localflow/shared';
 import type { NodeExecutor } from '@localflow/workflow-engine';
 import type { CredentialResolver } from './connectors.js';
+import { toText } from './text.js';
 import { McpClient, McpError, type McpTool } from './mcp-client.js';
 
 /** Connection types an agent can think with (OpenAI-style chat completions with tools). */
@@ -47,7 +48,7 @@ const fnName = (i: number, tool: string) =>
 export function buildAgentExecutor(options: AgentOptions): NodeExecutor {
   return {
     async execute(node, config, step) {
-      const prompt = String(config.prompt ?? '').trim();
+      const prompt = toText(config.prompt).trim();
       if (!prompt) fail('write the task in “Task”.');
       const credentialId = node.data.credentialId;
       if (!credentialId) fail('no AI connection selected for this step.');

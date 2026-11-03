@@ -1,4 +1,13 @@
-import { pgTable, uuid, varchar, text, integer, timestamp, jsonb, index } from 'drizzle-orm/pg-core';
+import {
+  pgTable,
+  uuid,
+  varchar,
+  text,
+  integer,
+  timestamp,
+  jsonb,
+  index,
+} from 'drizzle-orm/pg-core';
 import { executionStatusEnum, nodeStatusEnum } from './enums.js';
 import { workspaces } from './workspaces.js';
 import { workflows, workflowVersions } from './workflows.js';
@@ -52,6 +61,9 @@ export const nodeExecutions = pgTable(
     retryCount: integer('retry_count').notNull().default(0),
     inputPayload: jsonb('input_payload').$type<unknown>(), // Redacted of secrets
     outputPayload: jsonb('output_payload').$type<unknown>(), // Redacted of secrets
+    // Full output, encrypted, read only to resume a paused run (the redacted copy above
+    // would hand "[REDACTED]" to the steps after a long delay).
+    outputSealed: jsonb('output_sealed').$type<unknown>(),
     errorDetails: jsonb('error_details').$type<Record<string, unknown>>(),
     errorMessage: text('error_message'),
     startedAt: timestamp('started_at', { withTimezone: true }),
@@ -101,7 +113,5 @@ export const executionEvents = pgTable(
     payload: jsonb('payload').$type<Record<string, unknown>>(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [
-    index('idx_execution_events_execution').on(table.executionId, table.createdAt),
-  ]
+  (table) => [index('idx_execution_events_execution').on(table.executionId, table.createdAt)]
 );

@@ -185,8 +185,11 @@ const TYPE_TO_SERVICE = {
   'openai-compatible': 'ai',
   ollama: 'ollama',
   smtp: 'email',
+  email: 'email',
   postgres: 'postgres',
   mcp: 'mcp',
+  discord: 'discord',
+  slack: 'slack',
 };
 
 function toConnection(c) {
@@ -213,6 +216,26 @@ export const CONNECT_FIELDS = {
     },
     { key: 'defaultModel', label: 'conn.fieldModel', placeholder: 'gpt-4o-mini' },
   ],
+  email: [
+    { key: 'host', label: 'conn.fieldSmtpHost', placeholder: 'smtp.yandex.ru', required: true },
+    {
+      key: 'port',
+      label: 'conn.fieldSmtpPort',
+      placeholder: '465',
+      help: 'conn.fieldSmtpPortHint',
+    },
+    { key: 'user', label: 'conn.fieldSmtpUser', placeholder: 'me@yandex.ru', required: true },
+    {
+      key: 'password',
+      label: 'conn.fieldSmtpPassword',
+      secret: true,
+      required: true,
+      help: 'conn.fieldSmtpPasswordHint',
+    },
+    { key: 'from', label: 'conn.fieldSmtpFrom', placeholder: 'Имя <me@yandex.ru>' },
+  ],
+  discord: [{ key: 'webhookUrl', label: 'conn.fieldWebhookUrl', secret: true, required: true }],
+  slack: [{ key: 'webhookUrl', label: 'conn.fieldWebhookUrl', secret: true, required: true }],
   mcp: [
     {
       key: 'url',
@@ -232,6 +255,15 @@ export async function createConnection(serviceId, name, values) {
   let secrets = {};
   if (serviceId === 'telegram') {
     secrets = { botToken: values.botToken.trim() };
+  } else if (serviceId === 'email') {
+    type = 'smtp';
+    secrets = Object.fromEntries(
+      ['host', 'port', 'user', 'password', 'from']
+        .map((k) => [k, values[k]?.trim()])
+        .filter(([, v]) => v)
+    );
+  } else if (serviceId === 'discord' || serviceId === 'slack') {
+    secrets = { webhookUrl: values.webhookUrl.trim() };
   } else if (serviceId === 'mcp') {
     secrets = Object.fromEntries(
       Object.entries({ url: values.url?.trim(), token: values.token?.trim() }).filter(([, v]) => v)

@@ -11,6 +11,8 @@ import {
 } from '@localflow/connector-sdk';
 import { CORE_CONNECTORS } from '@localflow/connectors-core';
 import { AI_CONNECTORS } from '@localflow/connectors-ai';
+import { buildProcessExecutor } from './process.js';
+import { renderForParseMode, textFields, toText } from './text.js';
 import type { NodeExecutor, StepExecutionContext } from '@localflow/workflow-engine';
 
 /** Returns the decrypted secrets of a credential that belongs to `workspaceId`. */
@@ -33,7 +35,6 @@ export interface ConnectorRuntimeOptions {
  * They fail loudly instead of returning fabricated success (BUG-01 / S-2).
  */
 const NOT_IMPLEMENTED: Record<string, string> = {
-  'core.smtp': 'Sending email over SMTP is not implemented yet.',
   'core.postgresSql': 'Running SQL against an external PostgreSQL is not implemented yet.',
 };
 
@@ -241,6 +242,20 @@ function connectorExecutor(
           input.model = credentials.defaultModel;
         }
       }
+      textFields(connector.id, input);
+      if (connector.id === 'core.telegramBot') {
+        // Data inserted into HTML/Markdown text is escaped; the step's own markup stays.
+        const raw = node.data.config?.text ?? node.data.config?.caption;
+        const escaped =
+          typeof raw === 'string'
+            ? renderForParseMode(
+                raw,
+                input.parseMode,
+                step.expressionScope as Record<string, unknown>
+              )
+            : undefined;
+        if (escaped !== undefined) input.text = escaped;
+      }
       if (connector.id === 'core.rss' && input.url === undefined) input.url = input.feedUrl;
       if (connector.id === 'core.telegramBot' && options.telegramApiBase) {
         input.apiBase = options.telegramApiBase;
@@ -352,6 +367,10 @@ export function buildConnectorExecutors(
   );
   executors['ai.classify'] = classifyExecutor(executors['ai.openai']!);
   executors['telegram.sendFile'] = telegramFileExecutor(executors['core.telegramBot']!);
+  executors['ai.process'] = buildProcessExecutor(executors['ai.openai']!, {
+    httpClient: options.httpClient,
+    ssrfAllowlist: options.ssrfAllowlist,
+  });
   return executors;
 }
 
@@ -371,7 +390,7 @@ function telegramFileExecutor(telegram: NodeExecutor): NodeExecutor {
         { ...node, type: 'core.telegramBot' },
         {
           chatId: config.chatId,
-          text: config.caption ?? '',
+          text: toText(config.caption),
           parseMode: config.parseMode,
           ...(config.kind === 'document' ? { fileUrl: url } : { imageUrl: url }),
         },
@@ -407,7 +426,7 @@ function classifyExecutor(chat: NodeExecutor): NodeExecutor {
       const prompt =
         `Classify the text into exactly one of these categories: ${categories.join(', ')}.\n` +
         'Answer with the category name only.\n\n' +
-        `Text:\n${String(config.text ?? '')}`;
+        `Text:\n${toText(config.text)}`;
       const result = await chat.execute(
         { ...node, type: 'ai.openai' },
         { model: config.model, temperature: 0, prompt },
@@ -420,7 +439,10 @@ function classifyExecutor(chat: NodeExecutor): NodeExecutor {
         .trim();
       const category =
         categories.find((c) => c.toLowerCase() === plain) ??
-        categories.find((c) => plain.includes(c.toLowerCase())) ??
+        // The longest category the answer mentions: "not spam" must not read as "spam".
+        [...categories]
+          .sort((x, y) => y.length - x.length)
+          .find((c) => plain.includes(c.toLowerCase())) ??
         answer;
       return { output: { category, answer }, activeOutputs: ['main'] };
     },

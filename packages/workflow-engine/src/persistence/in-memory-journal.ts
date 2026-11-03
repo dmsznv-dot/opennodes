@@ -58,9 +58,7 @@ export class InMemoryExecutionJournal implements ExecutionJournal {
       errorMessage: null,
       errorNodeId: null,
       retryCount: 0,
-      metadata: params.metadata
-        ? (redact(params.metadata) as Record<string, unknown>)
-        : null,
+      metadata: params.metadata ? (redact(params.metadata) as Record<string, unknown>) : null,
       createdAt: now,
       updatedAt: now,
     };
@@ -131,8 +129,7 @@ export class InMemoryExecutionJournal implements ExecutionJournal {
       status: params.status,
       retryCount: params.retryCount ?? 0,
       inputPayload: params.inputPayload !== undefined ? redact(params.inputPayload) : undefined,
-      outputPayload:
-        params.outputPayload !== undefined ? redact(params.outputPayload) : undefined,
+      outputPayload: params.outputPayload !== undefined ? redact(params.outputPayload) : undefined,
       errorDetails: null,
       errorMessage: null,
       startedAt: params.startedAt ?? now,
@@ -179,9 +176,7 @@ export class InMemoryExecutionJournal implements ExecutionJournal {
       ...params,
       id: randomUUID(),
       message: redactString(params.message),
-      metadata: params.metadata
-        ? (redact(params.metadata) as Record<string, unknown>)
-        : undefined,
+      metadata: params.metadata ? (redact(params.metadata) as Record<string, unknown>) : undefined,
       timestamp: new Date(),
     });
   }
@@ -192,9 +187,7 @@ export class InMemoryExecutionJournal implements ExecutionJournal {
       executionId: params.executionId,
       eventType: params.eventType,
       nodeId: params.nodeId ?? null,
-      payload: params.payload
-        ? (redact(params.payload) as Record<string, unknown>)
-        : null,
+      payload: params.payload ? (redact(params.payload) as Record<string, unknown>) : null,
       createdAt: new Date(),
     });
   }

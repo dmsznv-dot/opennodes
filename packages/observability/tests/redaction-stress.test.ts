@@ -65,7 +65,7 @@ describe('Adversarial Secret Redaction Stress Testing', () => {
       expect(r.child.depth).toBe('[MAX_DEPTH_EXCEEDED]');
     });
 
-    it('identifies false-positive circular detection on DAG / diamond graph reuse', () => {
+    it('copies an object reused in a DAG / diamond instead of calling it circular', () => {
       // Reused non-circular node in a tree
       const sharedNode = { sharedId: 'node_shared_123', label: 'Common Node' };
       const dag = {
@@ -75,8 +75,8 @@ describe('Adversarial Secret Redaction Stress Testing', () => {
 
       const result: any = redact(dag);
       expect(result.source.sharedId).toBe('node_shared_123');
-      // If WeakSet is not per-branch, target is marked [CIRCULAR] despite being acyclic
-      expect(result.target).toBe('[CIRCULAR]');
+      // Only the current path counts as a cycle, so the shared node is copied twice.
+      expect(result.target).toEqual({ sharedId: 'node_shared_123', label: 'Common Node' });
     });
   });
 

@@ -175,6 +175,10 @@ Template **RSS → AI → post to a Telegram channel**: a schedule reads a feed,
   text as its caption; a caption over 1024 characters follows as its own message) and
   "Disable link previews" now works. *Send a photo or file* sends a picture or document by link.
 - The bot must be an **admin of the channel** allowed to post; use `@channel` or the `-100…` id.
+- **AI: process data by instruction** takes *data* (e.g. the RSS list) and *what to do with it*. With
+  "Open the links and read the articles" the server fetches the linked pages (SSRF-safe, up to 10),
+  keeps the article text without menus and scripts, and gives it to the model — a model cannot open
+  links itself. `sources` in the output shows which pages were read; failed ones are noted, not fatal.
 
 ### AI agent with MCP tools
 

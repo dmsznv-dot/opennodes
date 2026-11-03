@@ -346,6 +346,9 @@ CREATE TABLE IF NOT EXISTS rss_seen_items (
   PRIMARY KEY (workflow_id, node_id, item_key)
 );
 CREATE INDEX IF NOT EXISTS idx_rss_seen_execution ON rss_seen_items(execution_id);
+
+-- 0004: full step output, encrypted, for resuming paused runs with unredacted data
+ALTER TABLE node_executions ADD COLUMN IF NOT EXISTS output_sealed JSONB;
 `;
 }
 

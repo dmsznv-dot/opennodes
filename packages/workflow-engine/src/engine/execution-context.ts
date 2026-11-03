@@ -59,6 +59,32 @@ export interface ExecutionContextInit {
   initialNodeOutputs?: ReadonlyMap<string, unknown>;
 }
 
+const pad = (n: number) => String(n).padStart(2, '0');
+const WEEKDAYS_RU = [
+  'воскресенье',
+  'понедельник',
+  'вторник',
+  'среда',
+  'четверг',
+  'пятница',
+  'суббота',
+];
+
+/** Date and time pieces for templates, in the server's time zone. */
+export function nowParts(d: Date) {
+  const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return {
+    iso: d.toISOString(),
+    date,
+    time,
+    dateTime: `${date} ${time}`,
+    dateRu: `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`,
+    weekday: WEEKDAYS_RU[d.getDay()]!,
+    unix: Math.floor(d.getTime() / 1000),
+  };
+}
+
 export class ExecutionContext {
   readonly executionId: string;
   readonly workflowId: string;
@@ -143,6 +169,10 @@ export class ExecutionContext {
     return {
       $trigger: this.triggerPayload,
       trigger: this.triggerPayload,
+      // System values the editor offers next to step data: the moment the step runs
+      // (server time zone, TZ) and the run itself.
+      $now: nowParts(new Date()),
+      $run: { id: this.executionId, workflowId: this.workflowId, triggerType: this.triggerType },
       $nodes: nodesRecord,
       steps: nodesRecord,
       nodes: nodesRecord,

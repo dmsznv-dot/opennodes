@@ -1,12 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { eq, and } from 'drizzle-orm';
 import type { DatabaseInstance } from '@localflow/db';
-import {
-  executions,
-  nodeExecutions,
-  executionLogs,
-  executionEvents,
-} from '@localflow/db';
+import { executions, nodeExecutions, executionLogs, executionEvents } from '@localflow/db';
 import { redact, redactString } from '@localflow/observability';
 import type {
   CreateEventParams,
@@ -21,8 +16,50 @@ import type {
   UpdateNodeExecutionParams,
 } from './execution-journal.js';
 
+/** Encrypts full step outputs for resuming, and decrypts them back. */
+export interface OutputSealer {
+  seal(value: unknown): Promise<unknown>;
+  unseal(sealed: unknown): Promise<unknown>;
+}
+
+/** Rows as the rest of the system sees them: the sealed copy never leaves the journal. */
+const visible = (row: any): JournalNodeExecutionRecord => {
+  if (!row) return row;
+  const { outputSealed: _sealed, ...rest } = row;
+  return rest as JournalNodeExecutionRecord;
+};
+
 export class DrizzleExecutionJournal implements ExecutionJournal {
-  constructor(private readonly db: DatabaseInstance) {}
+  constructor(
+    private readonly db: DatabaseInstance,
+    private readonly options: { sealer?: OutputSealer } = {}
+  ) {}
+
+  private async sealed(output: unknown): Promise<Record<string, unknown>> {
+    if (output === undefined || !this.options.sealer) return {};
+    return { outputSealed: await this.options.sealer.seal(output) };
+  }
+
+  /** Full (unredacted) outputs of finished steps, for resuming a paused run. */
+  async findRawNodeOutputs(executionId: string): Promise<Map<string, unknown>> {
+    const out = new Map<string, unknown>();
+    if (!this.options.sealer) return out;
+    const rows = await (this.db as any)
+      .select({ nodeId: nodeExecutions.nodeId, sealed: nodeExecutions.outputSealed })
+      .from(nodeExecutions)
+      .where(
+        and(eq(nodeExecutions.executionId, executionId), eq(nodeExecutions.status, 'SUCCEEDED'))
+      );
+    for (const row of rows) {
+      if (row.sealed == null) continue;
+      try {
+        out.set(row.nodeId, await this.options.sealer.unseal(row.sealed));
+      } catch {
+        // A copy that cannot be opened (e.g. the key changed): the redacted one is used.
+      }
+    }
+    return out;
+  }
 
   async findExecutionById(executionId: string): Promise<JournalExecutionRecord | undefined> {
     const rows = await (this.db as any)
@@ -68,9 +105,10 @@ export class DrizzleExecutionJournal implements ExecutionJournal {
           : null) as Record<string, unknown> | null,
         idempotencyKey: params.idempotencyKey ?? null,
         startedAt: params.startedAt ?? now,
-        metadata: (params.metadata ? redact(params.metadata) : null) as
-          | Record<string, unknown>
-          | null,
+        metadata: (params.metadata ? redact(params.metadata) : null) as Record<
+          string,
+          unknown
+        > | null,
         createdAt: now,
         updatedAt: now,
       })
@@ -109,7 +147,7 @@ export class DrizzleExecutionJournal implements ExecutionJournal {
       .select()
       .from(nodeExecutions)
       .where(eq(nodeExecutions.executionId, executionId));
-    return rows as JournalNodeExecutionRecord[];
+    return rows.map(visible);
   }
 
   async findNodeExecution(
@@ -119,11 +157,9 @@ export class DrizzleExecutionJournal implements ExecutionJournal {
     const rows = await (this.db as any)
       .select()
       .from(nodeExecutions)
-      .where(
-        and(eq(nodeExecutions.executionId, executionId), eq(nodeExecutions.nodeId, nodeId))
-      )
+      .where(and(eq(nodeExecutions.executionId, executionId), eq(nodeExecutions.nodeId, nodeId)))
       .limit(1);
-    return rows[0] as JournalNodeExecutionRecord | undefined;
+    return visible(rows[0]);
   }
 
   async createNodeExecution(
@@ -142,6 +178,7 @@ export class DrizzleExecutionJournal implements ExecutionJournal {
         retryCount: params.retryCount ?? 0,
         inputPayload: params.inputPayload !== undefined ? redact(params.inputPayload) : null,
         outputPayload: params.outputPayload !== undefined ? redact(params.outputPayload) : null,
+        ...(await this.sealed(params.outputPayload)),
         startedAt: params.startedAt ?? now,
         finishedAt: params.finishedAt ?? null,
         durationMs: params.durationMs ?? null,
@@ -149,7 +186,7 @@ export class DrizzleExecutionJournal implements ExecutionJournal {
         updatedAt: now,
       })
       .returning();
-    return row as JournalNodeExecutionRecord;
+    return visible(row);
   }
 
   async updateNodeExecution(
@@ -161,7 +198,10 @@ export class DrizzleExecutionJournal implements ExecutionJournal {
       .set({
         ...(params.status ? { status: params.status } : {}),
         ...(params.outputPayload !== undefined
-          ? { outputPayload: redact(params.outputPayload) }
+          ? {
+              outputPayload: redact(params.outputPayload),
+              ...(await this.sealed(params.outputPayload)),
+            }
           : {}),
         ...(params.errorDetails !== undefined
           ? { errorDetails: redact(params.errorDetails) as Record<string, unknown> }
@@ -176,7 +216,7 @@ export class DrizzleExecutionJournal implements ExecutionJournal {
       })
       .where(eq(nodeExecutions.id, id))
       .returning();
-    return row as JournalNodeExecutionRecord;
+    return visible(row);
   }
 
   async createLog(params: CreateLogParams): Promise<void> {
@@ -187,9 +227,10 @@ export class DrizzleExecutionJournal implements ExecutionJournal {
       nodeId: params.nodeId ?? null,
       level: params.level,
       message: redactString(params.message),
-      metadata: (params.metadata ? redact(params.metadata) : null) as
-        | Record<string, unknown>
-        | null,
+      metadata: (params.metadata ? redact(params.metadata) : null) as Record<
+        string,
+        unknown
+      > | null,
       timestamp: new Date(),
     });
   }
@@ -200,9 +241,7 @@ export class DrizzleExecutionJournal implements ExecutionJournal {
       executionId: params.executionId,
       eventType: params.eventType,
       nodeId: params.nodeId ?? null,
-      payload: (params.payload ? redact(params.payload) : null) as
-        | Record<string, unknown>
-        | null,
+      payload: (params.payload ? redact(params.payload) : null) as Record<string, unknown> | null,
       createdAt: new Date(),
     });
   }

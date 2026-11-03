@@ -26,6 +26,7 @@ import { buildDelayExecutors } from './delay.js';
 import { buildLogicExecutors } from './logic.js';
 import { settleRssItems, withOnlyNewItems } from './rss.js';
 import { buildAgentExecutor } from './agent.js';
+import { buildExtraExecutors } from './extras.js';
 import {
   DbCancellationToken,
   claimExecution,
@@ -85,8 +86,14 @@ export class ExecutionRuntime {
   private readonly logger: RuntimeLogger;
 
   constructor(private readonly options: ExecutionRuntimeOptions) {
-    this.journal = new DrizzleExecutionJournal(options.db);
     this.encryption = new AesGcmEncryptionService(new EnvKeyProvider(options.encryptionKey, 1));
+    const encryption = this.encryption;
+    this.journal = new DrizzleExecutionJournal(options.db, {
+      sealer: {
+        seal: (value) => encryption.encryptJson(value, 'step-output'),
+        unseal: (sealed) => encryption.decryptJson(sealed as never, 'step-output'),
+      },
+    });
     this.heartbeatMs = options.heartbeatMs ?? 5_000;
     this.staleMs = options.staleMs ?? 45_000;
     this.ssrfAllowlist = options.ssrfAllowlist ?? [];
@@ -97,6 +104,14 @@ export class ExecutionRuntime {
       telegramApiBase: options.telegramApiBase,
       resolveCredential: createCredentialResolver(options.db, this.encryption),
     });
+    Object.assign(
+      connectors,
+      buildExtraExecutors({
+        httpClient: new SafeHttpClient(),
+        ssrfAllowlist: options.ssrfAllowlist,
+        resolveCredential: createCredentialResolver(options.db, this.encryption),
+      })
+    );
     connectors['core.rss'] = withOnlyNewItems(connectors['core.rss']!, options.db);
     connectors['ai.agent'] = buildAgentExecutor({
       httpClient: new SafeHttpClient(),

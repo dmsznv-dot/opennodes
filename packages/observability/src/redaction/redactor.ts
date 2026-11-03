@@ -58,9 +58,7 @@ export function redact(value: unknown, options: RedactionOptions = {}): unknown 
       return {
         name: current.name,
         message: redactString(current.message, options.secretRegistry),
-        stack: current.stack
-          ? redactString(current.stack, options.secretRegistry)
-          : undefined,
+        stack: current.stack ? redactString(current.stack, options.secretRegistry) : undefined,
       };
     }
 
@@ -69,8 +67,22 @@ export function redact(value: unknown, options: RedactionOptions = {}): unknown 
       if (visited.has(obj)) {
         return '[CIRCULAR]';
       }
+      // Only objects on the current path make a cycle; the same object reached twice
+      // through different keys (e.g. `data` and `body`) is just shared and is copied.
       visited.add(obj);
+      try {
+        return traverseObject(obj, depth);
+      } finally {
+        visited.delete(obj);
+      }
+    }
 
+    return current;
+  }
+
+  function traverseObject(obj: object, depth: number): unknown {
+    {
+      const current = obj;
       if (Array.isArray(current)) {
         return current.map((item) => traverse(item, depth + 1));
       }
@@ -91,8 +103,6 @@ export function redact(value: unknown, options: RedactionOptions = {}): unknown 
       }
       return out;
     }
-
-    return current;
   }
 
   return traverse(value, 0);

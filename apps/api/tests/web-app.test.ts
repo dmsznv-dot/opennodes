@@ -78,8 +78,9 @@ describe('@localflow/api — endpoints for the web app', () => {
         'core.telegramBot',
       ])
     );
-    expect(res.body.nodeTypes).not.toContain('core.smtp');
-    expect(res.body.notImplemented).toEqual(['core.smtp', 'core.postgresSql']);
+    expect(res.body.nodeTypes).toContain('core.smtp');
+    expect(res.body.nodeTypes).not.toContain('core.postgresSql');
+    expect(res.body.notImplemented).toEqual(['core.postgresSql']);
   });
 
   it('creates with a client id, renames, reads, turns off and on, deletes', async () => {

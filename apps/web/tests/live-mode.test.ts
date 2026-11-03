@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -74,6 +74,20 @@ describe('live mode — editor graph ⇄ engine graph', () => {
       }
     }
     expect(__DICT_FOR_TESTS.ru['run.simulated']).toBeTruthy();
+  });
+});
+
+describe('editor dictionaries', () => {
+  it('never define a text key twice in one language (a later copy silently wins)', () => {
+    const src = readFileSync(join(__dirname, '../../../docs/i18n.js'), 'utf8');
+    const blocks = src.split(/^ {2}(?:ru|en): \{$/m).slice(1);
+    expect(blocks.length).toBe(4); // ru/en of the base dictionary and of live mode
+    for (const block of blocks) {
+      const body = block.split(/^ {2}\},?$/m)[0]!;
+      const keys = [...body.matchAll(/^ {4}'([\w.]+)':/gm)].map((m) => m[1]);
+      const dupes = keys.filter((k, i) => keys.indexOf(k) !== i);
+      expect(dupes).toEqual([]);
+    }
   });
 });
 

@@ -3,6 +3,7 @@
  * in-browser *simulation*. Nothing here performs network requests: the public demo
  * never calls real connectors (see docs/README note and BUG-01 in the UX audit).
  */
+import { parseExpr, splitTemplate } from './tokens.js';
 import { ACTIONS, SERVICES } from './catalog.js';
 import { L, t, getLocale } from './i18n.js';
 
@@ -162,7 +163,9 @@ export function fieldErrorText(code, params = {}) {
 
 // ── Readable data chips: {{ $nodes.ai_1.output.text }} ⇄ {Шаг 2: Ответ AI} ──────
 
-const EXPR_GLOBAL = /\{\{\s*\$(trigger|nodes)\.(?:([\w-]+)\.output\.)?([\w]+)\s*\}\}/g;
+// A data reference, optionally with a format from the chip menu (.toUpperCase(), .slice(0, 200)…).
+const EXPR_GLOBAL =
+  /\{\{\s*\$(trigger|nodes)\.(?:([\w-]+)\.output\.)?([\w]+)(?:\.(?:toUpperCase|toLowerCase|trim)\(\)|\.slice\(0,\s*\d+\))?\s*\}\}/g;
 const HUMAN_GLOBAL = /\{(?:Шаг|Step)\s+(\d+):\s*([^{}]+?)\}/g;
 
 function triggerNode(a) {
@@ -228,14 +231,26 @@ export function danglingRefs(a, node) {
 
 export function resolveValue(value, ctx) {
   if (typeof value === 'string') {
-    const whole = value.match(
-      /^\s*\{\{\s*\$(trigger|nodes)\.(?:([\w-]+)\.output\.)?(\w+)\s*\}\}\s*$/
-    );
-    if (whole) return lookup(ctx, whole[1], whole[2], whole[3]);
-    return value.replace(EXPR_GLOBAL, (m, scope, id, key) => {
-      const v = lookup(ctx, scope, id, key);
-      return v === undefined ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v);
-    });
+    const parts = splitTemplate(value);
+    if (parts.length === 1 && parts[0].expr) {
+      const p = parseExpr(parts[0].expr);
+      if (p && !p.fmt) return lookup(ctx, p.scope, p.nodeId, p.key);
+    }
+    return parts
+      .map((part) => {
+        if (!part.expr) return part.text;
+        const p = parseExpr(part.expr);
+        if (!p) return `{{ ${part.expr} }}`;
+        let v = lookup(ctx, p.scope, p.nodeId, p.key);
+        if (v === undefined) return '';
+        v = typeof v === 'object' ? JSON.stringify(v) : String(v);
+        if (p.fmt === 'upper') return v.toUpperCase();
+        if (p.fmt === 'lower') return v.toLowerCase();
+        if (p.fmt === 'trim') return v.trim();
+        if (p.fmt.startsWith('first:')) return v.slice(0, Number(p.fmt.slice(6)));
+        return v;
+      })
+      .join('');
   }
   if (Array.isArray(value)) return value.map((v) => resolveValue(v, ctx));
   if (value && typeof value === 'object')
@@ -243,13 +258,33 @@ export function resolveValue(value, ctx) {
   return value;
 }
 
+/** $now / $run for previews and the demo: the moment of the test, a sample run. */
+function systemContext() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  const date = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  const time = `${p(d.getHours())}:${p(d.getMinutes())}`;
+  return {
+    now: {
+      iso: d.toISOString(),
+      date,
+      time,
+      dateTime: `${date} ${time}`,
+      dateRu: `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()}`,
+      weekday: new Intl.DateTimeFormat('ru', { weekday: 'long' }).format(d),
+    },
+    run: { id: 'demo-run', triggerType: 'manual' },
+  };
+}
+
 function lookup(ctx, scope, id, key) {
+  if (scope === 'now' || scope === 'run') return ctx[scope]?.[key];
   return scope === 'trigger' ? ctx.trigger?.[key] : ctx.nodes[id]?.[key];
 }
 
 /** Context made of each upstream output's *example* values, for "Example:" previews. */
 export function exampleContext(a) {
-  const ctx = { trigger: {}, nodes: {} };
+  const ctx = { trigger: {}, nodes: {}, ...systemContext() };
   for (const n of a.nodes) {
     const outs = ACTIONS[n.action]?.outputs ?? [];
     const vals = Object.fromEntries(outs.map((o) => [o.key, L(o.example)]));
@@ -350,7 +385,7 @@ export function simulate(a, connections, opts = {}) {
     return run;
   }
 
-  const ctx = { trigger: {}, nodes: {} };
+  const ctx = { trigger: {}, nodes: {}, ...systemContext() };
   const blocked = new Set();
   const order = stepOrder(a);
   const scope = opts.until ? new Set([opts.until, ...ancestorsOf(a, opts.until)]) : null;

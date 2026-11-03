@@ -134,12 +134,12 @@ describe('@localflow/api — honest connector execution (S-2)', () => {
     expect(unknown.execution.status).toBe('FAILED');
     expect(unknown.steps.find((s) => s.nodeId === 'x')!.errorMessage).toMatch(/No executor/);
 
-    const smtp = await run([
+    const pg = await run([
       node('t', 'trigger.manual'),
-      node('mail', 'core.smtp', { to: 'a@b.c', subject: 's', text: 't' }),
+      node('db', 'core.postgresSql', { query: 'select 1' }),
     ]);
-    expect(smtp.execution.status).toBe('FAILED');
-    expect(smtp.steps.find((s) => s.nodeId === 'mail')!.errorMessage).toMatch(/not implemented/);
+    expect(pg.execution.status).toBe('FAILED');
+    expect(pg.steps.find((s) => s.nodeId === 'db')!.errorMessage).toMatch(/not implemented/);
   });
 });
 

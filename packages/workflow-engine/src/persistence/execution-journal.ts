@@ -127,6 +127,8 @@ export interface ExecutionJournal {
   ): Promise<JournalExecutionRecord>;
 
   findNodeExecutions(executionId: string): Promise<JournalNodeExecutionRecord[]>;
+  /** Full outputs of finished steps when the journal keeps them (see OutputSealer). */
+  findRawNodeOutputs?(executionId: string): Promise<Map<string, unknown>>;
   findNodeExecution(
     executionId: string,
     nodeId: string

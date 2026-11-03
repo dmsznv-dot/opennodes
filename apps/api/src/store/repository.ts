@@ -424,7 +424,9 @@ export class ApiRepository {
       .orderBy(asc(nodeExecutions.createdAt));
     return runs.map((r: Db) => ({
       ...r,
-      steps: steps.filter((st: Db) => st.executionId === r.id),
+      steps: steps
+        .filter((st: Db) => st.executionId === r.id)
+        .map(({ outputSealed: _sealed, ...st }: Db) => st),
     }));
   }
 

@@ -9,3 +9,6 @@ export * from './logic.js';
 export * from './rss.js';
 export * from './mcp-client.js';
 export * from './agent.js';
+export * from './process.js';
+export * from './extras.js';
+export * from './text.js';

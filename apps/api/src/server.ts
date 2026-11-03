@@ -53,6 +53,31 @@ import { PgSessionStore } from './store/session-store.js';
 
 export type { StoredWorkflow, WorkflowVersionSnapshot } from './store/repository.js';
 
+/**
+ * What a webhook run sees as $trigger: JSON as is, an HTML form's fields
+ * (application/x-www-form-urlencoded), and anything else as { body: "<text>" }.
+ */
+export function webhookPayload(
+  body: unknown,
+  contentType: string | undefined,
+  raw: string | undefined
+): Record<string, unknown> {
+  const text = raw ?? (typeof body === 'string' ? body : undefined);
+  if (/application\/x-www-form-urlencoded/i.test(contentType ?? '') && text !== undefined) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of new URLSearchParams(text)) {
+      // A repeated field (checkboxes) becomes a list.
+      out[k] = k in out ? [...(Array.isArray(out[k]) ? (out[k] as unknown[]) : [out[k]]), v] : v;
+    }
+    return out;
+  }
+  if (body && typeof body === 'object' && !Array.isArray(body))
+    return body as Record<string, unknown>;
+  if (Array.isArray(body)) return { items: body };
+  if (body === undefined || body === null || body === '') return {};
+  return { body: typeof body === 'string' ? body : JSON.stringify(body) };
+}
+
 export interface InjectRequest {
   method: 'GET' | 'POST' | 'PUT' | 'DELETE';
   url: string;
@@ -422,7 +447,7 @@ export class LocalFlowApiServer {
           rt,
           wf,
           'webhook',
-          (req.body as Record<string, unknown>) ?? {},
+          webhookPayload(req.body, reqHeaders['content-type'], req.rawBody),
           idempotencyKey
         );
         return respond(202, {

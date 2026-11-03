@@ -20,6 +20,9 @@ export function evaluateCondition(left: unknown, operator: string, right: unknow
       return Number.isFinite(a) && Number.isFinite(b) && a >= b;
     }
     case 'notEmpty':
+      // An empty list or object counts as empty too.
+      if (Array.isArray(left)) return left.length > 0;
+      if (left && typeof left === 'object') return Object.keys(left).length > 0;
       return asText(left).trim() !== '';
     default:
       throw new Error(

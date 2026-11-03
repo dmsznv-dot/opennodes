@@ -19,6 +19,7 @@ import {
   setLiveMode,
 } from './i18n.js';
 import * as live from './live.js';
+import { tokenField, parseExpr, buildExpr } from './tokens.js';
 import {
   ACTIONS,
   SERVICES,
@@ -428,7 +429,10 @@ function openPopover(anchor, items) {
     8,
     Math.min(rect.right - pop.offsetWidth, window.innerWidth - pop.offsetWidth - 8)
   );
-  Object.assign(pop.style, { top: `${rect.bottom + 6}px`, left: `${left}px` });
+  // Below the anchor when it fits, otherwise above it (e.g. a field at the bottom of a panel).
+  const below = rect.bottom + 6 + pop.offsetHeight <= window.innerHeight - 8;
+  const top = below ? rect.bottom + 6 : Math.max(8, rect.top - 6 - pop.offsetHeight);
+  Object.assign(pop.style, { top: `${top}px`, left: `${left}px` });
   pop.querySelector('button, input')?.focus();
   setTimeout(() => document.addEventListener('click', onOutside, true));
   function onOutside(e) {
@@ -2126,6 +2130,21 @@ function nodePanel(a, node) {
         placeholder: f.placeholder ?? '',
         oninput: markDirty,
       });
+    } else if (f.acceptsData) {
+      // Data fields show tokens as chips; the value stays a plain template.
+      control = tokenField({
+        id,
+        value: val === undefined ? '' : String(val),
+        multiline: f.type === 'textarea',
+        placeholder: L(f.placeholder) || '',
+        describe: (expr) => describeToken(a, expr),
+        onChange: () => {
+          markDirty();
+          control?._updatePreview?.();
+        },
+        onChipClick: (chip, field) => openTokenMenu(a, node, chip, field),
+        onOpenPicker: (field) => openDataPicker(a, node, field, (expr) => field.insertToken(expr)),
+      });
     } else {
       const shown = toHuman(a, val === undefined ? '' : String(val));
       control =
@@ -2161,12 +2180,12 @@ function nodePanel(a, node) {
     if (f.acceptsData) {
       preview = h('div', { class: 'field-preview small muted' });
       const update = () => {
-        const { value } = fromHuman(a, control.value);
+        const value = control.value;
         preview.textContent = /\{\{/.test(value)
-          ? t('panel.example', { text: String(resolveValue(value, ex)) })
+          ? t('panel.example', { text: clipText(previewTemplate(a, value), 300) })
           : '';
       };
-      control.addEventListener('input', update);
+      control._updatePreview = update;
       update();
     }
 
@@ -2176,17 +2195,38 @@ function nodePanel(a, node) {
       L(f.label),
       f.required ? null : h('span', { class: 'muted small' }, ` (${t('panel.optional')})`)
     );
+    const labelRow =
+      f.acceptsData && hasUpstream
+        ? h(
+            'div',
+            { class: 'field-label-row' },
+            label,
+            h(
+              'button',
+              {
+                type: 'button',
+                class: 'btn btn-small data-btn',
+                'data-hint': 'addData',
+                onmousedown: (e) => e.preventDefault(),
+                onclick: () =>
+                  openDataPicker(a, node, control, (expr) => control.insertToken(expr)),
+              },
+              t('panel.addData')
+            )
+          )
+        : label;
     if (f.type === 'boolean') return h('div', { class: 'field field-inline' }, control, label, err);
     return h(
       'div',
       { class: 'field' },
-      label,
+      labelRow,
       control,
       f.help ? h('div', { class: 'small muted' }, L(f.help)) : null,
       preview,
       err
     );
   };
+  const hasUpstream = ancestorsOf(a, node.id).size > 0;
 
   const fields = act?.fields ?? [];
   const basic = fields.filter((f) => f.basic);
@@ -2232,59 +2272,11 @@ function nodePanel(a, node) {
       })()
     : null;
 
-  // Data chips from upstream steps
-  const upstream = stepOrder(a)
-    .filter((id) => ancestorsOf(a, node.id).has(id))
-    .map((id) => a.nodes.find((n) => n.id === id));
-  const dataBlock = fields.some((f) => f.acceptsData)
-    ? h(
-        'div',
-        { class: 'data-block' },
-        h('div', { class: 'field-label' }, t('panel.data')),
-        upstream.length
-          ? [
-              h('div', { class: 'small muted' }, t('panel.dataHint')),
-              upstream.map((u) => {
-                const outs = ACTIONS[u.action]?.outputs ?? [];
-                if (!outs.length) return null;
-                return h(
-                  'div',
-                  { class: 'data-group' },
-                  h(
-                    'div',
-                    { class: 'small' },
-                    `${t('step.n', { n: nums.get(u.id) })} · ${nodeTitle(u)}`
-                  ),
-                  h(
-                    'div',
-                    { class: 'chips' },
-                    outs.map((o) =>
-                      h(
-                        'button',
-                        {
-                          type: 'button',
-                          class: 'chip data-chip',
-                          title: t('panel.example', { text: L(o.example) }),
-                          onmousedown: (e) => e.preventDefault(),
-                          onclick: () => {
-                            const target =
-                              ui.focusedField && document.body.contains(ui.focusedField)
-                                ? ui.focusedField
-                                : controls.get(fields.find((f) => f.acceptsData).key);
-                            insertAtCursor(target, humanToken(nums.get(u.id), L(o.label)));
-                            markDirty();
-                          },
-                        },
-                        L(o.label)
-                      )
-                    )
-                  )
-                );
-              }),
-            ]
-          : h('div', { class: 'small muted' }, t('panel.noData'))
-      )
-    : null;
+  // Data from earlier steps is inserted with "+ Data" on each field (or the { key).
+  const dataBlock =
+    fields.some((f) => f.acceptsData) && hasUpstream
+      ? h('p', { class: 'small muted data-hint-line' }, t('panel.dataPickerHint'))
+      : null;
 
   const labelInput = h('input', {
     id: `lbl_${node.id}`,
@@ -2501,6 +2493,307 @@ function nodePanel(a, node) {
     h('div', { class: 'panel-scrim', onclick: closePanel }),
     panel
   );
+}
+
+// ── Data tokens: chips, picker, formats ───────────────────────────────────────
+
+const SYSTEM_TOKENS = [
+  { scope: 'now', key: 'dateTime' },
+  { scope: 'now', key: 'date' },
+  { scope: 'now', key: 'dateRu' },
+  { scope: 'now', key: 'time' },
+  { scope: 'now', key: 'weekday' },
+  { scope: 'run', key: 'id' },
+  { scope: 'run', key: 'triggerType' },
+];
+
+const FORMATS = ['', 'upper', 'lower', 'trim', 'first:200', 'first:1000'];
+const fmtLabel = (fmt) =>
+  fmt.startsWith('first:') ? t('fmt.first', { n: fmt.slice(6) }) : t(`fmt.${fmt || 'none'}`);
+
+const clipText = (s, n) => {
+  const str = String(s ?? '');
+  return str.length > n ? `${str.slice(0, n - 1)}…` : str;
+};
+
+const pad2 = (n) => String(n).padStart(2, '0');
+function systemSample(key) {
+  const d = new Date();
+  const date = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  const time = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  return {
+    dateTime: `${date} ${time}`,
+    date,
+    time,
+    dateRu: `${pad2(d.getDate())}.${pad2(d.getMonth() + 1)}.${d.getFullYear()}`,
+    weekday: new Intl.DateTimeFormat('ru', { weekday: 'long' }).format(d),
+    id: 'a1b2c3d4-…',
+    triggerType: 'cron',
+  }[key];
+}
+
+/** Output of each step in the automation's latest run or test, by step id. */
+function lastOutputs(a) {
+  const run = store.runs.find((r) => r.automationId === a.id && r.steps?.some((s) => s.output));
+  return new Map((run?.steps ?? []).map((s) => [s.nodeId, s.output]));
+}
+
+function applyFmt(value, fmt) {
+  const s =
+    typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value ?? '');
+  if (fmt === 'upper') return s.toUpperCase();
+  if (fmt === 'lower') return s.toLowerCase();
+  if (fmt === 'trim') return s.trim();
+  if (fmt.startsWith('first:')) return s.slice(0, Number(fmt.slice(6)));
+  return s;
+}
+
+/** A sample of what a token gives: from the latest run when there is one, else the catalog example. */
+function tokenSample(a, p, outputs = lastOutputs(a)) {
+  if (p.scope === 'now' || p.scope === 'run') return systemSample(p.key);
+  const node =
+    p.scope === 'trigger'
+      ? a.nodes.find((n) => ACTIONS[n.action]?.kind === 'trigger')
+      : a.nodes.find((n) => n.id === p.nodeId);
+  if (!node) return undefined;
+  const out = outputs.get(node.id);
+  const real = p.scope === 'trigger' ? (out?.payload?.[p.key] ?? out?.[p.key]) : out?.[p.key];
+  if (real !== undefined) return real;
+  const ex = ACTIONS[node.action]?.outputs?.find((o) => o.key === p.key)?.example;
+  return ex === undefined ? undefined : L(ex);
+}
+
+function previewTemplate(a, template) {
+  const outputs = lastOutputs(a);
+  return String(template).replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (m, expr) => {
+    const p = parseExpr(expr);
+    if (!p) return m;
+    const v = tokenSample(a, p, outputs);
+    return v === undefined ? '' : applyFmt(v, p.fmt);
+  });
+}
+
+function tokenSourceNode(a, p) {
+  if (p.scope === 'trigger') return a.nodes.find((n) => ACTIONS[n.action]?.kind === 'trigger');
+  if (p.scope === 'nodes') return a.nodes.find((n) => n.id === p.nodeId);
+  return null;
+}
+
+/** How a chip looks: icon, step number, name; broken when its step is gone. */
+function describeToken(a, expr) {
+  const p = parseExpr(expr);
+  if (!p) {
+    return {
+      icon: h('span', { class: 'token-sys' }, '{ }'),
+      step: null,
+      label: clipText(expr, 40),
+      title: expr,
+    };
+  }
+  const suffix = p.fmt ? ` · ${fmtLabel(p.fmt)}` : '';
+  if (p.scope === 'now' || p.scope === 'run') {
+    return {
+      icon: h('span', { class: 'token-sys' }, p.scope === 'now' ? '◷' : '▶'),
+      step: null,
+      label: t(`tok.${p.scope}.${p.key}`) + suffix,
+      title: `${t(`tok.${p.scope}.${p.key}`)}\n${t('panel.example', { text: systemSample(p.key) })}`,
+    };
+  }
+  const node = tokenSourceNode(a, p);
+  const nums = stepNumbers(a);
+  const out = node && ACTIONS[node.action]?.outputs?.find((o) => o.key === p.key);
+  if (!node || !nums.has(node.id)) {
+    return {
+      icon: h('span', { class: 'token-sys' }, '⚠'),
+      step: null,
+      label: t('tok.deleted'),
+      title: t('tok.deletedHint'),
+      broken: true,
+    };
+  }
+  const name = out ? L(out.label) : p.key;
+  const sample = tokenSample(a, p);
+  return {
+    icon: serviceIcon(ACTIONS[node.action]?.service, 'xs'),
+    step: nums.get(node.id),
+    label: name + suffix,
+    title:
+      `${t('step.n', { n: nums.get(node.id) })} · ${nodeTitle(node)} · ${name}` +
+      (sample !== undefined
+        ? `\n${t('panel.example', { text: clipText(applyFmt(sample, p.fmt), 200) })}`
+        : ''),
+  };
+}
+
+/** The data picker: search, earlier steps with sample values, date & time, run info. */
+function openDataPicker(a, node, field, onPick) {
+  const nums = stepNumbers(a);
+  const outputs = lastOutputs(a);
+  const upstream = stepOrder(a)
+    .filter((id) => ancestorsOf(a, node.id).has(id))
+    .map((id) => a.nodes.find((n) => n.id === id))
+    .reverse(); // nearest step first
+  const groups = [
+    ...upstream.map((u) => {
+      const isTrigger = ACTIONS[u.action]?.kind === 'trigger';
+      return {
+        title: `${t('step.n', { n: nums.get(u.id) })} · ${nodeTitle(u)}`,
+        icon: serviceIcon(ACTIONS[u.action]?.service, 'xs'),
+        rows: (ACTIONS[u.action]?.outputs ?? []).map((o) => {
+          const p = isTrigger
+            ? { scope: 'trigger', nodeId: null, key: o.key, fmt: '' }
+            : { scope: 'nodes', nodeId: u.id, key: o.key, fmt: '' };
+          const v = tokenSample(a, p, outputs);
+          return { label: L(o.label), sample: v, expr: buildExpr(p), real: outputs.has(u.id) };
+        }),
+      };
+    }),
+    {
+      title: t('dpick.dateTime'),
+      icon: h('span', { class: 'token-sys' }, '◷'),
+      rows: SYSTEM_TOKENS.filter((x) => x.scope === 'now').map((x) => ({
+        label: t(`tok.now.${x.key}`),
+        sample: systemSample(x.key),
+        expr: buildExpr({ ...x, fmt: '' }),
+        real: true,
+      })),
+    },
+    {
+      title: t('dpick.run'),
+      icon: h('span', { class: 'token-sys' }, '▶'),
+      rows: SYSTEM_TOKENS.filter((x) => x.scope === 'run').map((x) => ({
+        label: t(`tok.run.${x.key}`),
+        sample: systemSample(x.key),
+        expr: buildExpr({ ...x, fmt: '' }),
+        real: true,
+      })),
+    },
+  ].filter((g) => g.rows.length);
+
+  const list = h('div', { class: 'pick-list', role: 'listbox' });
+  const fill = (q) => {
+    const query = q.trim().toLowerCase();
+    clear(list);
+    let first = null;
+    for (const g of groups) {
+      const rows = g.rows.filter(
+        (r) => !query || `${g.title} ${r.label} ${r.sample ?? ''}`.toLowerCase().includes(query)
+      );
+      if (!rows.length) continue;
+      list.append(h('div', { class: 'pick-group' }, g.icon.cloneNode(true), g.title));
+      for (const r of rows) {
+        const btn = h(
+          'button',
+          {
+            type: 'button',
+            class: 'pick-row',
+            role: 'option',
+            onmousedown: (e) => e.preventDefault(),
+            onclick: () => {
+              closePopover();
+              onPick(r.expr);
+            },
+          },
+          h('span', { class: 'pick-label' }, r.label),
+          h(
+            'span',
+            { class: ['pick-sample', !r.real && 'pick-sample-example'] },
+            r.sample === undefined || r.sample === ''
+              ? t('dpick.noSample')
+              : clipText(typeof r.sample === 'object' ? JSON.stringify(r.sample) : r.sample, 60)
+          )
+        );
+        first ??= btn;
+        list.append(btn);
+      }
+    }
+    if (!list.childNodes.length)
+      list.append(h('p', { class: 'small muted pick-empty' }, t('home.noResults')));
+    return first;
+  };
+  const search = h('input', {
+    type: 'search',
+    class: 'input pick-search',
+    placeholder: t('dpick.search'),
+    'aria-label': t('dpick.search'),
+    oninput: (e) => fill(e.target.value),
+    onkeydown: (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        fill(search.value)?.click();
+      }
+    },
+  });
+  fill('');
+  openPopover(field, [
+    h(
+      'div',
+      { class: 'picker-pop' },
+      search,
+      list,
+      h('p', { class: 'small muted pick-foot' }, t('dpick.foot'))
+    ),
+  ]);
+  document.querySelector('.popover')?.classList.add('popover-wide');
+  search.focus();
+}
+
+/** Click on a chip: format it, replace it with other data, or remove it. */
+function openTokenMenu(a, node, chip, field) {
+  const expr = chip.dataset.expr;
+  const p = parseExpr(expr);
+  const items = [];
+  if (p) {
+    items.push(h('div', { class: 'menu-label' }, t('tok.format')));
+    for (const fmt of FORMATS) {
+      items.push(
+        h(
+          'button',
+          {
+            type: 'button',
+            role: 'menuitemradio',
+            class: 'menu-item',
+            'aria-checked': String(p.fmt === fmt),
+            onclick: () => {
+              closePopover();
+              field.replaceToken(chip, buildExpr({ ...p, fmt }));
+            },
+          },
+          `${p.fmt === fmt ? '● ' : '○ '}${fmtLabel(fmt)}`
+        )
+      );
+    }
+    items.push(h('div', { class: 'menu-sep', role: 'separator' }));
+  }
+  items.push(
+    h(
+      'button',
+      {
+        type: 'button',
+        role: 'menuitem',
+        class: 'menu-item',
+        onclick: () => {
+          closePopover();
+          openDataPicker(a, node, field, (next) => field.replaceToken(chip, next));
+        },
+      },
+      t('tok.replace')
+    ),
+    h(
+      'button',
+      {
+        type: 'button',
+        role: 'menuitem',
+        class: 'menu-item danger',
+        onclick: () => {
+          closePopover();
+          field.removeToken(chip);
+        },
+      },
+      t('tok.remove')
+    )
+  );
+  openPopover(chip, items);
 }
 
 function insertAtCursor(el, text) {

@@ -93,9 +93,7 @@ export class Lexer {
         continue;
       }
 
-      throw new ExpressionEvaluationError(
-        `Unexpected character "${char}" at position ${this.pos}`
-      );
+      throw new ExpressionEvaluationError(`Unexpected character "${char}" at position ${this.pos}`);
     }
 
     tokens.push({
@@ -126,11 +124,12 @@ export class Lexer {
   }
 
   private isIdentifierStart(char: string): boolean {
-    return char === '$' || char === '_' || /[a-zA-Z]/.test(char);
+    // Any letter, so field names like $trigger.имя work.
+    return char === '$' || char === '_' || /\p{L}/u.test(char);
   }
 
   private isIdentifierPart(char: string): boolean {
-    return char === '$' || char === '_' || /[a-zA-Z0-9]/.test(char);
+    return char === '$' || char === '_' || /[\p{L}\p{N}]/u.test(char);
   }
 
   private isOperatorStart(char: string): boolean {
@@ -163,12 +162,24 @@ export class Lexer {
         const esc = this.input[this.pos]!;
         this.pos++;
         switch (esc) {
-          case 'n': value += '\n'; break;
-          case 't': value += '\t'; break;
-          case 'r': value += '\r'; break;
-          case '\\': value += '\\'; break;
-          case "'": value += "'"; break;
-          case '"': value += '"'; break;
+          case 'n':
+            value += '\n';
+            break;
+          case 't':
+            value += '\t';
+            break;
+          case 'r':
+            value += '\r';
+            break;
+          case '\\':
+            value += '\\';
+            break;
+          case "'":
+            value += "'";
+            break;
+          case '"':
+            value += '"';
+            break;
           case 'u': {
             const hex = this.input.slice(this.pos, this.pos + 4);
             if (hex.length < 4 || !/^[0-9a-fA-F]{4}$/.test(hex)) {
@@ -196,7 +207,11 @@ export class Lexer {
       this.pos++;
     }
 
-    if (this.pos < this.len && this.input[this.pos] === '.' && this.isDigit(this.input[this.pos + 1] ?? '')) {
+    if (
+      this.pos < this.len &&
+      this.input[this.pos] === '.' &&
+      this.isDigit(this.input[this.pos + 1] ?? '')
+    ) {
       this.pos++; // skip decimal point
       while (this.pos < this.len && this.isDigit(this.input[this.pos]!)) {
         this.pos++;
@@ -243,9 +258,7 @@ export class Lexer {
     this.pos++;
 
     if (single === '=') {
-      throw new ExpressionEvaluationError(
-        'Assignment operator "=" is blocked for security'
-      );
+      throw new ExpressionEvaluationError('Assignment operator "=" is blocked for security');
     }
 
     return { type: 'Operator', value: single, raw: single, start, end: this.pos };
