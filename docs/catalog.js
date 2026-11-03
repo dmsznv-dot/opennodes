@@ -53,20 +53,21 @@ export const RESULT_FIELD = {
   example: tr('Заголовок от ИИ\nОтвет для этой записи…', 'AI title\nThe answer for this item…'),
 };
 
-/** The result split in two: an AI step asked to translate or rewrite puts the title first. */
-export const RESULT_PARTS = [
+/**
+ * What a post needs from an item a step worked on (an AI translating each article): its
+ * title and text — from the step when it gave them, else the item's own. Picture, link and
+ * date stay the item's.
+ */
+export const POST_FIELDS = [
   {
-    key: 'resultTitle',
-    label: tr('Результат: первая строка (заголовок от ИИ)', 'Result: first line (AI title)'),
+    key: 'postTitle',
+    label: tr('Заголовок (ИИ)', 'Title (AI)'),
     example: tr('Заголовок от ИИ', 'AI title'),
   },
   {
-    key: 'resultBody',
-    label: tr(
-      'Результат без первой строки (текст от ИИ)',
-      'Result without the first line (AI text)'
-    ),
-    example: tr('Ответ для этой записи…', 'The answer for this item…'),
+    key: 'postText',
+    label: tr('Текст (ИИ)', 'Text (AI)'),
+    example: tr('Текст статьи, обработанный ИИ…', 'The article text as the AI wrote it…'),
   },
 ];
 
@@ -91,6 +92,19 @@ export function splitResult(text) {
     .replace(/^(заголовок|title)\s*:\s*/i, '')
     .trim();
   return { resultTitle: title, resultBody: rest };
+}
+
+/** The same as the server's postFields: the item, the step's result and the post's parts. */
+export function postFields(item, result) {
+  const base = item && typeof item === 'object' ? item : { value: item };
+  const parts = splitResult(result);
+  return {
+    ...base,
+    result,
+    ...parts,
+    postTitle: parts.resultTitle || String(base.postTitle ?? base.title ?? ''),
+    postText: parts.resultTitle ? parts.resultBody : result,
+  };
 }
 
 const SAMPLE_FEED = tr(
@@ -732,13 +746,26 @@ export const ACTIONS = {
         acceptsData: true,
         label: tr('Что сделать', 'Instruction'),
         placeholder: tr(
-          'Переведи на русский. Первой строкой — заголовок, ниже — текст.',
-          'Translate into English. The title on the first line, the text below.'
+          'Переведи на русский и сократи до 3 предложений.',
+          'Shorten to 3 sentences.'
         ),
         help: tr(
-          'Чтобы в посте был и ваш заголовок от ИИ (например, переведённый), попросите: «Первой строкой — заголовок, ниже — текст». Тогда в данных появятся «заголовок от ИИ» и «текст от ИИ».',
-          'For an AI-made title too (e.g. translated), ask: “the title on the first line, the text below”. The data then has “AI title” and “AI text”.'
+          'Например: «Перескажи по-русски в 2–3 предложениях». Если шаг выполняется для каждой записи, ИИ сам вернёт заголовок и текст — в следующем шаге они будут в «Готовых постах».',
+          'E.g. “Summarise in 2–3 sentences”. Run for each item, the AI returns a title and a text — the next step has them in “Ready-made posts”.'
         ),
+      },
+      {
+        key: 'titleLine',
+        type: 'boolean',
+        required: false,
+        basic: false,
+        showIf: { forEach: ['*'] },
+        label: tr('Ответ для поста: заголовок + текст', 'Answer for a post: title + text'),
+        help: tr(
+          'Для каждой записи ИИ пишет заголовок первой строкой, ниже текст — так переводится и заголовок. Выключите, если нужен только текст.',
+          'For each item the AI writes a title line, then the text — so the title gets translated too. Turn off for text only.'
+        ),
+        default: true,
       },
       {
         key: 'readLinks',
@@ -788,8 +815,8 @@ export const ACTIONS = {
       output: {
         text: L(
           tr(
-            'Заголовок от ИИ (симуляция)\nПример результата по инструкции.',
-            'AI title (simulation)\nSample result per the instruction.'
+            'Заголовок от ИИ (симуляция)\n\nПример текста по инструкции.',
+            'AI title (simulation)\n\nSample text per the instruction.'
           )
         ),
         sources: [],
@@ -1245,6 +1272,21 @@ export const ACTIONS = {
         help: tr(
           'Каждая запись уйдёт дальше один раз. Если новых нет — следующие шаги не выполнятся (запуск при этом успешный).',
           'Each item goes on once. With nothing new the next steps do not run. Tests from the editor do not use items up.'
+        ),
+        default: true,
+      },
+      {
+        key: 'pageImages',
+        type: 'boolean',
+        required: false,
+        basic: false,
+        label: tr(
+          'Нет картинки в ленте — взять со страницы статьи',
+          'No picture in the feed — take it from the article page'
+        ),
+        help: tr(
+          'Та картинка, что видна, когда ссылкой делятся в мессенджере. Открывает до 10 страниц за запуск.',
+          'The picture shown when the link is shared. Opens up to 10 pages per run.'
         ),
         default: true,
       },
@@ -2106,8 +2148,8 @@ export const TEMPLATES = [
           forEach: '{{ $nodes.rss_1.output.items }}',
           input: '{{ $item.title }}\n{{ $item.text }}\n{{ $item.link }}',
           instruction: tr(
-            'Первой строкой — заголовок статьи по-русски. Ниже — пересказ по-русски в 2–3 предложениях, по её тексту. Без хэштегов и вступлений.',
-            'The article’s title on the first line. Below — a 2–3 sentence summary from its text. No hashtags, no intro.'
+            'Перескажи статью по-русски в 2–3 предложениях, по её тексту. Без хэштегов и вступлений.',
+            'Summarise the article in 2–3 sentences, from its text. No hashtags, no intro.'
           ),
           readLinks: true,
           maxLinks: 1,
@@ -2119,7 +2161,7 @@ export const TEMPLATES = [
         config: {
           chatId: '@my_channel',
           forEach: '{{ $nodes.ai_1.output.items }}',
-          text: '**{{ $item.resultTitle }}**\n\n{{ $item.resultBody }}\n\n[Читать полностью →]({{ $item.link }})',
+          text: '**{{ $item.postTitle }}**\n\n{{ $item.postText }}\n\n[Читать полностью →]({{ $item.link }})',
           imageUrl: '{{ $item.image }}',
           parseMode: 'auto',
         },

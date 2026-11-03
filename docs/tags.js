@@ -9,7 +9,7 @@
  * Everything is plain template text (`**{{ $item.title }}**\n{{ $item.link }}`), so what a
  * block inserts can be edited like anything typed by hand. Pure data: no DOM here.
  */
-import { ACTIONS, LIST_FIELDS, RESULT_FIELD, RESULT_PARTS, SERVICES } from './catalog.js';
+import { ACTIONS, LIST_FIELDS, POST_FIELDS, RESULT_FIELD, SERVICES } from './catalog.js';
 import { ancestorsOf, nodeTitle, stepNumbers, stepOrder } from './engine.js';
 import { L } from './i18n.js';
 import { buildExpr } from './tokens.js';
@@ -84,11 +84,13 @@ export function listSource(a, expr, seen = new Set()) {
       node,
       key: 'items',
       n,
+      // The post's title and text first, then the item's own fields, then the raw answer.
       fields: [
+        ...POST_FIELDS,
+        ...inner.fields.filter((f) => !['result', 'postTitle', 'postText'].includes(f.key)),
         { ...RESULT_FIELD, label: resultLabel(a, node) },
-        ...RESULT_PARTS,
-        ...inner.fields.filter((f) => !['result', 'resultTitle', 'resultBody'].includes(f.key)),
       ],
+      processedBy: [...(inner.processedBy ?? []), node],
       label: inner.label,
     };
   }
@@ -97,35 +99,36 @@ export function listSource(a, expr, seen = new Set()) {
 
 const resultLabel = (a, node) =>
   tr(
-    `Результат шага ${stepNumbers(a).get(node.id)} (${L(ACTIONS[node.action]?.name)})`,
-    `Result of step ${stepNumbers(a).get(node.id)} (${L(ACTIONS[node.action]?.name)})`
+    `Ответ шага ${stepNumbers(a).get(node.id)} целиком`,
+    `Step ${stepNumbers(a).get(node.id)}’s whole answer`
   );
 
-/** Lists of earlier steps a step can repeat for: `[{ expr, label }]`, nearest first. */
+/**
+ * Lists of earlier steps a step can repeat for: `[{ expr, label }]`, nearest first — one
+ * per list. When steps in between already went through the same list item by item (an AI
+ * translating each article), the choice is their output: the same items, with everything
+ * those steps added. So a post per item has the AI's words and the item's picture at once.
+ */
 export function listChoices(a, node) {
   const up = ancestorsOf(a, node.id);
   const nums = stepNumbers(a);
+  const order = stepOrder(a);
   const choices = [];
-  for (const id of [...stepOrder(a)].reverse()) {
+  for (const id of [...order].reverse()) {
     if (!up.has(id)) continue;
     const u = a.nodes.find((n) => n.id === id);
-    const act = ACTIONS[u.action];
-    for (const o of act?.outputs ?? []) {
+    for (const o of ACTIONS[u.action]?.outputs ?? []) {
       if (!o.list) continue;
+      const root = `{{ $nodes.${u.id}.output.${o.key} }}`;
+      const best = furthest(a, node, root);
+      const via = best === root ? null : (listSource(a, best)?.processedBy ?? []);
+      const steps = (via ?? []).map((p) => nums.get(p.id)).join(', ');
       choices.push({
-        expr: `{{ $nodes.${u.id}.output.${o.key} }}`,
+        expr: best,
+        root,
         label: tr(
-          `Шаг ${nums.get(id)} · ${nodeTitle(u)}: ${L(o.label)}`,
-          `Step ${nums.get(id)} · ${nodeTitle(u)}: ${L(o.label)}`
-        ),
-      });
-    }
-    if (act?.forEach && u.config?.forEach && listSource(a, u.config.forEach)) {
-      choices.push({
-        expr: `{{ $nodes.${u.id}.output.items }}`,
-        label: tr(
-          `Шаг ${nums.get(id)} · ${nodeTitle(u)}: записи с результатом`,
-          `Step ${nums.get(id)} · ${nodeTitle(u)}: items with the result`
+          `Шаг ${nums.get(id)} · ${nodeTitle(u)}${via ? ` — с результатом шага ${steps}` : ''}`,
+          `Step ${nums.get(id)} · ${nodeTitle(u)}${via ? ` — with the result of step ${steps}` : ''}`
         ),
       });
     }
@@ -133,10 +136,32 @@ export function listChoices(a, node) {
   return choices;
 }
 
+/** The furthest output, upstream of `node`, that carries the items of the list `root`. */
+export function furthest(a, node, root) {
+  const up = ancestorsOf(a, node.id);
+  let current = root;
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const id of stepOrder(a)) {
+      const u = a.nodes.find((n) => n.id === id);
+      if (!up.has(id) || !ACTIONS[u.action]?.forEach || u.config?.forEach !== current) continue;
+      current = `{{ $nodes.${u.id}.output.items }}`;
+      changed = true;
+      break;
+    }
+  }
+  return current;
+}
+
+/** The choice a saved `forEach` belongs to: a raw list moves up to its furthest output. */
+export function choiceFor(a, node, expr) {
+  return listChoices(a, node).find((c) => c.expr === expr || c.root === expr) ?? null;
+}
+
 // ── Ready-made posts from the fields of one item ────────────────────────────────
 
 const BODY_NAMES = {
-  ai: tr('текст от ИИ', 'AI text'),
+  ai: tr('текст', 'text'),
   result: tr('результат', 'result'),
   summary: tr('кратко', 'summary'),
   text: tr('текст', 'text'),
@@ -248,18 +273,19 @@ export const GROUPS = {
  * the list has no such field). With a picture field on the step, each layout also comes
  * “+ picture”: the block fills that field with the item's picture.
  */
-export function postPresets({ field, keys, imageField, rich = true, prefix = 'p' }) {
+export function postPresets({ field, keys, imageField, rich = true, prefix = 'p', useAi = true }) {
   const has = (k) => keys.includes(k) && field(k);
-  // `ai`: the AI step's own title (first line of its answer) and text — e.g. a translation.
-  const ai = has('resultTitle') && has('resultBody');
-  const bodies = [...(ai ? ['ai'] : []), ...['result', 'summary', 'text'].filter(has)];
+  // After an AI step, the same posts take its title and text (“from the AI”) — or, switched
+  // off, the item's own (“from the feed”).
+  const ai = useAi && has('postTitle') && has('postText');
+  const bodies = ai ? ['ai'] : ['summary', 'text'].filter(has);
   const out = [];
   const add = (layout, body) => {
     if ((layout.needs ?? []).some((k) => !has(k))) return;
     if (!has('title') && /\{T\}/.test(L(layout.tpl))) return;
     if (!has('link') && /\{L\}/.test(L(layout.tpl))) return;
-    const titleKey = body === 'ai' ? 'resultTitle' : 'title';
-    const bodyKey = body === 'ai' ? 'resultBody' : body;
+    const titleKey = ai ? 'postTitle' : 'title';
+    const bodyKey = body === 'ai' ? 'postText' : body;
     const fill = (s) =>
       s
         .replace(/\{T\}/g, field(titleKey))
@@ -267,16 +293,7 @@ export function postPresets({ field, keys, imageField, rich = true, prefix = 'p'
         .replace(/\{L\}/g, field('link') ?? '')
         .replace(/\{D\}/g, field('date') ?? '');
     const template = (rich ? (s) => s : plain)(fill(L(layout.tpl)));
-    const name = (lang) => {
-      const s = layout.name[lang].replace('{b}', body ? BODY_NAMES[body][lang] : '');
-      if (body !== 'ai') return s;
-      return lang === 'ru'
-        ? s
-            .replace('Заголовок-ссылка', 'Заголовок от ИИ — ссылкой')
-            .replace(/Заголовок(?! от ИИ)/, 'Заголовок от ИИ')
-            .replace('заголовок', 'заголовок от ИИ')
-        : s.replace(/Title|title/, (m) => `AI ${m.toLowerCase()}`);
-    };
+    const name = (lang) => layout.name[lang].replace('{b}', body ? BODY_NAMES[body][lang] : '');
     const base = {
       id: `${prefix}.${layout.id}${body ? `.${body}` : ''}`,
       kind: 'preset',
@@ -304,7 +321,9 @@ export function postPresets({ field, keys, imageField, rich = true, prefix = 'p'
       kind: 'preset',
       group: 'image',
       title: tr('Картинка + заголовок подписью', 'Picture + title as the caption'),
-      template: rich ? `**${field('title')}**` : field('title'),
+      template: rich
+        ? `**${field(ai ? 'postTitle' : 'title')}**`
+        : field(ai ? 'postTitle' : 'title'),
       extra: { [imageField]: field('image') },
     });
   }
@@ -506,6 +525,8 @@ export function processedBy(a, node, forEach) {
   return null;
 }
 
+const listOut0 = (act) => (act?.outputs ?? []).some((o) => o.list);
+
 // ── Date, run, formatting ─────────────────────────────────────────────────────
 
 const NOW_KEYS = ['dateTime', 'dateRu', 'date', 'dayMonth', 'weekday', 'time', 'monthName', 'year'];
@@ -588,7 +609,7 @@ const EMOJI = [
  * `{ id, kind: 'data'|'preset'|'snippet', group, title, template, extra?, hint? }` —
  * `template` goes into the field, `extra` fills other fields (the picture).
  */
-export function tagCategories(a, node, { fieldKey, forEach, seenKeys = {} } = {}) {
+export function tagCategories(a, node, { fieldKey, forEach, seenKeys = {}, useAi = true } = {}) {
   const target = targetInfo(node, fieldKey);
   const rich = target.rich;
   const nums = stepNumbers(a);
@@ -604,21 +625,36 @@ export function tagCategories(a, node, { fieldKey, forEach, seenKeys = {} } = {}
   if (source) {
     const keys = source.fields.map((f) => f.key);
     const field = (k) => (keys.includes(k) ? tok({ scope: 'item', key: k }) : null);
+    const hasAi = keys.includes('postTitle');
+    const by = (source.processedBy ?? []).map((p) => nums.get(p.id)).join(', ');
     cats.push({
       id: 'posts.item',
       title: tr('Готовые посты — для каждой записи', 'Ready-made posts — for each item'),
       icon: '✦',
-      hint: processedBy(a, node, forEach)
-        ? tr(
-            `⚠ Шаг ${processedBy(a, node, forEach).n} уже обработал каждую запись, но его результат сюда не попадёт: в настройках шага выберите «Для каждой записи: Шаг ${processedBy(a, node, forEach).n} … записи с результатом».`,
-            `⚠ Step ${processedBy(a, node, forEach).n} already processed each item, but its result does not get here: in the step settings choose “For each item: Step ${processedBy(a, node, forEach).n} … items with the result”.`
-          )
+      // With an AI step before: one switch says whose words the posts take.
+      aiToggle: hasAi ? { on: useAi, step: by } : null,
+      hint: hasAi
+        ? useAi
+          ? tr(
+              `Заголовок и текст — от ИИ (шаг ${by}), картинка, ссылка и дата — из записи.`,
+              `Title and text from the AI (step ${by}); picture, link and date from the item.`
+            )
+          : tr(
+              'Заголовок и текст — из самой записи, без обработки ИИ.',
+              'Title and text from the item itself, without the AI.'
+            )
         : tr(
             `Шаг выполнится для каждой записи из шага ${source.n}; блок соберёт пост из её полей.`,
             `The step runs for each item of step ${source.n}; a block builds the post from its fields.`
           ),
-      warn: Boolean(processedBy(a, node, forEach)),
-      entries: postPresets({ field, keys, imageField: target.imageField, rich, prefix: 'item' }),
+      entries: postPresets({
+        field,
+        keys,
+        imageField: target.imageField,
+        rich,
+        prefix: 'item',
+        useAi,
+      }),
     });
     cats.push({
       id: 'item',
@@ -700,8 +736,10 @@ export function tagCategories(a, node, { fieldKey, forEach, seenKeys = {} } = {}
         outs.push({ key, label: tr(`Поле «${key}»`, `Field “${key}”`), example: '' });
       }
     }
+    // Per item, “first item: …” would put the same first article into every post.
+    const FIRST = ['firstTitle', 'firstText', 'firstSummary', 'firstDate', 'link', 'image'];
     const data = outs
-      .filter((o) => !o.list)
+      .filter((o) => !o.list && !(source && listOut0(act) && FIRST.includes(o.key)))
       .map((o) => ({
         id: `${u.id}.${o.key}`,
         kind: 'data',

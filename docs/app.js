@@ -21,7 +21,7 @@ import {
 import * as live from './live.js';
 import { tokenField, parseExpr, buildExpr } from './tokens.js';
 import { attachCanvas, isTyping } from './canvas.js';
-import { tagCategories, listChoices, listSource, processedBy, targetInfo, GROUPS } from './tags.js';
+import { tagCategories, listChoices, listSource, choiceFor, targetInfo, GROUPS } from './tags.js';
 import { markdownNodes } from './markdown.js';
 import {
   ACTIONS,
@@ -32,6 +32,7 @@ import {
   PICKER_GROUPS,
   SYNONYMS,
   isDevAction,
+  postFields,
 } from './catalog.js';
 import {
   validateDag,
@@ -2633,7 +2634,12 @@ function nodePanel(a, node) {
       });
     } else if (f.type === 'forEach') {
       const choices = listChoices(a, node);
-      const known = !val || choices.some((c) => c.expr === val);
+      // A saved raw list (RSS items) moves up to the output that also has what the steps in
+      // between added (the AI's words) — the same items, nothing lost.
+      const chosen = val ? choiceFor(a, node, val) : null;
+      const current = chosen?.expr ?? val;
+      if (chosen && chosen.expr !== val) queueMicrotask(markDirty);
+      const known = !val || Boolean(chosen);
       control = h(
         'select',
         {
@@ -2649,7 +2655,7 @@ function nodePanel(a, node) {
         choices.map((c) =>
           h(
             'option',
-            { value: c.expr, selected: val === c.expr },
+            { value: c.expr, selected: current === c.expr },
             t('fe.each', { list: L(c.label) })
           )
         ),
@@ -2851,31 +2857,10 @@ function nodePanel(a, node) {
       forEachHelp = () => {
         const src = listSource(a, control.value);
         const first = listChoices(a, node)[0];
-        const done = src && processedBy(a, node, control.value);
-        clear(help);
-        help.classList.toggle('fe-nudge', !src || Boolean(done));
-        if (done) {
-          // An earlier step (an AI translating each item) did the work, but repeating for the
-          // raw list would send the items without its result.
-          help.append(
-            t('fe.processed', { n: done.n }),
-            ' ',
-            h(
-              'button',
-              {
-                type: 'button',
-                class: 'btn btn-small',
-                onclick: () => {
-                  control.value = done.expr;
-                  control.dispatchEvent(new Event('change'));
-                },
-              },
-              t('fe.useProcessed', { n: done.n })
-            )
-          );
-        } else {
-          help.append(src ? L(f.help) : t('fe.nudge', { n: listSource(a, first?.expr)?.n ?? '?' }));
-        }
+        help.classList.toggle('fe-nudge', !src);
+        help.textContent = src
+          ? L(f.help)
+          : t('fe.nudge', { n: listSource(a, first?.root)?.n ?? '?' });
       };
       forEachHelp();
     }
@@ -2962,7 +2947,7 @@ function nodePanel(a, node) {
         const c = controls.get(dep);
         if (!c) return true;
         const v = c.type === 'checkbox' ? c.checked : c.value;
-        return values.includes(v);
+        return values.includes('*') ? Boolean(v) : values.includes(v);
       });
     }
   };
@@ -3212,24 +3197,22 @@ function itemSample(a, outputs = lastOutputs(a), expr = ui.panelForEach?.() ?? '
   if (!src) return null;
   const real = outputs.get(src.node.id)?.[src.key];
   if (Array.isArray(real) && real[0] && typeof real[0] === 'object') return real[0];
-  let demo;
-  try {
-    demo = ACTIONS[src.node.action]?.simulate?.(src.node.config ?? {})?.output?.[src.key];
-  } catch {
-    demo = undefined; // a sample is a nicety; never break the panel over it
-  }
-  const base = Array.isArray(demo) && demo[0] && typeof demo[0] === 'object' ? demo[0] : {};
-  // Items of a step that itself repeats: the list it repeats for, plus its result.
-  const inner =
-    src.key === 'items' && src.node.config?.forEach
-      ? itemSample(a, outputs, src.node.config.forEach)
-      : null;
-  return {
-    ...Object.fromEntries(src.fields.map((f) => [f.key, L(f.example)])),
-    ...(inner ?? {}),
-    ...base,
-    ...(inner ? { result: L(src.fields[0]?.example) } : {}),
+  const examples = Object.fromEntries(src.fields.map((f) => [f.key, L(f.example)]));
+  const demo = (key) => {
+    try {
+      return ACTIONS[src.node.action]?.simulate?.(src.node.config ?? {})?.output?.[key];
+    } catch {
+      return undefined; // a sample is a nicety; never break the panel over it
+    }
   };
+  // Items of a step that itself repeats: the list it repeats for, plus what it added.
+  if (src.key === 'items' && src.node.config?.forEach) {
+    const inner = itemSample(a, outputs, src.node.config.forEach) ?? {};
+    return postFields({ ...examples, ...inner }, String(demo('text') ?? examples.result ?? ''));
+  }
+  const list = demo(src.key);
+  const base = Array.isArray(list) && list[0] && typeof list[0] === 'object' ? list[0] : {};
+  return { ...examples, ...base };
 }
 
 /** Output of each step in the automation's latest run or test, by step id. */
@@ -3360,16 +3343,19 @@ function openDataPicker(a, node, field, opts = {}) {
       seenKeys[id] = Object.keys(data).filter((k) => /^\w+$/.test(k) && k !== 'simulated');
     }
   }
-  const cats = tagCategories(a, node, {
-    fieldKey,
-    forEach: ui.panelForEach?.() ?? '',
-    seenKeys,
-  }).map((c) => ({
-    ...c,
-    entries: replace
-      ? c.entries.filter((e) => e.kind === 'data' || e.kind === 'custom')
-      : c.entries,
-  }));
+  const build = () =>
+    tagCategories(a, node, {
+      fieldKey,
+      forEach: ui.panelForEach?.() ?? '',
+      seenKeys,
+      useAi: ui.pickerUseAi !== false,
+    }).map((c) => ({
+      ...c,
+      entries: replace
+        ? c.entries.filter((e) => e.kind === 'data' || e.kind === 'custom')
+        : c.entries,
+    }));
+  let cats = build();
   const howto = { id: 'howto', title: { ru: t('dpick.howto'), en: t('dpick.howto') }, icon: '?' };
   // Favourites (★ on a card) are kept for every automation; shown first when there are some.
   const favs = new Set(store.settings.favoriteTags ?? []);
@@ -3518,6 +3504,34 @@ function openDataPicker(a, node, field, opts = {}) {
     );
   };
 
+  // Whose words the posts take after an AI step: the AI's, or the item's own.
+  const aiSwitch = ({ on, step }) =>
+    h(
+      'div',
+      { class: 'seg', role: 'radiogroup', 'aria-label': t('dpick.aiSwitch') },
+      h('span', { class: 'seg-label' }, t('dpick.aiSwitch')),
+      [
+        [true, t('dpick.fromAi', { n: step })],
+        [false, t('dpick.fromItem')],
+      ].map(([value, label]) =>
+        h(
+          'button',
+          {
+            type: 'button',
+            role: 'radio',
+            'aria-checked': String(on === value),
+            class: ['seg-btn', on === value && 'active'],
+            onclick: () => {
+              ui.pickerUseAi = value;
+              cats = build();
+              rebuild();
+            },
+          },
+          label
+        )
+      )
+    );
+
   const nav = h('nav', { class: 'tag-nav', 'aria-label': t('dpick.howto') });
   const main = h('div', { class: 'tag-main' });
   const catIcon = (c) =>
@@ -3573,6 +3587,7 @@ function openDataPicker(a, node, field, opts = {}) {
       any = true;
       main.append(
         h('h3', { class: 'tag-main-title' }, catIcon(c), L(c.title)),
+        c.aiToggle && !query ? aiSwitch(c.aiToggle) : null,
         c.hint && !query
           ? h('p', { class: ['small tag-main-hint', c.warn ? 'fe-nudge' : 'muted'] }, L(c.hint))
           : null

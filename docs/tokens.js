@@ -49,6 +49,17 @@ export function buildExpr({ scope, nodeId, key, fmt = '' }) {
   return `${base}${suffix}`; // the expression inside {{ }}, as chips store it
 }
 
+/** The text position under a point (Chrome/Safari and Firefox spell it differently). */
+function caretAt(x, y) {
+  if (document.caretRangeFromPoint) return document.caretRangeFromPoint(x, y);
+  const p = document.caretPositionFromPoint?.(x, y);
+  if (!p) return null;
+  const r = document.createRange();
+  r.setStart(p.offsetNode, p.offset);
+  r.collapse(true);
+  return r;
+}
+
 /** Parts of a template: text and `{{ … }}` tokens, in order. */
 export function splitTemplate(value) {
   const parts = [];
@@ -98,7 +109,59 @@ export function tokenField(opts) {
       h('span', { class: 'token-label' }, d.label)
     );
     el.addEventListener('mousedown', (e) => e.preventDefault());
-    el.addEventListener('click', () => opts.onChipClick?.(el, field));
+    // Drag a chip to another place in the text; a plain click opens its menu.
+    let dragged = false;
+    el.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      const start = { x: e.clientX, y: e.clientY };
+      let moving = false;
+      const spot = (ev) => {
+        const r = caretAt(ev.clientX, ev.clientY);
+        return r && field.contains(r.startContainer) && !el.contains(r.startContainer) ? r : null;
+      };
+      const move = (ev) => {
+        if (!moving && Math.hypot(ev.clientX - start.x, ev.clientY - start.y) < 4) return;
+        if (!moving) {
+          moving = true;
+          el.classList.add('dragging');
+          field.focus();
+        }
+        ev.preventDefault();
+        const r = spot(ev);
+        if (r) {
+          // The text caret shows where the chip will land.
+          const sel = window.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(r);
+        }
+      };
+      const up = (ev) => {
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+        el.classList.remove('dragging');
+        if (!moving) return;
+        dragged = true;
+        const r = spot(ev);
+        if (!r) return;
+        r.insertNode(el); // moves the chip
+        r.setStartAfter(el);
+        r.collapse(true);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(r);
+        saved = r.cloneRange();
+        changed();
+      };
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up);
+    });
+    el.addEventListener('click', () => {
+      if (dragged) {
+        dragged = false;
+        return;
+      }
+      opts.onChipClick?.(el, field);
+    });
     return el;
   };
 

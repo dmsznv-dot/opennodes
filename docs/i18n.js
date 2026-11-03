@@ -288,6 +288,9 @@ const DICT = {
     'tok.fieldNameHelp':
       'Как поле называется в данных формы: латиница, цифры и _ — например phone или company.',
     'dpick.favorites': 'Избранное',
+    'dpick.aiSwitch': 'Заголовок и текст:',
+    'dpick.fromAi': 'от ИИ (шаг {n})',
+    'dpick.fromItem': 'из записи, без ИИ',
     'dpick.favorite': 'В избранное',
     'dpick.unfavorite': 'Убрать из избранного',
     'fe.processed':
@@ -673,6 +676,9 @@ const DICT = {
     'tok.fieldNameHelp':
       'The field’s name in the form data: Latin letters, digits and _ — e.g. phone or company.',
     'dpick.favorites': 'Favourites',
+    'dpick.aiSwitch': 'Title and text:',
+    'dpick.fromAi': 'from the AI (step {n})',
+    'dpick.fromItem': 'from the item, no AI',
     'dpick.favorite': 'Add to favourites',
     'dpick.unfavorite': 'Remove from favourites',
     'fe.processed':

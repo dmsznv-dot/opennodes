@@ -127,7 +127,8 @@ export function parseRssXml(xml: string): RssFeedItem[] {
     const rawDescription = tag(block, 'description') ?? tag(block, 'content:encoded') ?? '';
     const description = feedText(rawDescription, { stripTags: true });
     const pubDate = feedText(tag(block, 'pubDate')) || new Date().toISOString();
-    const image = itemImage(block, rawDescription);
+    // The picture is often only in the full content, not in the short description.
+    const image = itemImage(block, `${rawDescription} ${tag(block, 'content:encoded') ?? ''}`);
     items.push({ guid, title, link, description, pubDate, ...(image && { image }) });
   }
 
@@ -147,7 +148,8 @@ export function parseRssXml(xml: string): RssFeedItem[] {
       const description = feedText(rawDescription, { stripTags: true });
       const pubDate =
         feedText(tag(block, 'updated') ?? tag(block, 'published')) || new Date().toISOString();
-      const image = itemImage(block, rawDescription);
+      // Atom feeds put the picture into <content> next to a plain-text <summary>.
+      const image = itemImage(block, `${rawDescription} ${tag(block, 'content') ?? ''}`);
       items.push({ guid, title, link, description, pubDate, ...(image && { image }) });
     }
   }

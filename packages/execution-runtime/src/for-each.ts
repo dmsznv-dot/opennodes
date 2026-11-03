@@ -71,6 +71,24 @@ export function splitResult(text: string): { resultTitle: string; resultBody: st
   return { resultTitle: title, resultBody: rest };
 }
 
+/**
+ * An item after a step worked on it: the item's own fields, the step's `result`, and what a
+ * post needs — `postTitle` (the step's title line, else the item's own title) and
+ * `postText` (the step's text without that title line). A next step keeps going per item
+ * with everything in one place: the picture and link of the item, the words of the step.
+ */
+export function postFields(item: unknown, result: string): Record<string, unknown> {
+  const base = isObject(item) ? item : { value: item };
+  const parts = splitResult(result);
+  return {
+    ...base,
+    result,
+    ...parts,
+    postTitle: parts.resultTitle || String(base.postTitle ?? base.title ?? ''),
+    postText: parts.resultTitle ? parts.resultBody : result,
+  };
+}
+
 function asList(value: unknown): unknown[] {
   if (Array.isArray(value)) return value;
   if (typeof value === 'string' && value.trim().startsWith('[')) {
@@ -123,7 +141,11 @@ export function withForEach(
           $index: i,
           index: i,
         };
-        const perItem = evaluator.evaluateObject(template, scope) as Record<string, unknown>;
+        const perItem = {
+          ...(evaluator.evaluateObject(template, scope) as Record<string, unknown>),
+          // Steps may answer differently per item (an AI step puts a title line first).
+          __forEach: true,
+        };
         try {
           const res = await inner.execute(
             { ...node, data: { ...node.data, config: template } },
@@ -147,11 +169,9 @@ export function withForEach(
           count: outputs.length,
           total: all.length,
           skipped: all.length - items.length,
-          items: items.slice(0, outputs.length).map((item, i) => ({
-            ...(isObject(item) ? item : { value: item }),
-            result: results[i],
-            ...splitResult(results[i] ?? ''),
-          })),
+          items: items
+            .slice(0, outputs.length)
+            .map((item, i) => postFields(item, results[i] ?? '')),
           results: results.join('\n\n'),
           text: results.join('\n\n'),
           outputs,

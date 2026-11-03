@@ -2377,3 +2377,42 @@ textarea.input {
 .rss-memory .btn:disabled {
   opacity: 0.5;
 }
+
+/* “Title and text: from the AI / from the item” switch above ready-made posts */
+.seg {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.seg-label {
+  margin-right: var(--space-2);
+  font-size: 13px;
+  color: var(--text-2);
+}
+.seg-btn {
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.seg-btn.active {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* Chips can be dragged to another place in the text */
+.token-field .token {
+  cursor: grab;
+  touch-action: none;
+}
+.token-field .token.dragging {
+  cursor: grabbing;
+  opacity: 0.45;
+}

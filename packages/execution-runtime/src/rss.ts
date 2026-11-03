@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { and, eq, gt, inArray, or, sql } from 'drizzle-orm';
 import { rssSeenItems, type DatabaseInstance } from '@localflow/db';
+import type { SafeHttpClient } from '@localflow/shared';
 import type { NodeExecutor } from '@localflow/workflow-engine';
 import { summarizeFeed } from './connectors.js';
 
@@ -150,4 +151,71 @@ export async function settleRssItems(
   } else {
     await (db as Db).delete(rssSeenItems).where(mine);
   }
+}
+
+const PAGE_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (compatible; OpenNodes/0.1; +feed reader)',
+  Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.5',
+};
+
+/** The picture a page shows when shared (og:image / twitter:image), absolute. */
+export function pageImage(html: string, pageUrl: string): string | undefined {
+  const raw =
+    html.match(
+      /<meta[^>]+(?:property|name)=["'](?:og:image(?::secure_url)?|twitter:image(?::src)?)["'][^>]*content=["']([^"']+)["']/i
+    )?.[1] ??
+    html.match(
+      /<meta[^>]+content=["']([^"']+)["'][^>]*(?:property|name)=["'](?:og:image|twitter:image(?::src)?)["']/i
+    )?.[1];
+  if (!raw) return undefined;
+  try {
+    return new URL(raw.replace(/&amp;/g, '&'), pageUrl).toString();
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * RSS items without a picture get the one their article page shows when shared — many
+ * feeds carry none. Only the items handed on are looked up (at most 10, in parallel).
+ */
+export function withPageImages(
+  rss: NodeExecutor,
+  http: SafeHttpClient,
+  allowlist: string[] = []
+): NodeExecutor {
+  return {
+    async execute(node, config, step) {
+      const res = await rss.execute(node, config, step);
+      const out = res.output as Record<string, unknown> & {
+        items?: Array<Record<string, unknown>>;
+      };
+      const items = out?.items;
+      if (config.pageImages === false || config.pageImages === 'false' || !items?.length)
+        return res;
+      const missing = items
+        .filter((i) => !i.image && /^https?:\/\//.test(String(i.link ?? '')))
+        .slice(0, 10);
+      if (!missing.length) return res;
+      await Promise.all(
+        missing.map(async (item) => {
+          try {
+            const page = await http.request<unknown>({
+              url: String(item.link),
+              headers: PAGE_HEADERS,
+              timeoutMs: 8_000,
+              allowlist,
+            });
+            if (page.status >= 400 || typeof page.data !== 'string') return;
+            const image = pageImage(page.data.slice(0, 300_000), String(item.link));
+            if (image) item.image = image;
+          } catch {
+            /* a page that does not answer keeps its item without a picture */
+          }
+        })
+      );
+      const { items: _old, ...rest } = out;
+      return { ...res, output: { ...rest, ...summarizeFeed(items) } };
+    },
+  };
 }

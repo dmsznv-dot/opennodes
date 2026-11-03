@@ -105,6 +105,12 @@ const server = http.createServer((req, res) => {
           .join('')}</channel></rss>`
       );
     }
+    if (url.startsWith('/article/')) {
+      res.setHeader('content-type', 'text/html');
+      return res.end(
+        `<html><head><meta property="og:image" content="/img${url.slice(8)}.jpg"></head><body><article><p>Body</p></article></body></html>`
+      );
+    }
     if (url === '/json') return json(200, jsonResponse);
     if (url === '/echo') {
       echoRequests.push({ method: req.method ?? '', headers: req.headers, raw });
@@ -1664,5 +1670,74 @@ describe('posts — formatting, pictures and one post per item', () => {
     (flow[1]!.data.config as Record<string, unknown>).rememberTests = false;
     expect(await titles()).toBe('Запись 1');
     expect(await titles()).toBe('Запись 1');
+  });
+
+  it('RSS items without a picture get the one their article page shows', async () => {
+    reset();
+    feed = [1, 2].map((n) => ({
+      guid: `p${n}`,
+      title: `P${n}`,
+      link: `http://${host}/article/${n}`,
+    }));
+    const r = await testRun(ctx, [
+      trig(),
+      node('rss', 'core.rss', { feedUrl: `http://${host}/feed.xml`, maxItems: 5, onlyNew: false }),
+    ]);
+    const out = r.step('rss').outputPayload;
+    expect(out.items.map((i: any) => i.image)).toEqual([
+      `http://${host}/img/1.jpg`,
+      `http://${host}/img/2.jpg`,
+    ]);
+    expect(out.image).toBe(`http://${host}/img/1.jpg`);
+  });
+
+  it('an AI step per item answers as a post — a title line, then the text', async () => {
+    reset();
+    feed = [{ guid: 'q1', title: 'English title', link: 'https://example.com/q' }];
+    let system = '';
+    modelReply = (b) => {
+      system = b.messages[0].content;
+      return 'Русский заголовок\n\nРусский текст.';
+    };
+    const r = await testRun(ctx, [
+      trig(),
+      node('rss', 'core.rss', { feedUrl: `http://${host}/feed.xml`, maxItems: 5, onlyNew: false }),
+      node(
+        'ai',
+        'ai.process',
+        {
+          forEach: '{{ $nodes.rss.output.items }}',
+          input: '{{ $item.title }}',
+          instruction: 'переведи',
+        },
+        { cred: 'ai' }
+      ),
+      tgSend('tg', {
+        forEach: '{{ $nodes.ai.output.items }}',
+        text: '**{{ $item.postTitle }}**\n\n{{ $item.postText }}',
+      }),
+    ]);
+    expect(r.execution.status, r.execution.errorMessage ?? '').toBe('SUCCEEDED');
+    expect(system).toMatch(/first line is a short title/);
+    expect(tgSent[0]!.body.text).toBe('<b>Русский заголовок</b>\n\nРусский текст.');
+
+    // A model that gives only text: the post keeps the item's own title.
+    reset();
+    feed = [{ guid: 'q2', title: 'Own title', link: 'https://example.com/q2' }];
+    modelReply = () => 'Только текст.';
+    const r2 = await testRun(ctx, [
+      trig(),
+      node('rss', 'core.rss', { feedUrl: `http://${host}/feed.xml`, maxItems: 5, onlyNew: false }),
+      node(
+        'ai',
+        'ai.process',
+        { forEach: '{{ $nodes.rss.output.items }}', input: '{{ $item.title }}', instruction: 'x' },
+        { cred: 'ai' }
+      ),
+    ]);
+    expect(r2.step('ai').outputPayload.items[0]).toMatchObject({
+      postTitle: 'Own title',
+      postText: 'Только текст.',
+    });
   });
 });

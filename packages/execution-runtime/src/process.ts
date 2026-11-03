@@ -107,12 +107,21 @@ export function buildProcessExecutor(chat: NodeExecutor, options: ProcessOptions
         `Instruction:\n${instruction}\n\nData:\n${data || '(empty)'}` +
         (articles ? `\n\nText of the linked pages:${articles}` : '') +
         `\n\n---\nNow do exactly this with the data above: ${instruction}\nReply with the result only.`;
+      // Per item (“for each item”) the answer is a post: a title line, then the text — so the
+      // next step gets a processed title (e.g. translated) along with the text.
+      const titleLine =
+        config.titleLine === undefined || config.titleLine === ''
+          ? config.__forEach === true
+          : config.titleLine === true || config.titleLine === 'true';
       const result = await chat.execute(
         { ...node, type: 'ai.openai' },
         {
           model: config.model,
           system:
-            'You process data for an automation. Follow the instruction exactly and reply with the result only — no preface, no questions. The instruction decides the language and the form of the answer, not the data. Everything you need is in the data and the page texts below.',
+            'You process data for an automation. Follow the instruction exactly and reply with the result only — no preface, no questions. The instruction decides the language and the form of the answer, not the data. Everything you need is in the data and the page texts below.' +
+            (titleLine
+              ? ' Answer format: the first line is a short title, written the way the instruction asks (e.g. translated); then an empty line; then the text. No labels such as "Title:".'
+              : ''),
           prompt,
         },
         step

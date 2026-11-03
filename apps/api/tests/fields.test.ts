@@ -26,6 +26,8 @@ const EFFECT_ONLY: Record<string, string> = {
   'text.format.pattern': 'only for "Find by pattern" (shown only then)',
   'http.request.timeoutMs': 'the request gives up after it (audit.test)',
   'text.format.find': 'replaced away: "MK_replaceWith" stands in its place',
+  'ai.process.titleLine': 'per item only: the AI is asked for a title line (audit.test)',
+  'rss.read.pageImages': 'off: items without a picture are not looked up (audit.test)',
 };
 /** A choice other than the default that makes the rest of the fields count. */
 const OVERRIDES: Record<string, Record<string, unknown>> = {

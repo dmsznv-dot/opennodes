@@ -25,7 +25,7 @@ import { buildConnectorExecutors, notImplementedNodeTypes } from './connectors.j
 const TRIGGER_TYPES = ['trigger.manual', 'trigger.webhook', 'trigger.cron', 'trigger.telegram'];
 import { buildDelayExecutors } from './delay.js';
 import { buildLogicExecutors } from './logic.js';
-import { settleRssItems, withOnlyNewItems } from './rss.js';
+import { settleRssItems, withOnlyNewItems, withPageImages } from './rss.js';
 import { buildAgentExecutor } from './agent.js';
 import { buildExtraExecutors } from './extras.js';
 import {
@@ -117,7 +117,11 @@ export class ExecutionRuntime {
         resolveCredential: createCredentialResolver(options.db, this.encryption),
       })
     );
-    connectors['core.rss'] = withOnlyNewItems(connectors['core.rss']!, options.db);
+    connectors['core.rss'] = withPageImages(
+      withOnlyNewItems(connectors['core.rss']!, options.db),
+      new SafeHttpClient(),
+      options.ssrfAllowlist
+    );
     connectors['ai.agent'] = buildAgentExecutor({
       httpClient: new SafeHttpClient(),
       ssrfAllowlist: options.ssrfAllowlist,
