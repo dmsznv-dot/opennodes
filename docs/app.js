@@ -889,7 +889,7 @@ function createFromTemplate(tpl) {
 }
 
 function createBlank() {
-  const a = newAutomation(getLocale() === 'ru' ? 'Новая автоматизация' : 'New automation');
+  const a = newAutomation(getLocale() === 'ru' ? 'Новый сценарий' : 'New automation');
   go(`#/editor/${a.id}`);
 }
 
@@ -2844,7 +2844,8 @@ function nodePanel(a, node) {
             )
           )
         : label;
-    if (f.type === 'boolean') return h('div', { class: 'field field-inline' }, control, label, err);
+    if (f.type === 'boolean')
+      return h('div', { class: 'field field-inline', 'data-field': f.key }, control, label, err);
     const help = f.help ? h('div', { class: 'small muted' }, L(f.help)) : null;
     if (f.type === 'forEach') {
       forEachHelp = () => {
@@ -2878,7 +2879,7 @@ function nodePanel(a, node) {
       };
       forEachHelp();
     }
-    return h('div', { class: 'field' }, labelRow, control, help, preview, err);
+    return h('div', { class: 'field', 'data-field': f.key }, labelRow, control, help, preview, err);
   };
   let forEachHelp = () => {};
   const hasUpstream = ancestorsOf(a, node.id).size > 0;
@@ -2951,6 +2952,21 @@ function nodePanel(a, node) {
   const resultBox = h('div', { class: 'panel-result' });
   if (ui.panelResult) resultBox.append(ui.panelResult);
   queueMicrotask(refreshPreviews); // previews read other fields (the picture), so after all exist
+  // Fields that matter only for some choices (“N characters” only for “Cut”) hide otherwise.
+  const applyShowIf = () => {
+    for (const f of fields) {
+      if (!f.showIf) continue;
+      const box = document.querySelector(`.panel [data-field="${f.key}"]`);
+      if (!box) continue;
+      box.hidden = !Object.entries(f.showIf).every(([dep, values]) => {
+        const c = controls.get(dep);
+        if (!c) return true;
+        const v = c.type === 'checkbox' ? c.checked : c.value;
+        return values.includes(v);
+      });
+    }
+  };
+  queueMicrotask(applyShowIf);
 
   const saveNode = () => {
     const raw = {};
@@ -3051,16 +3067,19 @@ function nodePanel(a, node) {
       : null,
     act?.planned ? h('div', { class: 'alert error' }, t('err.planned')) : null,
     accountBlock,
-    live.isLive && node.action === 'webhook.receive'
+    node.action === 'webhook.receive'
       ? h(
           'div',
           { class: 'field' },
           h('div', { class: 'field-label' }, t('ed.webhookUrl')),
-          h('code', { class: 'small webhook-url' }, live.webhookUrl(a)),
-          h('div', { class: 'small muted' }, t('ed.webhookUrlHint'))
+          live.isLive
+            ? h('code', { class: 'small webhook-url' }, live.webhookUrl(a))
+            : h('div', { class: 'small' }, t('ed.webhookUrlDemo')),
+          h('div', { class: 'small muted' }, live.isLive ? t('ed.webhookUrlHint') : null),
+          h('div', { class: 'small muted' }, t('ed.webhookFields'))
         )
       : null,
-    h('h3', { class: 'panel-section' }, t('panel.basic')),
+    basic.length ? h('h3', { class: 'panel-section' }, t('panel.basic')) : null,
     basic.map(fieldControl),
     act?.type === 'core.rss' ? rssMemoryBlock(a, node) : null,
     dataBlock,
@@ -3145,6 +3164,7 @@ function nodePanel(a, node) {
       )
     )
   );
+  panel.addEventListener('change', applyShowIf);
   return h(
     'div',
     { class: 'panel-wrap' },
@@ -3307,7 +3327,7 @@ function describeToken(a, expr) {
       broken: true,
     };
   }
-  const name = out ? L(out.label) : p.key;
+  const name = out ? L(out.label) : t('tok.field', { key: p.key });
   const sample = tokenSample(a, p);
   return {
     icon: serviceIcon(ACTIONS[node.action]?.service, 'xs'),
@@ -3331,12 +3351,25 @@ function openDataPicker(a, node, field, opts = {}) {
   const replace = opts.replace ?? null;
   const target = targetInfo(node, fieldKey);
   const outputs = lastOutputs(a);
-  const cats = tagCategories(a, node, { fieldKey, forEach: ui.panelForEach?.() ?? '' }).map(
-    (c) => ({
-      ...c,
-      entries: replace ? c.entries.filter((e) => e.kind === 'data') : c.entries,
-    })
-  );
+  // Keys the steps really gave in the latest run: a form's own fields, for instance.
+  const seenKeys = {};
+  for (const [id, out] of outputs) {
+    const n = a.nodes.find((x) => x.id === id);
+    const data = ACTIONS[n?.action]?.kind === 'trigger' ? (out?.payload ?? out) : out;
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+      seenKeys[id] = Object.keys(data).filter((k) => /^\w+$/.test(k) && k !== 'simulated');
+    }
+  }
+  const cats = tagCategories(a, node, {
+    fieldKey,
+    forEach: ui.panelForEach?.() ?? '',
+    seenKeys,
+  }).map((c) => ({
+    ...c,
+    entries: replace
+      ? c.entries.filter((e) => e.kind === 'data' || e.kind === 'custom')
+      : c.entries,
+  }));
   const howto = { id: 'howto', title: { ru: t('dpick.howto'), en: t('dpick.howto') }, icon: '?' };
   // Favourites (★ on a card) are kept for every automation; shown first when there are some.
   const favs = new Set(store.settings.favoriteTags ?? []);
@@ -3374,6 +3407,7 @@ function openDataPicker(a, node, field, opts = {}) {
   const entryTitle = (e) => (e.i18nKey ? t(e.i18nKey) : L(e.title));
   const sampleOf = (e) => {
     if (e.kind === 'snippet') return e.template;
+    if (e.kind === 'custom') return L(e.hint);
     if (e.kind === 'data') {
       const p = parseExpr(e.expr);
       const v = p ? tokenSample(a, p, outputs) : undefined;
@@ -3383,6 +3417,25 @@ function openDataPicker(a, node, field, opts = {}) {
   };
 
   const pick = (e) => {
+    if (e.kind === 'custom') {
+      // A field the form sends that the editor does not know: by its name.
+      askText(
+        {
+          title: entryTitle(e),
+          label: t('tok.fieldName'),
+          help: t('tok.fieldNameHelp'),
+          value: '',
+        },
+        (name) => {
+          if (!/^\w+$/.test(name)) return false;
+          const expr = buildExpr({ scope: 'trigger', nodeId: null, key: name });
+          if (replace) field.replaceToken(replace, expr);
+          else field.insertToken(expr);
+          ui.panelChanged?.();
+        }
+      );
+      return;
+    }
     closeModal();
     if (replace) {
       field.replaceToken(replace, e.expr);
@@ -3579,38 +3632,58 @@ function openDataPicker(a, node, field, opts = {}) {
   search.focus();
 }
 
-/** Asks for the words a link shows: “Read more”, “Source”… */
-function askLinkText(onOk) {
-  const input = h('input', {
-    class: 'input',
-    value: t('tok.linkDefault'),
-    'aria-label': t('tok.linkWords'),
-  });
-  const quick = [t('tok.linkDefault'), t('tok.linkMore'), t('tok.linkSource'), '🔗'].map((w) =>
-    h('button', { type: 'button', class: 'btn btn-small', onclick: () => (input.value = w) }, w)
-  );
+/** A small question window: one text field, OK and Cancel. `onOk` returns false to stay open. */
+function askText({ title, label, help, value = '', quick = [] }, onOk) {
+  const input = h('input', { class: 'input', value, 'aria-label': label });
   const ok = () => {
-    const words = input.value.replace(/[[\]]/g, '').trim();
-    if (!words) return false;
-    onOk(words);
+    const v = input.value.trim();
+    if (!v) return false;
+    return onOk(v);
   };
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && ok() !== false) closeModal();
   });
   openModal({
-    title: t('tok.asLink'),
+    title,
     body: [
-      h('p', { class: 'small muted' }, t('tok.asLinkHelp')),
-      h('label', { class: 'field-label' }, t('tok.linkWords')),
+      help ? h('p', { class: 'small muted' }, help) : null,
+      h('label', { class: 'field-label' }, label),
       input,
-      h('div', { class: 'row-gap', style: { flexWrap: 'wrap' } }, quick),
+      quick.length
+        ? h(
+            'div',
+            { class: 'row-gap', style: { flexWrap: 'wrap' } },
+            quick.map((w) =>
+              h(
+                'button',
+                { type: 'button', class: 'btn btn-small', onclick: () => (input.value = w) },
+                w
+              )
+            )
+          )
+        : null,
     ],
-    actions: [
-      { label: t('common.cancel') },
-      { label: t('tok.asLinkOk'), primary: true, onClick: ok },
-    ],
+    actions: [{ label: t('common.cancel') }, { label: t('common.ok'), primary: true, onClick: ok }],
   });
   input.select();
+}
+
+/** Asks for the words a link shows: “Read more”, “Source”… */
+function askLinkText(onOk) {
+  askText(
+    {
+      title: t('tok.asLink'),
+      label: t('tok.linkWords'),
+      help: t('tok.asLinkHelp'),
+      value: t('tok.linkDefault'),
+      quick: [t('tok.linkDefault'), t('tok.linkMore'), t('tok.linkSource'), '🔗'],
+    },
+    (v) => {
+      const words = v.replace(/[[\]]/g, '').trim();
+      if (!words) return false;
+      onOk(words);
+    }
+  );
 }
 
 /** Click on a chip: format it, replace it with other data, or remove it. */

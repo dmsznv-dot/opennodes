@@ -188,7 +188,7 @@ export const SERVICES = {
     ),
   },
   ai: {
-    name: tr('AI (OpenAI-совместимый)', 'AI (OpenAI-compatible)'),
+    name: tr('ИИ (OpenAI-совместимый)', 'AI (OpenAI-compatible)'),
     icon: 'AI',
     color: '#10a37f',
     auth: true,
@@ -333,11 +333,6 @@ export const SERVICE_ORDER = [
   'discord',
 ];
 
-const MODEL_OPTIONS = ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini'].map((m) => ({
-  value: m,
-  label: m,
-}));
-
 export const ACTIONS = {
   // ── Triggers ────────────────────────────────────────────────────────────
   'manual.run': {
@@ -406,13 +401,14 @@ export const ACTIONS = {
       },
       {
         key: 'time',
+        showIf: { every: ['daily', 'weekly'] },
         type: 'text',
         required: false,
         basic: true,
         label: tr('Время', 'Time'),
         default: '09:00',
         placeholder: '09:00',
-        help: tr('Для ежедневного и еженедельного запуска.', 'For daily and weekly runs.'),
+        help: tr('В выбранном часовом поясе.', 'In the chosen time zone.'),
       },
       {
         key: 'timezone',
@@ -436,7 +432,11 @@ export const ACTIONS = {
       },
     ],
     outputs: [
-      { key: 'firedAt', label: tr('Время запуска', 'Run time'), example: '2026-11-02T09:00:00Z' },
+      {
+        key: 'firedAt',
+        label: tr('Время запуска (UTC, для программ)', 'Run time (UTC, for programs)'),
+        example: '2026-11-02T09:00:00Z',
+      },
     ],
     simulate: (c) => ({
       output: { firedAt: new Date().toISOString(), timezone: c.timezone },
@@ -475,13 +475,37 @@ export const ACTIONS = {
         example: tr('Когда вы работаете?', 'When are you open?'),
       },
       { key: 'fromName', label: tr('Имя отправителя', 'Sender name'), example: 'Анна' },
-      { key: 'chatId', label: tr('Чат отправителя', 'Sender chat'), example: '123456789' },
+      {
+        key: 'username',
+        label: tr('@username отправителя', 'Sender @username'),
+        example: 'anna_k',
+      },
+      {
+        key: 'chatId',
+        label: tr('ID чата (куда отвечать)', 'Chat ID (where to reply)'),
+        example: '123456789',
+      },
+      {
+        key: 'command',
+        label: tr('Команда без «/» (start, ask…)', 'Command without “/”'),
+        example: 'ask',
+      },
+      {
+        key: 'args',
+        label: tr('Текст после команды', 'Text after the command'),
+        example: tr('когда доставка?', 'when is delivery?'),
+      },
+      { key: 'messageId', label: tr('ID сообщения', 'Message ID'), example: '42' },
     ],
     simulate: () => ({
       output: {
         text: L(tr('Когда вы работаете в выходные?', 'When are you open on weekends?')),
         fromName: L(tr('Анна', 'Anna')),
+        username: 'anna_k',
         chatId: '123456789',
+        command: null,
+        args: '',
+        messageId: 42,
       },
       summary: tr('Пример входящего сообщения от «Анна»', 'Sample incoming message from “Anna”'),
     }),
@@ -492,28 +516,14 @@ export const ACTIONS = {
     kind: 'trigger',
     name: tr('Отправлена форма / входящий вебхук', 'Form submitted / incoming webhook'),
     desc: tr(
-      'Когда сайт или сервис присылает данные на ваш адрес.',
-      'When a site or service sends data to your URL.'
+      'Когда сайт или сервис присылает данные на адрес этого сценария (адрес — в настройках шага).',
+      'When a site or service sends data to this automation’s address (shown in the step).'
     ),
     keywords: 'форма заявка вебхук сайт webhook form submit lead incoming',
-    fields: [
-      {
-        key: 'path',
-        type: 'text',
-        required: true,
-        basic: true,
-        label: tr('Адрес приёма', 'Receiving path'),
-        default: '/hooks/lead-form',
-      },
-      {
-        key: 'verifySignature',
-        type: 'boolean',
-        required: false,
-        basic: false,
-        label: tr('Проверять подпись HMAC', 'Verify HMAC signature'),
-        default: false,
-      },
-    ],
+    // The address is made by the server (/api/v1/webhooks/<id>) and shown on the step in the
+    // installed app; a form may send any fields — “+ Data” offers them after the first run.
+    fields: [],
+    customFields: true,
     outputs: [
       { key: 'name', label: tr('Имя из формы', 'Name from form'), example: 'Иван' },
       { key: 'email', label: tr('Email из формы', 'Email from form'), example: 'ivan@example.com' },
@@ -541,7 +551,7 @@ export const ACTIONS = {
     service: 'ai',
     kind: 'action',
     forEach: true,
-    name: tr('AI: ответить на текст', 'AI: answer a text'),
+    name: tr('ИИ: ответить на текст', 'AI: answer a text'),
     desc: tr(
       'Языковая модель пишет ответ по вашей инструкции.',
       'A language model writes an answer following your instructions.'
@@ -555,20 +565,38 @@ export const ACTIONS = {
         required: true,
         basic: true,
         acceptsData: true,
-        label: tr('Что сделать с текстом', 'What to do with the text'),
+        label: tr('Задание для ИИ', 'Task for the AI'),
         placeholder: tr(
-          'Ответь вежливо и кратко на вопрос клиента',
-          'Answer the customer briefly and politely'
+          'Ответь вежливо и кратко на вопрос клиента: (вставьте текст кнопкой «+ Данные»)',
+          'Answer the customer briefly and politely: (insert the text with “+ Data”)'
+        ),
+        help: tr(
+          'Напишите, что сделать, и вставьте данные, с которыми работать, — кнопкой «+ Данные».',
+          'Say what to do and insert the data to work on with “+ Data”.'
+        ),
+      },
+      {
+        key: 'system',
+        type: 'textarea',
+        required: false,
+        basic: false,
+        label: tr('Роль и стиль ответа', 'Role and style'),
+        placeholder: tr(
+          'Ты — вежливый менеджер магазина. Отвечай по-русски, коротко.',
+          'You are a polite shop assistant. Answer briefly.'
         ),
       },
       {
         key: 'model',
-        type: 'select',
-        required: true,
-        basic: true,
+        type: 'text',
+        required: false,
+        basic: false,
         label: tr('Модель', 'Model'),
-        default: 'gpt-4o-mini',
-        options: MODEL_OPTIONS,
+        placeholder: 'gpt-4o-mini',
+        help: tr(
+          'Пусто — модель по умолчанию из подключения ИИ (для локальной модели оставьте пустым).',
+          'Empty — the default model of the AI connection (leave empty for a local model).'
+        ),
       },
       {
         key: 'temperature',
@@ -584,12 +612,16 @@ export const ACTIONS = {
         required: false,
         basic: false,
         label: tr('Максимальная длина ответа (токены)', 'Max answer length (tokens)'),
+        help: tr(
+          'Примерно 1 токен — 3–4 буквы. Пусто — без ограничения.',
+          'Roughly 1 token is 3–4 letters. Empty — no limit.'
+        ),
       },
     ],
     outputs: [
       {
         key: 'text',
-        label: tr('Ответ AI', 'AI answer'),
+        label: tr('Ответ ИИ', 'AI answer'),
         example: tr('Мы работаем в субботу с 10 до 18.', 'We are open Saturday 10–6.'),
       },
     ],
@@ -597,14 +629,14 @@ export const ACTIONS = {
       output: {
         text: L(
           tr(
-            `[Пример ответа модели ${c.model}] на запрос «${clip(c.prompt, 60)}»`,
-            `[Sample ${c.model} answer] to “${clip(c.prompt, 60)}”`
+            `[Пример ответа модели ${c.model || 'по умолчанию'}] на запрос «${clip(c.prompt, 60)}»`,
+            `[Sample ${c.model || 'default'} model answer] to “${clip(c.prompt, 60)}”`
           )
         ),
       },
       summary: tr(
-        `Модель ${c.model} вернула бы ответ на: «${clip(c.prompt, 60)}»`,
-        `Model ${c.model} would answer: “${clip(c.prompt, 60)}”`
+        `Модель ${c.model || 'по умолчанию'} вернула бы ответ на: «${clip(c.prompt, 60)}»`,
+        `Model ${c.model || '(default)'} would answer: “${clip(c.prompt, 60)}”`
       ),
     }),
   },
@@ -613,7 +645,7 @@ export const ACTIONS = {
     service: 'ai',
     kind: 'action',
     forEach: true,
-    name: tr('AI: определить категорию', 'AI: classify text'),
+    name: tr('ИИ: определить категорию', 'AI: classify text'),
     desc: tr(
       'Относит текст к одной из ваших категорий.',
       'Puts a text into one of your categories.'
@@ -638,12 +670,15 @@ export const ACTIONS = {
       },
       {
         key: 'model',
-        type: 'select',
-        required: true,
+        type: 'text',
+        required: false,
         basic: false,
         label: tr('Модель', 'Model'),
-        default: 'gpt-4o-mini',
-        options: MODEL_OPTIONS,
+        placeholder: 'gpt-4o-mini',
+        help: tr(
+          'Пусто — модель по умолчанию из подключения ИИ (для локальной модели оставьте пустым).',
+          'Empty — the default model of the AI connection (leave empty for a local model).'
+        ),
       },
     ],
     outputs: [
@@ -665,7 +700,7 @@ export const ACTIONS = {
     service: 'ai',
     kind: 'action',
     forEach: true,
-    name: tr('AI: обработать данные по инструкции', 'AI: process data by instruction'),
+    name: tr('ИИ: обработать данные по инструкции', 'AI: process data by instruction'),
     desc: tr(
       'Данные из прошлых шагов + что с ними сделать: пересказать, перевести, оформить. Может прочитать статьи по ссылкам.',
       'Data from earlier steps + what to do with it: summarize, translate, format. Can read the linked articles.'
@@ -680,7 +715,10 @@ export const ACTIONS = {
         basic: true,
         acceptsData: true,
         label: tr('Данные', 'Data'),
-        placeholder: tr('{Шаг 2: Список: заголовок — ссылка}', '{Step 2: List: title — link}'),
+        placeholder: tr(
+          'Нажмите «+ Данные» и выберите, что обработать',
+          'Press “+ Data” and choose what to process'
+        ),
         help: tr(
           'Что обрабатывать: вставьте данные прошлых шагов кнопками ниже.',
           'What to process: insert data from earlier steps with the buttons below.'
@@ -716,6 +754,7 @@ export const ACTIONS = {
       },
       {
         key: 'maxLinks',
+        showIf: { readLinks: [true] },
         type: 'number',
         required: false,
         basic: false,
@@ -730,7 +769,7 @@ export const ACTIONS = {
         label: tr('Модель', 'Model'),
         placeholder: 'gpt-4o-mini',
         help: tr(
-          'Пусто — модель по умолчанию из подключения AI.',
+          'Пусто — модель по умолчанию из подключения ИИ.',
           'Empty — the default model of the AI connection.'
         ),
       },
@@ -756,7 +795,7 @@ export const ACTIONS = {
         sources: [],
       },
       summary: tr(
-        `AI выполнил бы «${clip(c.instruction, 60)}»${c.readLinks ? ', прочитав статьи по ссылкам' : ''}. В демо модель не вызывается.`,
+        `ИИ выполнил бы «${clip(c.instruction, 60)}»${c.readLinks ? ', прочитав статьи по ссылкам' : ''}. В демо модель не вызывается.`,
         `AI would do “${clip(c.instruction, 60)}”${c.readLinks ? ', reading the linked articles' : ''}. The model is not called in the demo.`
       ),
     }),
@@ -766,7 +805,7 @@ export const ACTIONS = {
     service: 'ai',
     kind: 'action',
     external: true,
-    name: tr('AI-агент с инструментами (MCP)', 'AI agent with tools (MCP)'),
+    name: tr('ИИ-агент с инструментами (MCP)', 'AI agent with tools (MCP)'),
     desc: tr(
       'Модель сама выполняет задачу через инструменты MCP-серверов: Google Документы, Notion, GitHub…',
       'The model does the task itself with the tools of MCP servers: Google Docs, Notion, GitHub…'
@@ -782,8 +821,8 @@ export const ACTIONS = {
         acceptsData: true,
         label: tr('Задача', 'Task'),
         placeholder: tr(
-          'Создай Google-документ «Итоги дня» и запиши туда: {Шаг 1: Текст}',
-          'Create a Google Doc “Daily notes” and write into it: {Step 1: Text}'
+          'Создай Google-документ «Итоги дня» и запиши туда текст (вставьте его кнопкой «+ Данные»)',
+          'Create a Google Doc “Daily notes” and write the text into it (insert it with “+ Data”)'
         ),
       },
       {
@@ -802,7 +841,7 @@ export const ACTIONS = {
         label: tr('Модель', 'Model'),
         placeholder: 'gpt-4o-mini',
         help: tr(
-          'Нужна модель с вызовом инструментов. Пусто — модель по умолчанию из подключения AI.',
+          'Нужна модель с вызовом инструментов. Пусто — модель по умолчанию из подключения ИИ.',
           'Needs a model with tool calling. Empty — the default model of the AI connection.'
         ),
       },
@@ -866,7 +905,7 @@ export const ACTIONS = {
     forEach: true,
     name: tr('Локальная модель: ответить на текст', 'Local model: answer a text'),
     desc: tr(
-      'То же, что AI-ответ, но на вашем сервере через Ollama.',
+      'То же, что ИИ-ответ, но на вашем сервере через Ollama.',
       'Like the AI answer, but on your own server via Ollama.'
     ),
     keywords: 'ollama локальная модель llama ai ии local model offline',
@@ -877,7 +916,7 @@ export const ACTIONS = {
         required: true,
         basic: true,
         acceptsData: true,
-        label: tr('Что сделать с текстом', 'What to do with the text'),
+        label: tr('Задание для модели', 'Task for the model'),
       },
       {
         key: 'model',
@@ -893,7 +932,11 @@ export const ACTIONS = {
         required: true,
         basic: false,
         label: tr('Адрес Ollama', 'Ollama URL'),
-        default: 'http://ollama:11434',
+        default: 'http://localhost:11434',
+        help: tr(
+          'Где запущена Ollama. Из Docker — http://host.docker.internal:11434. Адрес нужно разрешить в SSRF_ALLOWLIST сервера.',
+          'Where Ollama runs. From Docker — http://host.docker.internal:11434. Allow the address in the server’s SSRF_ALLOWLIST.'
+        ),
       },
     ],
     outputs: [
@@ -1200,7 +1243,7 @@ export const ACTIONS = {
         basic: false,
         label: tr('Только новые с прошлого запуска', 'Only items new since last run'),
         help: tr(
-          'Каждая запись уйдёт дальше один раз. Если новых нет — следующие шаги не выполнятся. Проверка из редактора записи не «съедает».',
+          'Каждая запись уйдёт дальше один раз. Если новых нет — следующие шаги не выполнятся (запуск при этом успешный).',
           'Each item goes on once. With nothing new the next steps do not run. Tests from the editor do not use items up.'
         ),
         default: true,
@@ -1364,6 +1407,7 @@ export const ACTIONS = {
         type: 'text',
         required: false,
         basic: true,
+        acceptsData: true,
         label: tr('С чем сравнить', 'Compare with'),
       },
     ],
@@ -1478,10 +1522,11 @@ export const ACTIONS = {
       },
       {
         key: 'maxLength',
+        showIf: { operation: ['truncate'] },
         type: 'number',
         required: false,
         basic: true,
-        label: tr('N символов (для «Обрезать»)', 'N characters (for “Cut”)'),
+        label: tr('Сколько символов оставить', 'How many characters to keep'),
         default: 1000,
         help: tr(
           'Telegram: сообщение до 4096, подпись к фото до 1024.',
@@ -1490,6 +1535,7 @@ export const ACTIONS = {
       },
       {
         key: 'find',
+        showIf: { operation: ['replace'] },
         type: 'text',
         required: false,
         basic: false,
@@ -1497,6 +1543,7 @@ export const ACTIONS = {
       },
       {
         key: 'replaceWith',
+        showIf: { operation: ['replace'] },
         type: 'text',
         required: false,
         basic: false,
@@ -1504,6 +1551,7 @@ export const ACTIONS = {
       },
       {
         key: 'pattern',
+        showIf: { operation: ['extractRegex'] },
         type: 'text',
         required: false,
         basic: false,
@@ -1578,7 +1626,7 @@ export const ACTIONS = {
         required: true,
         basic: true,
         acceptsData: true,
-        label: 'URL',
+        label: tr('Адрес запроса (URL)', 'Request URL'),
         placeholder: 'https://api.example.com/v1/status',
       },
       {
@@ -1600,6 +1648,7 @@ export const ACTIONS = {
       },
       {
         key: 'body',
+        showIf: { method: ['POST', 'PUT', 'PATCH', 'DELETE'] },
         type: 'json',
         required: false,
         basic: false,
@@ -1642,7 +1691,7 @@ export const ACTIONS = {
         type: 'text',
         required: true,
         basic: true,
-        label: 'URL',
+        label: tr('Адрес вебхука (URL)', 'Webhook URL'),
         placeholder: 'https://hooks.example.com/notify',
       },
       {
@@ -1874,9 +1923,9 @@ export const TEMPLATES = [
     category: 'ai',
     safe: true,
     recommended: true,
-    name: tr('Попробовать AI-ответ', 'Try an AI answer'),
+    name: tr('Попробовать ИИ-ответ', 'Try an AI answer'),
     desc: tr(
-      'Тестовый текст → AI → результат на экране. Ничего не отправляет наружу — идеально для первого раза.',
+      'Тестовый текст → ИИ → результат на экране. Ничего не отправляет наружу — идеально для первого раза.',
       'Test text → AI → result on screen. Sends nothing outside — perfect for a first try.'
     ),
     sampleInput: tr(
@@ -1913,9 +1962,9 @@ export const TEMPLATES = [
   {
     id: 'tg_ai_reply',
     category: 'ai',
-    name: tr('Telegram → AI → ответ пользователю', 'Telegram → AI → reply to user'),
+    name: tr('Telegram → ИИ → ответ пользователю', 'Telegram → AI → reply to user'),
     desc: tr(
-      'Бот отвечает на сообщения клиентов с помощью AI.',
+      'Бот отвечает на сообщения клиентов с помощью ИИ.',
       'Your bot answers customer messages with AI.'
     ),
     sampleInput: tr(
@@ -2017,7 +2066,7 @@ export const TEMPLATES = [
     id: 'rss_ai_channel',
     category: 'notifications',
     recommended: false,
-    name: tr('RSS → AI → пост в Telegram-канал', 'RSS → AI → post to a Telegram channel'),
+    name: tr('RSS → ИИ → пост в Telegram-канал', 'RSS → AI → post to a Telegram channel'),
     desc: tr(
       'Новые записи ленты превращаются в короткий пост для вашего канала — каждая один раз.',
       'New feed items become a short post in your channel — each one only once.'
@@ -2199,7 +2248,7 @@ export const TEMPLATES = [
   {
     id: 'server_health_ollama',
     category: 'notifications',
-    name: tr('Мониторинг сервера → локальный AI → тревога', 'Server check → local AI → alert'),
+    name: tr('Мониторинг сервера → локальный ИИ → тревога', 'Server check → local AI → alert'),
     desc: tr(
       'Проверяет сервер, локальная модель объясняет проблему, дежурный получает сообщение.',
       'Checks a server, a local model explains the problem, the on-call engineer gets a message.'
@@ -2294,18 +2343,26 @@ export const TEMPLATES = [
       'A row in payments and an email “Payment received”.'
     ),
     limitations: tr(
-      'Нужен доступ к PostgreSQL и проверка подписи вебхука.',
-      'Needs PostgreSQL access and webhook signature verification.'
+      'Нужен доступ к PostgreSQL. Подпись вебхука (HMAC) задаётся через API: поле webhookSecret сценария.',
+      'Needs PostgreSQL access. The webhook signature (HMAC) is set via the API: the automation’s webhookSecret.'
     ),
     setup: tr(
-      ['Подключите PostgreSQL и почту.', 'Проверьте SQL-запрос.', 'Включите проверку подписи.'],
-      ['Connect PostgreSQL and email.', 'Review the SQL query.', 'Turn on signature verification.']
+      [
+        'Подключите PostgreSQL и почту.',
+        'Проверьте SQL-запрос.',
+        'Отправляйте платежи на адрес вебхука из шага 1.',
+      ],
+      [
+        'Connect PostgreSQL and email.',
+        'Review the SQL query.',
+        'Send payments to the webhook address in step 1.',
+      ]
     ),
     nodes: [
       {
         id: 'trigger',
         action: 'webhook.receive',
-        config: { path: '/hooks/payments', verifySignature: true },
+        config: {},
       },
       {
         id: 'filter_1',

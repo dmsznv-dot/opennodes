@@ -16,6 +16,7 @@ import { buildExpr } from './tokens.js';
 
 const tr = (ru, en) => ({ ru, en });
 const tok = (p) => `{{ ${buildExpr(p)} }}`;
+const lowerFirst = (s) => s.charAt(0).toLowerCase() + s.slice(1);
 
 /** Fields whose text supports formatting: posts and messages (Markdown → each service's own). */
 const RICH_TEXT = {
@@ -587,7 +588,7 @@ const EMOJI = [
  * `{ id, kind: 'data'|'preset'|'snippet', group, title, template, extra?, hint? }` —
  * `template` goes into the field, `extra` fills other fields (the picture).
  */
-export function tagCategories(a, node, { fieldKey, forEach } = {}) {
+export function tagCategories(a, node, { fieldKey, forEach, seenKeys = {} } = {}) {
   const target = targetInfo(node, fieldKey);
   const rich = target.rich;
   const nums = stepNumbers(a);
@@ -693,6 +694,12 @@ export function tagCategories(a, node, { fieldKey, forEach } = {}) {
         { key: 'count', label: tr('Сколько раз выполнен', 'How many times it ran'), example: '3' }
       );
     }
+    // Fields the step really gave in the latest run (a form's own fields), after the known ones.
+    for (const key of seenKeys[u.id] ?? []) {
+      if (!outs.some((o) => o.key === key)) {
+        outs.push({ key, label: tr(`Поле «${key}»`, `Field “${key}”`), example: '' });
+      }
+    }
     const data = outs
       .filter((o) => !o.list)
       .map((o) => ({
@@ -730,8 +737,8 @@ export function tagCategories(a, node, { fieldKey, forEach } = {}) {
         ...textPresets(d.template, d.title, { rich, prefix: d.id }).map((x) => ({
           ...x,
           title: tr(
-            `${d.title.ru}: ${x.title.ru.toLowerCase()}`,
-            `${d.title.en}: ${x.title.en.toLowerCase()}`
+            `${d.title.ru}: ${lowerFirst(x.title.ru)}`,
+            `${d.title.en}: ${lowerFirst(x.title.en)}`
           ),
         }))
       );
@@ -752,6 +759,19 @@ export function tagCategories(a, node, { fieldKey, forEach } = {}) {
           data
             .map((d) => `${rich ? `**${d.title.en}:**` : `${d.title.en}:`} ${d.template}`)
             .join('\n')
+        ),
+      });
+    }
+    if (act?.customFields) {
+      data.push({
+        id: `${u.id}.custom`,
+        kind: 'custom',
+        group: 'data',
+        title: tr('Другое поле формы…', 'Another form field…'),
+        template: '',
+        hint: tr(
+          'Впишите название поля, как его присылает форма',
+          'Type the field name as the form sends it'
         ),
       });
     }
