@@ -197,7 +197,9 @@ describe('@localflow/api — RSS → Telegram channel', () => {
         body: {
           chat_id: '@my_channel',
           photo: 'https://n.example/a.jpg',
-          caption: 'Первая & важная — https://n.example/a\nВторая — https://n.example/b',
+          // Sent as Telegram HTML: "&" is escaped, the reader sees it as typed.
+          caption: 'Первая &amp; важная — https://n.example/a\nВторая — https://n.example/b',
+          parse_mode: 'HTML',
         },
       },
     ]);
@@ -219,6 +221,7 @@ describe('@localflow/api — RSS → Telegram channel', () => {
       body: {
         chat_id: '@my_channel',
         text: 'Свежая — https://n.example/d',
+        parse_mode: 'HTML',
         link_preview_options: { is_disabled: true },
       },
     });

@@ -21,6 +21,8 @@ export const ApiConfigSchema = z.object({
   workerConcurrency: z.coerce.number().int().min(1).max(100).default(4),
   /** Delays up to this long run inline; longer ones suspend the run (WAITING). */
   inlineDelayMaxMs: z.coerce.number().int().min(0).default(5_000),
+  /** Pause between posts of a “for each item” step; unset = per service (Telegram 1.5 s). */
+  forEachPauseMs: z.coerce.number().int().min(0).optional(),
   heartbeatMs: z.coerce.number().int().min(50).default(5_000),
   recoveryStaleMs: z.coerce.number().int().min(100).default(45_000),
   recoveryIntervalMs: z.coerce.number().int().min(100).default(60_000),

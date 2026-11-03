@@ -254,6 +254,40 @@ const DICT = {
     'tok.now.dateRu': 'Сегодня (ДД.ММ.ГГГГ)',
     'tok.now.time': 'Время (ЧЧ:ММ)',
     'tok.now.weekday': 'День недели',
+    'tok.now.dayMonth': 'День и месяц («3 ноября»)',
+    'tok.now.monthName': 'Месяц («ноябрь»)',
+    'tok.now.year': 'Год',
+    'dpick.title': 'Данные для поля «{field}»',
+    'dpick.howto': 'Как это работает',
+    'dpick.howto1':
+      'Тег — это место в тексте, куда при запуске подставятся данные: заголовок новости, ответ ИИ, сегодняшняя дата. В поле он выглядит как плашка с номером шага.',
+    'dpick.howto2':
+      '«Готовые посты» вставляют сразу целый блок: заголовок, текст, ссылку, а если у шага есть картинка — заполняют и её. Вставленное можно править как обычный текст.',
+    'dpick.howto3':
+      'Если в шаге несколько записей (RSS), есть два пути: одним сообщением — блоки «Все записи…», или отдельным постом на каждую — включите «Для каждой записи» в настройках шага, и появятся «Готовые посты — для каждой записи».',
+    'dpick.howto4':
+      '**Жирный**, *курсив*, [ссылка](адрес) и > цитата в тексте и в ответе ИИ станут оформлением в Telegram, Discord, Slack и письме.',
+    'dpick.withImage': '+ картинка',
+    'tok.item': 'Запись',
+    'dpick.fillsImage': 'Заполнит и поле «{field}»',
+    'dpick.data': 'данные',
+    'dpick.block': 'блок',
+    'dpick.count': '{n} вариантов',
+    'dpick.replaceOnly':
+      'Заменить можно только на одно значение — блоки вставляются через «+ Данные».',
+    'fe.label': 'Как выполнить шаг',
+    'fe.once': 'Один раз — одним сообщением',
+    'fe.each': 'Для каждой записи: {list}',
+    'fe.help':
+      'Для каждой записи шаг выполнится отдельно — например, отдельный пост на каждую новость. Поля записи — в «+ Данные» → «Текущая запись».',
+    'fe.nudge':
+      'В шаге {n} несколько записей. Чтобы отправить каждую отдельным постом, выберите «Для каждой записи».',
+    'fe.limit': 'Не больше записей за запуск',
+    'fe.limitHelp':
+      'Остальные будут пропущены (максимум 50). Между постами — пауза, чтобы мессенджер не ограничил бота.',
+    'post.preview': 'Так будет выглядеть пост (пример)',
+    'post.previewEach': 'Пост для первой записи (пример)',
+    'post.previewImage': 'Картинка поста',
     'tok.run.id': 'Номер запуска',
     'tok.run.triggerType': 'Как запущен',
     'tok.format': 'Формат',
@@ -573,6 +607,40 @@ const DICT = {
     'tok.now.dateRu': 'Today (DD.MM.YYYY)',
     'tok.now.time': 'Time (HH:MM)',
     'tok.now.weekday': 'Weekday',
+    'tok.now.dayMonth': 'Day and month (“3 November”)',
+    'tok.now.monthName': 'Month (“November”)',
+    'tok.now.year': 'Year',
+    'dpick.title': 'Data for “{field}”',
+    'dpick.howto': 'How it works',
+    'dpick.howto1':
+      'A tag is a spot in the text that gets data when the automation runs: a story title, an AI answer, today’s date. In the field it looks like a chip with the step number.',
+    'dpick.howto2':
+      '“Ready-made posts” insert a whole block: title, text, link — and fill the picture too when the step has one. What they insert can be edited like any text.',
+    'dpick.howto3':
+      'When a step gives several items (RSS) you can send them in one message — the “All items…” blocks — or one post each: turn on “For each item” in the step settings and “Ready-made posts — for each item” appear.',
+    'dpick.howto4':
+      '**Bold**, *italic*, [link](url) and > quote in the text and in AI answers become formatting in Telegram, Discord, Slack and email.',
+    'dpick.withImage': '+ picture',
+    'tok.item': 'Item',
+    'dpick.fillsImage': 'Also fills “{field}”',
+    'dpick.data': 'data',
+    'dpick.block': 'block',
+    'dpick.count': '{n} options',
+    'dpick.replaceOnly':
+      'A chip can be replaced by one value only — blocks are inserted with “+ Data”.',
+    'fe.label': 'How to run the step',
+    'fe.once': 'Once — one message',
+    'fe.each': 'For each item: {list}',
+    'fe.help':
+      'The step runs separately for each item — e.g. one post per story. The item’s fields are in “+ Data” → “Current item”.',
+    'fe.nudge':
+      'Step {n} gives several items. To send each as its own post, choose “For each item”.',
+    'fe.limit': 'At most items per run',
+    'fe.limitHelp':
+      'The rest are skipped (50 at most). Posts are spaced out so the messenger does not limit the bot.',
+    'post.preview': 'How the post will look (example)',
+    'post.previewEach': 'The post for the first item (example)',
+    'post.previewImage': 'Post picture',
     'tok.run.id': 'Run ID',
     'tok.run.triggerType': 'How it started',
     'tok.format': 'Format',

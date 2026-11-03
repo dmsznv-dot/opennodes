@@ -207,6 +207,7 @@ export class LocalFlowApiServer {
       telegramApiBase: this.config.telegramApiBase,
       allowedFsRoot: this.config.allowedFsRoot,
       inlineDelayMaxMs: this.config.inlineDelayMaxMs,
+      forEachPauseMs: this.config.forEachPauseMs,
       staleMs: this.config.recoveryStaleMs,
       heartbeatMs: this.config.heartbeatMs,
     });

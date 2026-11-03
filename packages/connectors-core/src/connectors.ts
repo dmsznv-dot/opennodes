@@ -1,4 +1,5 @@
 import * as path from 'node:path';
+import { markdownToTelegramHtml } from './telegram-markdown.js';
 import { randomUUID } from 'node:crypto';
 import type {
   ConnectorAction,
@@ -465,7 +466,7 @@ export const postgresSqlAction: ConnectorAction<
 };
 
 // 9. F32: Telegram Bot
-/** Telegram's caption limit; a longer text goes out as a separate message after the media. */
+/** Telegram's caption limit; a longer text with a picture goes out as one message with the picture on top. */
 const TELEGRAM_CAPTION_MAX = 1024;
 
 export const telegramBotAction: ConnectorAction<
@@ -473,7 +474,11 @@ export const telegramBotAction: ConnectorAction<
     botToken?: string;
     chatId: string | number;
     text?: string;
-    parseMode?: 'Markdown' | 'MarkdownV2' | 'HTML' | '';
+    /**
+     * `auto` (also `''` and `Markdown`): everyday Markdown (**bold**, [link](url)…) sent as
+     * Telegram HTML. `plain`: the text exactly as typed. `HTML` / `MarkdownV2`: Telegram's own.
+     */
+    parseMode?: 'auto' | 'plain' | 'Markdown' | 'MarkdownV2' | 'HTML' | '';
     disablePreview?: boolean | string;
     /** A picture by URL: the post becomes a photo with the text as its caption. */
     imageUrl?: string;
@@ -491,7 +496,11 @@ export const telegramBotAction: ConnectorAction<
       input.botToken ?? (ctx.credentials?.botToken as string | undefined) ?? 'default_token';
     const base = `${(input.apiBase ?? 'https://api.telegram.org').replace(/\/+$/, '')}/bot${token}`;
     const text = String(input.text ?? '');
-    const parse_mode = input.parseMode || undefined;
+    const mode = input.parseMode ?? '';
+    const markdown = mode === '' || mode === 'auto' || mode === 'Markdown';
+    const parse_mode = markdown ? 'HTML' : mode === 'plain' ? undefined : mode;
+    // Markdown is converted after cutting, so no part ends inside a tag.
+    const render = (part: string) => (markdown ? markdownToTelegramHtml(part) : part);
     const imageUrl = String(input.imageUrl ?? '').trim();
     const fileUrl = String(input.fileUrl ?? '').trim();
     const call = async (method: string, data: Record<string, unknown>) =>
@@ -500,17 +509,23 @@ export const telegramBotAction: ConnectorAction<
       };
 
     const disablePreview = input.disablePreview === true || input.disablePreview === 'true';
-    /** Text of any length: Telegram takes 4096 characters per message, so longer text goes in parts. */
-    const sendText = async (body: string, noPreview: boolean) => {
+    /**
+     * Text of any length: Telegram takes 4096 characters per message, so longer text goes in
+     * parts. With `pictureUrl` the first part shows that picture above the text.
+     */
+    const sendText = async (body: string, noPreview: boolean, pictureUrl?: string) => {
       let first: { ok?: boolean } | undefined;
       let last: { ok?: boolean } = { ok: true };
-      const parts = splitTelegramText(body);
-      for (const part of parts) {
+      const parts = splitTelegramText(body, markdown ? 3500 : 4096);
+      for (const [i, part] of parts.entries()) {
         last = await call('sendMessage', {
           chat_id: input.chatId,
-          text: part,
+          text: render(part),
           parse_mode,
-          link_preview_options: { is_disabled: noPreview },
+          link_preview_options:
+            pictureUrl && i === 0
+              ? { url: pictureUrl, show_above_text: true, prefer_large_media: true }
+              : { is_disabled: noPreview },
         });
         if (last.ok === false) return last;
         first ??= last;
@@ -533,10 +548,12 @@ export const telegramBotAction: ConnectorAction<
       ? ['sendPhoto', 'photo', imageUrl]
       : ['sendDocument', 'document', fileUrl];
     const fits = text.length <= TELEGRAM_CAPTION_MAX;
+    // A picture with a long text: one post, the picture above the text (link preview).
+    if (imageUrl && !fits) return sendText(text, false, imageUrl);
     const media = await call(method, {
       chat_id: input.chatId,
       [field]: url,
-      ...(fits && text && { caption: text, parse_mode }),
+      ...(fits && text && { caption: render(text), parse_mode }),
     });
     if (fits || media.ok === false) return media;
     const message = await sendText(text, true);

@@ -18,6 +18,114 @@ const clip = (s, n = 80) => {
   return str.length > n ? `${str.slice(0, n - 1)}…` : str;
 };
 
+/** Fields of one item of a list output (`list: 'feedItem'`), for “each item” data. */
+export const LIST_FIELDS = {
+  feedItem: [
+    {
+      key: 'title',
+      label: tr('Заголовок', 'Title'),
+      example: tr('Новость дня', 'Story of the day'),
+    },
+    {
+      key: 'summary',
+      label: tr('Кратко (до 280 знаков)', 'Summary (up to 280 chars)'),
+      example: tr('О чём запись — в двух строках…', 'What it is about, in two lines…'),
+    },
+    {
+      key: 'text',
+      label: tr('Текст целиком', 'Full text'),
+      example: tr('Полный текст записи из ленты…', 'The item’s full text from the feed…'),
+    },
+    { key: 'link', label: tr('Ссылка', 'Link'), example: 'https://example.com/1' },
+    {
+      key: 'image',
+      label: tr('Картинка (ссылка)', 'Picture (link)'),
+      example: 'https://example.com/1.jpg',
+    },
+    { key: 'date', label: tr('Дата публикации', 'Published'), example: '03.11.2026 10:15' },
+  ],
+};
+
+/** The result field each repeated step adds to its items. */
+export const RESULT_FIELD = {
+  key: 'result',
+  label: tr('Результат шага для этой записи', 'The step’s result for this item'),
+  example: tr('Ответ для этой записи…', 'The answer for this item…'),
+};
+
+const SAMPLE_FEED = tr(
+  [1, 2, 3].map((n) => ({
+    title: `Пример заголовка ${n}`,
+    text: `Текст записи ${n}: что произошло, кто участвовал и почему это важно. Подробности — по ссылке.`,
+    link: `https://example.com/${n}`,
+    image: `https://picsum.photos/seed/opennodes${n}/800/450`,
+    pubDate: `2026-11-0${n}T10:15:00Z`,
+  })),
+  [1, 2, 3].map((n) => ({
+    title: `Sample title ${n}`,
+    text: `Text of item ${n}: what happened, who took part and why it matters. Details at the link.`,
+    link: `https://example.com/${n}`,
+    image: `https://picsum.photos/seed/opennodes${n}/800/450`,
+    pubDate: `2026-11-0${n}T10:15:00Z`,
+  }))
+);
+
+const pad2 = (n) => String(n).padStart(2, '0');
+const shortText = (text, max = 280) => {
+  const s = String(text).replace(/\s+/g, ' ').trim();
+  if (s.length <= max) return s;
+  const cut = s.slice(0, max - 1);
+  const at = cut.lastIndexOf(' ');
+  return `${(at > max * 0.6 ? cut.slice(0, at) : cut).replace(/[\s,.;:—-]+$/, '')}…`;
+};
+
+/** The same fields the server's RSS step gives (execution-runtime summarizeFeed). */
+export function feedSummary(raw) {
+  const items = raw.map((i) => {
+    const d = new Date(i.pubDate ?? '');
+    const text = String(i.text ?? i.description ?? '').trim();
+    return {
+      ...i,
+      title: String(i.title ?? '').trim(),
+      text,
+      summary: shortText(text),
+      link: String(i.link ?? ''),
+      image: String(i.image ?? ''),
+      date: Number.isNaN(d.getTime())
+        ? ''
+        : `${pad2(d.getDate())}.${pad2(d.getMonth() + 1)}.${d.getFullYear()} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`,
+    };
+  });
+  const each = (fn, sep = '\n') =>
+    items
+      .map(fn)
+      .filter((x) => x.trim())
+      .join(sep);
+  const block = (...parts) => parts.filter(Boolean).join('\n');
+  const first = items[0] ?? {};
+  return {
+    items,
+    count: items.length,
+    titles: each((i) => i.title),
+    numbered: each((i, n) => (i.title ? `${n + 1}. ${i.title}` : '')),
+    bullets: each((i) => (i.title ? `• ${i.title}` : '')),
+    digest: each((i) => [i.title, i.link].filter(Boolean).join(' — ')),
+    titleLinks: each((i) => (i.title && i.link ? `[${i.title}](${i.link})` : i.title)),
+    posts: each((i) => block(i.title && `**${i.title}**`, i.text), '\n\n'),
+    postsShort: each((i) => block(i.title && `**${i.title}**`, i.summary), '\n\n'),
+    postsWithLinks: each((i) => block(i.title && `**${i.title}**`, i.summary, i.link), '\n\n'),
+    texts: each((i) => i.text, '\n\n'),
+    links: each((i) => i.link),
+    images: each((i) => i.image),
+    firstTitle: first.title ?? '',
+    firstText: first.text ?? '',
+    firstSummary: first.summary ?? '',
+    firstDate: first.date ?? '',
+    link: first.link ?? '',
+    image: items.find((i) => i.image)?.image ?? '',
+  };
+}
+
 export const SERVICES = {
   manual: { name: tr('Тестовый запуск', 'Test run'), icon: '▶', color: '#64748b', auth: false },
   schedule: { name: tr('Расписание', 'Schedule'), icon: '⏱', color: '#0ea5e9', auth: false },
@@ -392,6 +500,7 @@ export const ACTIONS = {
     type: 'ai.openai',
     service: 'ai',
     kind: 'action',
+    forEach: true,
     name: tr('AI: ответить на текст', 'AI: answer a text'),
     desc: tr(
       'Языковая модель пишет ответ по вашей инструкции.',
@@ -463,6 +572,7 @@ export const ACTIONS = {
     type: 'ai.classify',
     service: 'ai',
     kind: 'action',
+    forEach: true,
     name: tr('AI: определить категорию', 'AI: classify text'),
     desc: tr(
       'Относит текст к одной из ваших категорий.',
@@ -514,6 +624,7 @@ export const ACTIONS = {
     type: 'ai.process',
     service: 'ai',
     kind: 'action',
+    forEach: true,
     name: tr('AI: обработать данные по инструкции', 'AI: process data by instruction'),
     desc: tr(
       'Данные из прошлых шагов + что с ними сделать: пересказать, перевести, оформить. Может прочитать статьи по ссылкам.',
@@ -708,6 +819,7 @@ export const ACTIONS = {
     type: 'ai.ollama',
     service: 'ollama',
     kind: 'action',
+    forEach: true,
     name: tr('Локальная модель: ответить на текст', 'Local model: answer a text'),
     desc: tr(
       'То же, что AI-ответ, но на вашем сервере через Ollama.',
@@ -766,6 +878,7 @@ export const ACTIONS = {
     type: 'core.telegramBot',
     service: 'telegram',
     kind: 'action',
+    forEach: true,
     external: true,
     name: tr('Отправить сообщение в Telegram', 'Send a Telegram message'),
     desc: tr('Бот пишет в чат, группу или канал.', 'The bot posts to a chat, group or channel.'),
@@ -792,27 +905,40 @@ export const ACTIONS = {
       {
         key: 'parseMode',
         type: 'select',
-        required: false,
+        required: true,
         basic: false,
-        label: tr('Форматирование', 'Formatting'),
-        default: '',
+        label: tr('Оформление текста', 'Text formatting'),
+        default: 'auto',
         options: [
-          { value: '', label: tr('Обычный текст', 'Plain text') },
-          { value: 'Markdown', label: 'Markdown' },
-          { value: 'HTML', label: 'HTML' },
+          {
+            value: 'auto',
+            label: tr(
+              'Авто: **жирный**, *курсив*, [ссылка](адрес)',
+              'Auto: **bold**, *italic*, [link](url)'
+            ),
+          },
+          {
+            value: 'plain',
+            label: tr('Без оформления — символы как есть', 'None — characters as typed'),
+          },
+          { value: 'HTML', label: tr('HTML (для опытных)', 'HTML (advanced)') },
         ],
+        help: tr(
+          'В режиме «Авто» разметка из текста и из ответа ИИ превращается в оформление Telegram.',
+          'In “Auto” Markdown in the text and in AI answers becomes Telegram formatting.'
+        ),
       },
       {
         key: 'imageUrl',
         type: 'text',
         required: false,
-        basic: false,
+        basic: true,
         acceptsData: true,
         label: tr('Картинка (ссылка)', 'Picture (link)'),
         placeholder: 'https://example.com/cover.jpg',
         help: tr(
-          'Пост выйдет с фото, текст станет подписью. Подпись длиннее 1024 символов уйдёт отдельным сообщением.',
-          'The post goes out with a photo and the text as its caption. A caption over 1024 characters is sent as a separate message.'
+          'Пост выйдет одним сообщением: до 1024 символов — фото с подписью, длиннее — картинка над текстом.',
+          'One post: up to 1024 characters it is a photo with a caption, longer — the picture above the text.'
         ),
       },
       {
@@ -848,6 +974,7 @@ export const ACTIONS = {
     type: 'telegram.sendFile',
     service: 'telegram',
     kind: 'action',
+    forEach: true,
     external: true,
     name: tr('Отправить фото или файл в Telegram', 'Send a photo or file to Telegram'),
     desc: tr(
@@ -898,14 +1025,23 @@ export const ACTIONS = {
       {
         key: 'parseMode',
         type: 'select',
-        required: false,
+        required: true,
         basic: false,
-        label: tr('Форматирование подписи', 'Caption formatting'),
-        default: '',
+        label: tr('Оформление подписи', 'Caption formatting'),
+        default: 'auto',
         options: [
-          { value: '', label: tr('Обычный текст', 'Plain text') },
-          { value: 'Markdown', label: 'Markdown' },
-          { value: 'HTML', label: 'HTML' },
+          {
+            value: 'auto',
+            label: tr(
+              'Авто: **жирный**, *курсив*, [ссылка](адрес)',
+              'Auto: **bold**, *italic*, [link](url)'
+            ),
+          },
+          {
+            value: 'plain',
+            label: tr('Без оформления — символы как есть', 'None — characters as typed'),
+          },
+          { value: 'HTML', label: tr('HTML (для опытных)', 'HTML (advanced)') },
         ],
       },
     ],
@@ -928,6 +1064,7 @@ export const ACTIONS = {
     type: 'core.smtp',
     service: 'email',
     kind: 'action',
+    forEach: true,
     external: true,
     name: tr('Отправить письмо', 'Send an email'),
     desc: tr('Письмо через ваш SMTP-сервер.', 'An email through your SMTP server.'),
@@ -1027,9 +1164,28 @@ export const ACTIONS = {
     ],
     outputs: [
       {
-        key: 'titles',
-        label: tr('Заголовки записей', 'Item titles'),
-        example: tr('Новость 1\nНовость 2', 'Story 1\nStory 2'),
+        key: 'items',
+        label: tr('Записи (каждая отдельно)', 'Items (each on its own)'),
+        list: 'feedItem',
+        example: tr('3 записи', '3 items'),
+      },
+      {
+        key: 'postsWithLinks',
+        label: tr('Все записи: заголовок + кратко + ссылка', 'All items: title + summary + link'),
+        example: tr(
+          '**Новость 1**\nО чём она…\nhttps://example.com/1',
+          '**Story 1**\nWhat it says…\nhttps://example.com/1'
+        ),
+      },
+      {
+        key: 'postsShort',
+        label: tr('Все записи: заголовок + кратко', 'All items: title + summary'),
+        example: tr('**Новость 1**\nО чём она…', '**Story 1**\nWhat it says…'),
+      },
+      {
+        key: 'posts',
+        label: tr('Все записи: заголовок + текст', 'All items: title + text'),
+        example: tr('**Новость 1**\nПолный текст…', '**Story 1**\nFull text…'),
       },
       {
         key: 'digest',
@@ -1040,35 +1196,74 @@ export const ACTIONS = {
         ),
       },
       {
+        key: 'titleLinks',
+        label: tr('Список: заголовки-ссылки', 'List: titles as links'),
+        example: '[Новость 1](https://example.com/1)',
+      },
+      {
+        key: 'numbered',
+        label: tr('Нумерованный список заголовков', 'Numbered list of titles'),
+        example: tr('1. Новость 1\n2. Новость 2', '1. Story 1\n2. Story 2'),
+      },
+      {
+        key: 'bullets',
+        label: tr('Заголовки с точками •', 'Titles with bullets •'),
+        example: tr('• Новость 1\n• Новость 2', '• Story 1\n• Story 2'),
+      },
+      {
+        key: 'titles',
+        label: tr('Заголовки записей', 'Item titles'),
+        example: tr('Новость 1\nНовость 2', 'Story 1\nStory 2'),
+      },
+      {
+        key: 'texts',
+        label: tr('Тексты всех записей', 'Texts of all items'),
+        example: tr('Текст первой…\n\nТекст второй…', 'First text…\n\nSecond text…'),
+      },
+      {
+        key: 'links',
+        label: tr('Ссылки всех записей', 'Links of all items'),
+        example: 'https://example.com/1\nhttps://example.com/2',
+      },
+      {
+        key: 'images',
+        label: tr('Картинки всех записей (ссылки)', 'Pictures of all items (links)'),
+        example: 'https://example.com/1.jpg\nhttps://example.com/2.jpg',
+      },
+      {
+        key: 'firstTitle',
+        label: tr('Первая запись: заголовок', 'First item: title'),
+        example: tr('Новость 1', 'Story 1'),
+      },
+      {
+        key: 'firstSummary',
+        label: tr('Первая запись: кратко', 'First item: summary'),
+        example: tr('О чём она в двух строках…', 'What it says in two lines…'),
+      },
+      {
+        key: 'firstText',
+        label: tr('Первая запись: текст', 'First item: text'),
+        example: tr('Полный текст записи…', 'The full text…'),
+      },
+      {
         key: 'link',
-        label: tr('Ссылка на первую запись', 'Link to the first item'),
+        label: tr('Первая запись: ссылка', 'First item: link'),
         example: 'https://example.com/1',
       },
       {
         key: 'image',
-        label: tr('Картинка первой записи', 'Picture of the first item'),
+        label: tr('Первая запись: картинка', 'First item: picture'),
         example: 'https://example.com/cover.jpg',
       },
-      { key: 'count', label: tr('Количество', 'Count'), example: '3' },
+      {
+        key: 'firstDate',
+        label: tr('Первая запись: дата', 'First item: date'),
+        example: '03.11.2026 10:15',
+      },
+      { key: 'count', label: tr('Сколько записей', 'How many items'), example: '3' },
     ],
     simulate: (c) => ({
-      output: {
-        count: 3,
-        titles: L(
-          tr(
-            'Пример заголовка 1\nПример заголовка 2\nПример заголовка 3',
-            'Sample title 1\nSample title 2\nSample title 3'
-          )
-        ),
-        digest: L(
-          tr(
-            'Пример заголовка 1 — https://example.com/1\nПример заголовка 2 — https://example.com/2',
-            'Sample title 1 — https://example.com/1\nSample title 2 — https://example.com/2'
-          )
-        ),
-        link: 'https://example.com/1',
-        image: 'https://example.com/cover.jpg',
-      },
+      output: feedSummary(L(SAMPLE_FEED)),
       summary: tr(
         `Из ${clip(c.feedUrl, 50)} получили бы до ${c.maxItems} записей (пример: 3)`,
         `Would fetch up to ${c.maxItems} items from ${clip(c.feedUrl, 50)} (example: 3)`
@@ -1183,6 +1378,7 @@ export const ACTIONS = {
     type: 'text.format',
     service: 'logic',
     kind: 'logic',
+    forEach: true,
     name: tr('Текст: обработать', 'Text: process'),
     desc: tr(
       'Убрать HTML, обрезать до лимита, заменить, вытащить ссылки, сменить регистр.',
@@ -1279,6 +1475,7 @@ export const ACTIONS = {
     type: 'text.compose',
     service: 'logic',
     kind: 'logic',
+    forEach: true,
     name: tr('Собрать текст или отчёт', 'Compose a text or report'),
     desc: tr(
       'Объединяет данные прошлых шагов в один текст.',
@@ -1313,6 +1510,7 @@ export const ACTIONS = {
     type: 'core.httpRequest',
     service: 'http',
     kind: 'action',
+    forEach: true,
     external: true,
     name: tr('HTTP-запрос к API', 'HTTP API request'),
     desc: tr('Вызвать любой API. Защита от SSRF включена.', 'Call any API. SSRF protection is on.'),
@@ -1376,6 +1574,7 @@ export const ACTIONS = {
     type: 'core.outgoingWebhook',
     service: 'webhook',
     kind: 'action',
+    forEach: true,
     external: true,
     dev: true,
     name: tr('Отправить данные на вебхук', 'Send data to a webhook'),
@@ -1481,6 +1680,7 @@ export const ACTIONS = {
     type: 'slack.sendMessage',
     service: 'slack',
     kind: 'action',
+    forEach: true,
     external: true,
     name: tr('Отправить сообщение в Slack', 'Send a Slack message'),
     desc: tr('Сообщение в канал через вебхук.', 'A message to a channel via a webhook.'),
@@ -1516,6 +1716,7 @@ export const ACTIONS = {
     type: 'discord.sendMessage',
     service: 'discord',
     kind: 'action',
+    forEach: true,
     external: true,
     name: tr('Отправить сообщение в Discord', 'Send a Discord message'),
     desc: tr(
@@ -1767,8 +1968,8 @@ export const TEMPLATES = [
     ),
     sampleInput: tr('2 новые записи в ленте.', '2 new items in the feed.'),
     outputPreview: tr(
-      'Пост в канале: пересказ, ссылки и картинка первой записи.',
-      'A channel post: summary, links and the first item’s picture.'
+      'Отдельный пост на каждую запись: картинка, жирный заголовок, пересказ и ссылка.',
+      'A post per item: picture, bold title, summary and link.'
     ),
     limitations: tr(
       'Бот должен быть администратором канала с правом публикации. Если новых записей нет, пост не выходит.',
@@ -1797,13 +1998,14 @@ export const TEMPLATES = [
         id: 'ai_1',
         action: 'ai.process',
         config: {
-          input: '{{ $nodes.rss_1.output.digest }}',
+          forEach: '{{ $nodes.rss_1.output.items }}',
+          input: '{{ $item.title }}\n{{ $item.text }}\n{{ $item.link }}',
           instruction: tr(
-            'Для каждой статьи: заголовок на русском, под ним 2–3 предложения — о чём статья, по её тексту. В конце каждого пункта ссылка. Без хэштегов и вступлений.',
-            'For each article: its title, then 2–3 sentences on what it says, from its text. The link at the end of each item. No hashtags, no intro.'
+            'Перескажи статью по-русски в 2–3 предложениях — по её тексту. Без заголовка, хэштегов и вступлений.',
+            'Summarise the article in 2–3 sentences, from its text. No title, hashtags or intro.'
           ),
           readLinks: true,
-          maxLinks: 3,
+          maxLinks: 1,
         },
       },
       {
@@ -1811,9 +2013,10 @@ export const TEMPLATES = [
         action: 'telegram.sendMessage',
         config: {
           chatId: '@my_channel',
-          text: '{{ $nodes.ai_1.output.text }}',
-          imageUrl: '{{ $nodes.rss_1.output.image }}',
-          disablePreview: true,
+          forEach: '{{ $nodes.ai_1.output.items }}',
+          text: '**{{ $item.title }}**\n\n{{ $item.result }}\n\n[Читать полностью →]({{ $item.link }})',
+          imageUrl: '{{ $item.image }}',
+          parseMode: 'auto',
         },
       },
     ],

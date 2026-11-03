@@ -272,13 +272,16 @@ function systemContext() {
       dateTime: `${date} ${time}`,
       dateRu: `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()}`,
       weekday: new Intl.DateTimeFormat('ru', { weekday: 'long' }).format(d),
+      dayMonth: new Intl.DateTimeFormat('ru', { day: 'numeric', month: 'long' }).format(d),
+      monthName: new Intl.DateTimeFormat('ru', { month: 'long' }).format(d),
+      year: d.getFullYear(),
     },
     run: { id: 'demo-run', triggerType: 'manual' },
   };
 }
 
 function lookup(ctx, scope, id, key) {
-  if (scope === 'now' || scope === 'run') return ctx[scope]?.[key];
+  if (scope === 'now' || scope === 'run' || scope === 'item') return ctx[scope]?.[key];
   return scope === 'trigger' ? ctx.trigger?.[key] : ctx.nodes[id]?.[key];
 }
 
@@ -416,7 +419,10 @@ export function simulate(a, connections, opts = {}) {
 
     const resolved = resolveValue(structuredClone(node.config ?? {}), ctx);
     const conn = connections.find((c) => c.id === node.connectionId);
-    const sim = action.simulate(resolved);
+    const sim =
+      action.forEach && node.config?.forEach
+        ? simulateEach(action, node.config, ctx)
+        : action.simulate(resolved);
     if (action.kind === 'trigger') ctx.trigger = sim.output;
     ctx.nodes[id] = sim.output;
 
@@ -440,6 +446,54 @@ export function simulate(a, connections, opts = {}) {
     }
   }
   return run;
+}
+
+const FOR_EACH_DEFAULT = 10;
+
+/** “For each item” in the demo: the step's simulation once per item, as the server does. */
+function simulateEach(action, config, ctx) {
+  const listValue = resolveValue(config.forEach, ctx);
+  const list = Array.isArray(listValue) ? listValue : [];
+  const limit = Math.min(Math.max(Number(config.forEachLimit) || FOR_EACH_DEFAULT, 1), 50);
+  const items = list.slice(0, limit);
+  const { forEach: _f, forEachLimit: _l, ...template } = config;
+  const sims = items.map((item, i) =>
+    action.simulate(resolveValue(structuredClone(template), { ...ctx, item, index: i }))
+  );
+  const main = (o) =>
+    o?.text ??
+    o?.result ??
+    o?.category ??
+    o?.messageId ??
+    o?.status ??
+    (o ? JSON.stringify(o) : '');
+  const results = sims.map((x) => String(main(x.output) ?? ''));
+  const ru = getLocale() === 'ru';
+  return {
+    output: {
+      count: sims.length,
+      total: list.length,
+      skipped: list.length - items.length,
+      items: items.map((item, i) => ({
+        ...(item && typeof item === 'object' ? item : { value: item }),
+        result: results[i],
+      })),
+      results: results.join('\n\n'),
+      text: results.join('\n\n'),
+      outputs: sims.map((x) => x.output),
+    },
+    summary: sims.length
+      ? `${ru ? `Повторено для ${sims.length} записей` : `Repeated for ${sims.length} items`}${
+          list.length > items.length
+            ? ru
+              ? ` (ещё ${list.length - items.length} — сверх лимита)`
+              : ` (${list.length - items.length} more over the limit)`
+            : ''
+        }:\n${sims.map((x, i) => `${i + 1}. ${L(x.summary)}`).join('\n')}`
+      : ru
+        ? 'Список пуст — повторять нечего.'
+        : 'The list is empty — nothing to repeat.',
+  };
 }
 
 export function describeIssue(issue) {

@@ -341,19 +341,73 @@ function normalizeOutput(
   }
 }
 
-/** The fields RSS steps expose: the items plus ready-to-use text for posts and prompts. */
-export function summarizeFeed(items: Array<Record<string, unknown>>) {
-  const titles = items.map((i) => String(i.title ?? '')).filter(Boolean);
+const pad2 = (n: number) => String(n).padStart(2, '0');
+
+/** A short version of a text: whole words, at most `max` characters, with "…" when cut. */
+export function shortText(text: string, max = 280): string {
+  const s = text.replace(/\s+/g, ' ').trim();
+  if (s.length <= max) return s;
+  const cut = s.slice(0, max - 1);
+  const at = cut.lastIndexOf(' ');
+  return `${(at > max * 0.6 ? cut.slice(0, at) : cut).replace(/[\s,.;:—-]+$/, '')}…`;
+}
+
+/** One feed item with the fields the editor offers for “each item”. Safe to apply twice. */
+export function feedItem(item: Record<string, unknown>): Record<string, unknown> {
+  const title = String(item.title ?? '').trim();
+  const text = String(item.text ?? item.description ?? '').trim();
+  const link = String(item.link ?? '').trim();
+  const published = new Date(String(item.pubDate ?? item.published ?? ''));
+  const date = Number.isNaN(published.getTime())
+    ? ''
+    : `${pad2(published.getDate())}.${pad2(published.getMonth() + 1)}.${published.getFullYear()} ${pad2(published.getHours())}:${pad2(published.getMinutes())}`;
+  return {
+    ...item,
+    title,
+    text,
+    summary: shortText(text),
+    link,
+    image: String(item.image ?? ''),
+    date,
+  };
+}
+
+/**
+ * The fields RSS steps expose: the items (each with title, text, summary, link, picture,
+ * date) plus ready-made text for the whole list — `**bold**` marks titles, which the
+ * Telegram step turns into formatting.
+ */
+export function summarizeFeed(raw: Array<Record<string, unknown>>) {
+  type Item = { [K in 'title' | 'text' | 'summary' | 'link' | 'image' | 'date']: string };
+  const items = raw.map(feedItem) as unknown as Item[];
+  const each = (fn: (i: Item, n: number) => string, sep = '\n') =>
+    items
+      .map(fn)
+      .filter((x) => x.trim())
+      .join(sep);
+  const block = (...parts: string[]) => parts.filter(Boolean).join('\n');
+  const first: Partial<Item> = items[0] ?? {};
+  const firstWithImage = items.find((i) => i.image);
   return {
     items,
     count: items.length,
-    titles: titles.join('\n'),
-    digest: items
-      .map((i) => [i.title, i.link].filter(Boolean).join(' — '))
-      .filter(Boolean)
-      .join('\n'),
-    link: String(items[0]?.link ?? ''),
-    image: String(items.find((i) => i.image)?.image ?? ''),
+    titles: each((i) => i.title),
+    numbered: each((i, n) => (i.title ? `${n + 1}. ${i.title}` : '')),
+    bullets: each((i) => (i.title ? `• ${i.title}` : '')),
+    digest: each((i) => [i.title, i.link].filter(Boolean).join(' — ')),
+    titleLinks: each((i) => (i.title && i.link ? `[${i.title}](${i.link})` : i.title)),
+    posts: each((i) => block(i.title && `**${i.title}**`, i.text), '\n\n'),
+    postsShort: each((i) => block(i.title && `**${i.title}**`, i.summary), '\n\n'),
+    postsWithLinks: each((i) => block(i.title && `**${i.title}**`, i.summary, i.link), '\n\n'),
+    texts: each((i) => i.text, '\n\n'),
+    links: each((i) => i.link),
+    images: each((i) => i.image),
+    firstTitle: first.title ?? '',
+    firstText: first.text ?? '',
+    firstSummary: first.summary ?? '',
+    firstDate: first.date ?? '',
+    link: first.link ?? '',
+    image: firstWithImage?.image ?? '',
   };
 }
 

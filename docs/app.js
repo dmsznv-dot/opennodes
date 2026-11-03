@@ -21,6 +21,8 @@ import {
 import * as live from './live.js';
 import { tokenField, parseExpr, buildExpr } from './tokens.js';
 import { attachCanvas, isTyping } from './canvas.js';
+import { tagCategories, listChoices, listSource, targetInfo, GROUPS } from './tags.js';
+import { markdownNodes } from './markdown.js';
 import {
   ACTIONS,
   SERVICES,
@@ -489,7 +491,7 @@ function openModal(opts) {
   const card = h(
     'div',
     {
-      class: ['modal-card', opts.wide && 'wide'],
+      class: ['modal-card', opts.wide && 'wide', opts.size && `modal-${opts.size}`],
       role: 'dialog',
       'aria-modal': 'true',
       'aria-labelledby': titleId,
@@ -2524,6 +2526,32 @@ function closePanel() {
   render();
 }
 
+/** A step's fields, plus “for each item” on steps that can repeat and have a list before them. */
+function stepFields(a, node, act) {
+  const base = act?.fields ?? [];
+  if (!act?.forEach || (!listChoices(a, node).length && !node.config?.forEach)) return base;
+  return [
+    {
+      key: 'forEach',
+      type: 'forEach',
+      required: false,
+      basic: true,
+      label: t('fe.label'),
+      help: t('fe.help'),
+    },
+    ...base,
+    {
+      key: 'forEachLimit',
+      type: 'number',
+      required: false,
+      basic: false,
+      label: t('fe.limit'),
+      help: t('fe.limitHelp'),
+      placeholder: '10',
+    },
+  ];
+}
+
 function nodePanel(a, node) {
   if (!node) return null;
   const act = ACTIONS[node.action];
@@ -2535,6 +2563,14 @@ function nodePanel(a, node) {
   const errorEls = new Map();
   const markDirty = () => {
     ui.panelDirty = true;
+  };
+  const refreshPreviews = () => controls.forEach((c) => c._updatePreview?.());
+  // The data picker reads the step's unsaved state: which list it repeats for, other fields.
+  ui.panelForEach = () => controls.get('forEach')?.value ?? node.config?.forEach ?? '';
+  ui.panelControls = controls;
+  ui.panelChanged = () => {
+    markDirty();
+    refreshPreviews();
   };
 
   const fieldControl = (f) => {
@@ -2549,6 +2585,30 @@ function nodePanel(a, node) {
         checked: val === true,
         onchange: markDirty,
       });
+    } else if (f.type === 'forEach') {
+      const choices = listChoices(a, node);
+      const known = !val || choices.some((c) => c.expr === val);
+      control = h(
+        'select',
+        {
+          id,
+          class: 'input',
+          onchange: () => {
+            markDirty();
+            refreshPreviews();
+            forEachHelp();
+          },
+        },
+        h('option', { value: '' }, t('fe.once')),
+        choices.map((c) =>
+          h(
+            'option',
+            { value: c.expr, selected: val === c.expr },
+            t('fe.each', { list: L(c.label) })
+          )
+        ),
+        known ? null : h('option', { value: val, selected: true }, t('tok.deleted'))
+      );
     } else if (f.type === 'select') {
       control = h(
         'select',
@@ -2628,11 +2688,13 @@ function nodePanel(a, node) {
         describe: (expr) => describeToken(a, expr),
         onChange: () => {
           markDirty();
-          control?._updatePreview?.();
+          refreshPreviews();
         },
         onChipClick: (chip, field) => openTokenMenu(a, node, chip, field),
-        onOpenPicker: (field) => openDataPicker(a, node, field, (expr) => field.insertToken(expr)),
+        onOpenPicker: (field) => openDataPicker(a, node, field, { fieldKey: f.key }),
       });
+      control._fieldKey = f.key;
+      control._fieldLabel = L(f.label);
     } else {
       const shown = toHuman(a, val === undefined ? '' : String(val));
       control =
@@ -2666,15 +2728,49 @@ function nodePanel(a, node) {
 
     let preview = null;
     if (f.acceptsData) {
+      const target = targetInfo(node, f.key);
       preview = h('div', { class: 'field-preview small muted' });
       const update = () => {
         const value = control.value;
-        preview.textContent = /\{\{/.test(value)
-          ? t('panel.example', { text: clipText(previewTemplate(a, value), 300) })
+        if (!target.rich) {
+          preview.textContent = /\{\{/.test(value)
+            ? t('panel.example', { text: clipText(previewTemplate(a, value), 300) })
+            : '';
+          return;
+        }
+        // Posts: how it will look, formatting and picture included.
+        clear(preview);
+        if (!value.trim()) return;
+        const image = target.imageField
+          ? previewTemplate(a, controls.get(target.imageField)?.value ?? '').trim()
           : '';
+        preview.append(
+          h(
+            'div',
+            { class: 'post-preview-label' },
+            t(ui.panelForEach?.() ? 'post.previewEach' : 'post.preview')
+          ),
+          h(
+            'div',
+            { class: 'post-preview' },
+            /^https?:\/\/\S+$/.test(image)
+              ? h('img', {
+                  class: 'post-preview-img',
+                  src: image,
+                  alt: t('post.previewImage'),
+                  loading: 'lazy',
+                  referrerpolicy: 'no-referrer',
+                })
+              : null,
+            h(
+              'div',
+              { class: 'post-preview-text' },
+              markdownNodes(clipText(previewTemplate(a, value), 1500))
+            )
+          )
+        );
       };
       control._updatePreview = update;
-      update();
     }
 
     const label = h(
@@ -2696,27 +2792,31 @@ function nodePanel(a, node) {
                 class: 'btn btn-small data-btn',
                 'data-hint': 'addData',
                 onmousedown: (e) => e.preventDefault(),
-                onclick: () =>
-                  openDataPicker(a, node, control, (expr) => control.insertToken(expr)),
+                onclick: () => openDataPicker(a, node, control, { fieldKey: f.key }),
               },
               t('panel.addData')
             )
           )
         : label;
     if (f.type === 'boolean') return h('div', { class: 'field field-inline' }, control, label, err);
-    return h(
-      'div',
-      { class: 'field' },
-      labelRow,
-      control,
-      f.help ? h('div', { class: 'small muted' }, L(f.help)) : null,
-      preview,
-      err
-    );
+    const help = f.help ? h('div', { class: 'small muted' }, L(f.help)) : null;
+    if (f.type === 'forEach') {
+      forEachHelp = () => {
+        const src = listSource(a, control.value);
+        const first = listChoices(a, node)[0];
+        help.textContent = src
+          ? L(f.help)
+          : t('fe.nudge', { n: listSource(a, first?.expr)?.n ?? '?' });
+        help.classList.toggle('fe-nudge', !src);
+      };
+      forEachHelp();
+    }
+    return h('div', { class: 'field' }, labelRow, control, help, preview, err);
   };
+  let forEachHelp = () => {};
   const hasUpstream = ancestorsOf(a, node.id).size > 0;
 
-  const fields = act?.fields ?? [];
+  const fields = stepFields(a, node, act);
   const basic = fields.filter((f) => f.basic);
   const advanced = fields.filter((f) => !f.basic);
 
@@ -2783,6 +2883,7 @@ function nodePanel(a, node) {
 
   const resultBox = h('div', { class: 'panel-result' });
   if (ui.panelResult) resultBox.append(ui.panelResult);
+  queueMicrotask(refreshPreviews); // previews read other fields (the picture), so after all exist
 
   const saveNode = () => {
     const raw = {};
@@ -2986,16 +3087,6 @@ function nodePanel(a, node) {
 
 // ── Data tokens: chips, picker, formats ───────────────────────────────────────
 
-const SYSTEM_TOKENS = [
-  { scope: 'now', key: 'dateTime' },
-  { scope: 'now', key: 'date' },
-  { scope: 'now', key: 'dateRu' },
-  { scope: 'now', key: 'time' },
-  { scope: 'now', key: 'weekday' },
-  { scope: 'run', key: 'id' },
-  { scope: 'run', key: 'triggerType' },
-];
-
 const FORMATS = ['', 'upper', 'lower', 'trim', 'first:200', 'first:1000'];
 const fmtLabel = (fmt) =>
   fmt.startsWith('first:') ? t('fmt.first', { n: fmt.slice(6) }) : t(`fmt.${fmt || 'none'}`);
@@ -3016,9 +3107,41 @@ function systemSample(key) {
     time,
     dateRu: `${pad2(d.getDate())}.${pad2(d.getMonth() + 1)}.${d.getFullYear()}`,
     weekday: new Intl.DateTimeFormat('ru', { weekday: 'long' }).format(d),
+    dayMonth: new Intl.DateTimeFormat('ru', { day: 'numeric', month: 'long' }).format(d),
+    monthName: new Intl.DateTimeFormat('ru', { month: 'long' }).format(d),
+    year: String(d.getFullYear()),
     id: 'a1b2c3d4-…',
     triggerType: 'cron',
   }[key];
+}
+
+/**
+ * A sample of the item a step repeats for (“for each item”): the first item of the list
+ * in the latest run, else the step's demo data, else the fields' examples.
+ */
+function itemSample(a, outputs = lastOutputs(a), expr = ui.panelForEach?.() ?? '') {
+  const src = listSource(a, expr);
+  if (!src) return null;
+  const real = outputs.get(src.node.id)?.[src.key];
+  if (Array.isArray(real) && real[0] && typeof real[0] === 'object') return real[0];
+  let demo;
+  try {
+    demo = ACTIONS[src.node.action]?.simulate?.(src.node.config ?? {})?.output?.[src.key];
+  } catch {
+    demo = undefined; // a sample is a nicety; never break the panel over it
+  }
+  const base = Array.isArray(demo) && demo[0] && typeof demo[0] === 'object' ? demo[0] : {};
+  // Items of a step that itself repeats: the list it repeats for, plus its result.
+  const inner =
+    src.key === 'items' && src.node.config?.forEach
+      ? itemSample(a, outputs, src.node.config.forEach)
+      : null;
+  return {
+    ...Object.fromEntries(src.fields.map((f) => [f.key, L(f.example)])),
+    ...(inner ?? {}),
+    ...base,
+    ...(inner ? { result: L(src.fields[0]?.example) } : {}),
+  };
 }
 
 /** Output of each step in the automation's latest run or test, by step id. */
@@ -3040,6 +3163,7 @@ function applyFmt(value, fmt) {
 /** A sample of what a token gives: from the latest run when there is one, else the catalog example. */
 function tokenSample(a, p, outputs = lastOutputs(a)) {
   if (p.scope === 'now' || p.scope === 'run') return systemSample(p.key);
+  if (p.scope === 'item') return itemSample(a, outputs)?.[p.key];
   const node =
     p.scope === 'trigger'
       ? a.nodes.find((n) => ACTIONS[n.action]?.kind === 'trigger')
@@ -3088,6 +3212,21 @@ function describeToken(a, expr) {
       title: `${t(`tok.${p.scope}.${p.key}`)}\n${t('panel.example', { text: systemSample(p.key) })}`,
     };
   }
+  if (p.scope === 'item') {
+    const field = listSource(a, ui.panelForEach?.() ?? '')?.fields.find((f) => f.key === p.key);
+    const name = field ? L(field.label) : p.key;
+    const sample = tokenSample(a, p);
+    return {
+      icon: h('span', { class: 'token-sys' }, '◆'),
+      step: null,
+      label: `${t('tok.item')}: ${name}${suffix}`,
+      title:
+        `${t('tok.item')} · ${name}` +
+        (sample !== undefined
+          ? `\n${t('panel.example', { text: clipText(applyFmt(sample, p.fmt), 200) })}`
+          : ''),
+    };
+  }
   const node = tokenSourceNode(a, p);
   const nums = stepNumbers(a);
   const out = node && ACTIONS[node.action]?.outputs?.find((o) => o.key === p.key);
@@ -3114,116 +3253,210 @@ function describeToken(a, expr) {
   };
 }
 
-/** The data picker: search, earlier steps with sample values, date & time, run info. */
-function openDataPicker(a, node, field, onPick) {
-  const nums = stepNumbers(a);
+/**
+ * The data picker: a large window with categories on the left — ready-made posts, the
+ * current item, each earlier step, date and time, the run, formatting — and cards with a
+ * live preview on the right. `opts.replace` (a chip) swaps that chip for one value.
+ */
+function openDataPicker(a, node, field, opts = {}) {
+  const fieldKey = opts.fieldKey ?? field._fieldKey;
+  const replace = opts.replace ?? null;
+  const target = targetInfo(node, fieldKey);
   const outputs = lastOutputs(a);
-  const upstream = stepOrder(a)
-    .filter((id) => ancestorsOf(a, node.id).has(id))
-    .map((id) => a.nodes.find((n) => n.id === id))
-    .reverse(); // nearest step first
-  const groups = [
-    ...upstream.map((u) => {
-      const isTrigger = ACTIONS[u.action]?.kind === 'trigger';
-      return {
-        title: `${t('step.n', { n: nums.get(u.id) })} · ${nodeTitle(u)}`,
-        icon: serviceIcon(ACTIONS[u.action]?.service, 'xs'),
-        rows: (ACTIONS[u.action]?.outputs ?? []).map((o) => {
-          const p = isTrigger
-            ? { scope: 'trigger', nodeId: null, key: o.key, fmt: '' }
-            : { scope: 'nodes', nodeId: u.id, key: o.key, fmt: '' };
-          const v = tokenSample(a, p, outputs);
-          return { label: L(o.label), sample: v, expr: buildExpr(p), real: outputs.has(u.id) };
-        }),
-      };
-    }),
-    {
-      title: t('dpick.dateTime'),
-      icon: h('span', { class: 'token-sys' }, '◷'),
-      rows: SYSTEM_TOKENS.filter((x) => x.scope === 'now').map((x) => ({
-        label: t(`tok.now.${x.key}`),
-        sample: systemSample(x.key),
-        expr: buildExpr({ ...x, fmt: '' }),
-        real: true,
-      })),
-    },
-    {
-      title: t('dpick.run'),
-      icon: h('span', { class: 'token-sys' }, '▶'),
-      rows: SYSTEM_TOKENS.filter((x) => x.scope === 'run').map((x) => ({
-        label: t(`tok.run.${x.key}`),
-        sample: systemSample(x.key),
-        expr: buildExpr({ ...x, fmt: '' }),
-        real: true,
-      })),
-    },
-  ].filter((g) => g.rows.length);
+  const cats = tagCategories(a, node, { fieldKey, forEach: ui.panelForEach?.() ?? '' }).map(
+    (c) => ({
+      ...c,
+      entries: replace ? c.entries.filter((e) => e.kind === 'data') : c.entries,
+    })
+  );
+  const howto = { id: 'howto', title: { ru: t('dpick.howto'), en: t('dpick.howto') }, icon: '?' };
+  const all = [...cats.filter((c) => c.entries.length), howto];
+  let current = all[0]?.id ?? 'howto';
+  let query = '';
 
-  const list = h('div', { class: 'pick-list', role: 'listbox' });
-  const fill = (q) => {
-    const query = q.trim().toLowerCase();
-    clear(list);
-    let first = null;
-    for (const g of groups) {
-      const rows = g.rows.filter(
-        (r) => !query || `${g.title} ${r.label} ${r.sample ?? ''}`.toLowerCase().includes(query)
-      );
-      if (!rows.length) continue;
-      list.append(h('div', { class: 'pick-group' }, g.icon.cloneNode(true), g.title));
-      for (const r of rows) {
-        const btn = h(
+  const entryTitle = (e) => (e.i18nKey ? t(e.i18nKey) : L(e.title));
+  const sampleOf = (e) => {
+    if (e.kind === 'snippet') return e.template;
+    if (e.kind === 'data') {
+      const p = parseExpr(e.expr);
+      const v = p ? tokenSample(a, p, outputs) : undefined;
+      return v === undefined ? (e.sample ? L(e.sample) : undefined) : v;
+    }
+    return previewTemplate(a, e.template);
+  };
+
+  const pick = (e) => {
+    closeModal();
+    if (replace) {
+      field.replaceToken(replace, e.expr);
+      return;
+    }
+    if (e.kind === 'data') field.insertToken(e.expr);
+    else field.insertTemplate(e.template);
+    for (const [key, value] of Object.entries(e.extra ?? {})) {
+      const other = ui.panelControls?.get(key);
+      if (other) other.value = value;
+    }
+    ui.panelChanged?.();
+  };
+
+  const card = (e) => {
+    const sample = sampleOf(e);
+    const text = typeof sample === 'object' && sample !== null ? JSON.stringify(sample) : sample;
+    const imageKey = Object.keys(e.extra ?? {})[0];
+    const image = imageKey ? previewTemplate(a, e.extra[imageKey]).trim() : '';
+    const imageLabel = imageKey
+      ? (ACTIONS[node.action]?.fields ?? []).find((f) => f.key === imageKey)?.label
+      : null;
+    return h(
+      'button',
+      {
+        type: 'button',
+        class: ['tag-card', `tag-${e.kind}`, e.group === 'emoji' && 'tag-emoji'],
+        title: imageKey ? t('dpick.fillsImage', { field: L(imageLabel) }) : entryTitle(e),
+        onclick: () => pick(e),
+      },
+      e.group === 'emoji'
+        ? e.template
+        : [
+            h(
+              'span',
+              { class: 'tag-card-head' },
+              h('span', { class: 'tag-card-title' }, entryTitle(e)),
+              imageKey ? h('span', { class: 'tag-badge' }, t('dpick.withImage')) : null
+            ),
+            h(
+              'span',
+              { class: 'tag-card-preview' },
+              /^https?:\/\/\S+$/.test(image)
+                ? h('img', {
+                    class: 'tag-card-img',
+                    src: image,
+                    alt: '',
+                    loading: 'lazy',
+                    referrerpolicy: 'no-referrer',
+                  })
+                : null,
+              text === undefined || text === ''
+                ? h('span', { class: 'muted' }, t('dpick.noSample'))
+                : target.rich
+                  ? markdownNodes(clipText(text, 260))
+                  : clipText(text, 160)
+            ),
+          ]
+    );
+  };
+
+  const nav = h('nav', { class: 'tag-nav', 'aria-label': t('dpick.howto') });
+  const main = h('div', { class: 'tag-main' });
+  const catIcon = (c) =>
+    c.service ? serviceIcon(c.service, 'xs') : h('span', { class: 'token-sys' }, c.icon ?? '•');
+
+  const renderNav = () => {
+    clear(nav);
+    for (const c of all) {
+      const n = c.entries ? c.entries.filter((e) => matches(c, e)).length : null;
+      if (query && c.entries && !n) continue;
+      nav.append(
+        h(
           'button',
           {
             type: 'button',
-            class: 'pick-row',
-            role: 'option',
-            onmousedown: (e) => e.preventDefault(),
+            class: ['tag-nav-item', c.id === current && 'active'],
+            'aria-current': c.id === current ? 'true' : null,
             onclick: () => {
-              closePopover();
-              onPick(r.expr);
+              current = c.id;
+              renderNav();
+              renderMain();
             },
           },
-          h('span', { class: 'pick-label' }, r.label),
-          h(
-            'span',
-            { class: ['pick-sample', !r.real && 'pick-sample-example'] },
-            r.sample === undefined || r.sample === ''
-              ? t('dpick.noSample')
-              : clipText(typeof r.sample === 'object' ? JSON.stringify(r.sample) : r.sample, 60)
-          )
+          catIcon(c),
+          h('span', { class: 'tag-nav-title' }, L(c.title)),
+          n !== null ? h('span', { class: 'tag-nav-count' }, String(n)) : null
+        )
+      );
+    }
+  };
+  const matches = (c, e) =>
+    !query || `${L(c.title)} ${entryTitle(e)} ${e.template}`.toLowerCase().includes(query);
+
+  const renderMain = () => {
+    clear(main);
+    if (current === 'howto' && !query) {
+      main.append(
+        h('h3', { class: 'tag-main-title' }, t('dpick.howto')),
+        ['dpick.howto1', 'dpick.howto2', 'dpick.howto3', 'dpick.howto4'].map((k) =>
+          h('p', { class: 'tag-howto' }, markdownNodes(t(k)))
+        ),
+        replace ? h('p', { class: 'alert info' }, t('dpick.replaceOnly')) : null
+      );
+      return;
+    }
+    // A search looks through every category; otherwise the chosen one.
+    const shown = query ? all.filter((c) => c.entries) : all.filter((c) => c.id === current);
+    let any = false;
+    for (const c of shown) {
+      const entries = c.entries.filter((e) => matches(c, e));
+      if (!entries.length) continue;
+      any = true;
+      main.append(
+        h('h3', { class: 'tag-main-title' }, catIcon(c), L(c.title)),
+        c.hint && !query ? h('p', { class: 'small muted tag-main-hint' }, L(c.hint)) : null
+      );
+      const groups = [...new Set(entries.map((e) => e.group))];
+      for (const g of groups) {
+        const list = entries.filter((e) => e.group === g);
+        if (groups.length > 1 && GROUPS[g]) {
+          main.append(h('div', { class: 'tag-group-title' }, L(GROUPS[g]), ` · ${list.length}`));
+        }
+        main.append(
+          h('div', { class: ['tag-grid', g === 'emoji' && 'tag-grid-emoji'] }, list.map(card))
         );
-        first ??= btn;
-        list.append(btn);
       }
     }
-    if (!list.childNodes.length)
-      list.append(h('p', { class: 'small muted pick-empty' }, t('home.noResults')));
-    return first;
+    if (!any) main.append(h('p', { class: 'muted pick-empty' }, t('home.noResults')));
+    main.scrollTop = 0;
   };
+
   const search = h('input', {
     type: 'search',
-    class: 'input pick-search',
+    class: 'input tag-search',
     placeholder: t('dpick.search'),
     'aria-label': t('dpick.search'),
-    oninput: (e) => fill(e.target.value),
+    oninput: (e) => {
+      query = e.target.value.trim().toLowerCase();
+      renderNav();
+      renderMain();
+    },
     onkeydown: (e) => {
       if (e.key === 'Enter') {
         e.preventDefault();
-        fill(search.value)?.click();
+        main.querySelector('.tag-card')?.click();
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        main.querySelector('.tag-card')?.focus();
       }
     },
   });
-  fill('');
-  openPopover(field, [
-    h(
-      'div',
-      { class: 'picker-pop' },
-      search,
-      list,
-      h('p', { class: 'small muted pick-foot' }, t('dpick.foot'))
-    ),
-  ]);
-  document.querySelector('.popover')?.classList.add('popover-wide');
+  main.addEventListener('keydown', (e) => {
+    if (!['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight'].includes(e.key)) return;
+    const cards = [...main.querySelectorAll('.tag-card')];
+    const i = cards.indexOf(document.activeElement);
+    if (i < 0) return;
+    e.preventDefault();
+    const step = e.key === 'ArrowDown' || e.key === 'ArrowRight' ? 1 : -1;
+    (cards[i + step] ?? (step < 0 ? search : cards[i]))?.focus();
+  });
+
+  renderNav();
+  renderMain();
+  openModal({
+    title: t('dpick.title', { field: field._fieldLabel ?? '' }),
+    wide: true,
+    size: 'xl',
+    body: [search, h('div', { class: 'tag-layout' }, nav, main)],
+    actions: [],
+  });
   search.focus();
 }
 
@@ -3263,7 +3496,7 @@ function openTokenMenu(a, node, chip, field) {
         class: 'menu-item',
         onclick: () => {
           closePopover();
-          openDataPicker(a, node, field, (next) => field.replaceToken(chip, next));
+          openDataPicker(a, node, field, { replace: chip });
         },
       },
       t('tok.replace')

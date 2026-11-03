@@ -13,6 +13,7 @@ import {
   type IQueueConsumer,
   type IWorkflowQueueManager,
   type JournalExecutionRecord,
+  type NodeExecutor,
   type QueueJob,
   type WorkflowExecutionJobPayload,
   type WorkflowRunResult,
@@ -36,6 +37,7 @@ import {
 } from './store.js';
 import { TriggerScheduler, type TriggerSchedulerOptions } from './triggers.js';
 import { pruneHistory } from './retention.js';
+import { FOR_EACH_TYPES, withForEach } from './for-each.js';
 
 export interface RuntimeLogger {
   info(meta: unknown, msg?: string): void;
@@ -55,6 +57,8 @@ export interface ExecutionRuntimeOptions {
   allowedFsRoot?: string;
   /** Delays up to this long run inline in the worker; longer ones suspend. */
   inlineDelayMaxMs?: number;
+  /** Pause between repetitions of a “for each item” messenger step (default per service). */
+  forEachPauseMs?: number;
   /** How often a running run heartbeats and checks for cancellation. */
   heartbeatMs?: number;
   /** A RUNNING run without a heartbeat for this long is considered orphaned. */
@@ -127,6 +131,13 @@ export class ExecutionRuntime {
         inlineMaxMs: options.inlineDelayMaxMs ?? 5_000,
       }),
     };
+    for (const type of FOR_EACH_TYPES) {
+      const inner = (nodeExecutors as Record<string, NodeExecutor>)[type];
+      if (inner)
+        (nodeExecutors as Record<string, NodeExecutor>)[type] = withForEach(inner, type, {
+          pauseMs: options.forEachPauseMs,
+        });
+    }
     this.executorTypes = Object.keys(nodeExecutors);
     this.engine = new WorkflowEngine({
       journal: this.journal,

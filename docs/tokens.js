@@ -8,12 +8,15 @@ import { h } from './dom.js';
 
 const TOKEN_RE = /\{\{\s*([^{}]+?)\s*\}\}/g;
 
-/** `$nodes.rss_1.output.digest.toUpperCase()` → its parts, or null for any other expression. */
+/**
+ * `$nodes.rss_1.output.digest.toUpperCase()` → its parts, or null for any other expression.
+ * `$item.title` is a field of the item a step repeats for ("for each item").
+ */
 export function parseExpr(expr) {
   const m = String(expr)
     .trim()
     .match(
-      /^\$(trigger|nodes|now|run)(?:\.([\w-]+)\.output)?\.(\w+)((?:\.(?:toUpperCase|toLowerCase|trim)\(\)|\.slice\(0,\s*\d+\))?)$/
+      /^\$(trigger|nodes|now|run|item)(?:\.([\w-]+)\.output)?\.(\w+)((?:\.(?:toUpperCase|toLowerCase|trim)\(\)|\.slice\(0,\s*\d+\))?)$/
     );
   if (!m) return null;
   const [, scope, nodeId, key, fmtRaw] = m;
@@ -176,10 +179,18 @@ export function tokenField(opts) {
     const text = e.clipboardData?.getData('text/plain') ?? '';
     // Pasted templates keep their tokens.
     remember();
-    for (const p of splitTemplate(text)) insertNode(p.expr ? chip(p.expr) : document.createTextNode(p.text));
+    for (const p of splitTemplate(text))
+      insertNode(p.expr ? chip(p.expr) : document.createTextNode(p.text));
     changed();
   });
 
+  /** A ready-made block: text with tokens, e.g. `**{{ $item.title }}**\n{{ $item.link }}`. */
+  field.insertTemplate = (template) => {
+    remember();
+    for (const p of splitTemplate(template))
+      insertNode(p.expr ? chip(p.expr) : document.createTextNode(p.text));
+    changed();
+  };
   field.insertToken = (expr) => {
     insertNode(chip(expr));
     changed();

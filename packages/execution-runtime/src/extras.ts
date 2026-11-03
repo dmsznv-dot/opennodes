@@ -3,7 +3,7 @@ import net from 'node:net';
 import tls from 'node:tls';
 import { randomUUID } from 'node:crypto';
 import { ActionExecutionError } from '@localflow/connector-sdk';
-import { feedText } from '@localflow/connectors-core';
+import { feedText, markdownToTelegramHtml } from '@localflow/connectors-core';
 import {
   isAllowlisted,
   isBlockedHostname,
@@ -13,7 +13,7 @@ import {
 import type { NodeExecutor } from '@localflow/workflow-engine';
 import type { CredentialResolver } from './connectors.js';
 import { extractLinks } from './process.js';
-import { toText } from './text.js';
+import { markdownToSlack, toText } from './text.js';
 
 export interface ExtrasOptions {
   httpClient: SafeHttpClient;
@@ -123,7 +123,9 @@ function webhookExecutor(kind: 'discord' | 'slack', options: ExtrasOptions): Nod
         fail(type, `${name}: the selected connection is not a ${name} webhook.`);
       const url = String(cred.secrets.webhookUrl ?? '');
       if (!url) fail(type, `${name}: the connection has no webhook address.`);
-      const text = toText(config.text).trim();
+      // Discord reads Markdown as is; Slack has its own flavour (mrkdwn).
+      const typed = toText(config.text).trim();
+      const text = kind === 'slack' ? markdownToSlack(typed) : typed;
       const imageUrl = String(config.imageUrl ?? '').trim();
       if (!text && !imageUrl) fail(type, `${name}: write the message text.`);
 
@@ -336,12 +338,19 @@ function smtpExecutor(options: ExtrasOptions): NodeExecutor {
       if (!to.length) fail('core.smtp', 'Email: enter at least one recipient in “To”.');
       if (!from) fail('core.smtp', 'Email: the connection has no sender address.');
       const messageId = `<${randomUUID()}@opennodes>`;
+      let body = toText(config.body ?? config.text);
+      let html = config.isHtml === true || config.isHtml === 'true';
+      // Markdown in a plain email (**bold**, [links](…), e.g. from an AI step) is sent formatted.
+      if (!html && /\*\*\S|\[[^\]\n]+\]\(https?:\/\//.test(body)) {
+        body = `<div style="font-family:sans-serif;line-height:1.5">${markdownToTelegramHtml(body).replace(/\n/g, '<br>\n')}</div>`;
+        html = true;
+      }
       const raw = buildMessage({
         from,
         to,
         subject: toText(config.subject),
-        body: toText(config.body ?? config.text),
-        html: config.isHtml === true || config.isHtml === 'true',
+        body,
+        html,
         messageId,
       });
       try {

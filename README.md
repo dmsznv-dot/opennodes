@@ -188,17 +188,35 @@ the runs. Publishing a version with another trigger, or rolling back, updates or
 
 ### Posting to a Telegram channel from a feed
 
-Template **RSS → AI → post to a Telegram channel**: a schedule reads a feed, AI writes the post, the bot publishes it.
+Template **RSS → AI → post to a Telegram channel**: a schedule reads a feed, AI retells each new
+article, and the bot publishes **one post per article** — picture, bold title, summary, link.
 
 - **Only new items.** With "Only items new since last run" (on by default) each feed item goes on
   once. Items are recorded when the run succeeds and released when it fails, so a failed post is
   retried, not lost. On the first run the feed's backlog is skipped. When nothing is new the steps
   below do not run (the run still succeeds). Tests from the editor do not use items up.
-- **RSS fields:** `titles`, `digest` (title — link per line), `link`, `image` (enclosure,
-  media:content/thumbnail or the first `<img>`), `count`. CDATA and HTML entities are decoded.
-- **Telegram:** the message step takes an optional picture link (the post becomes a photo with the
-  text as its caption; a caption over 1024 characters follows as its own message) and
-  "Disable link previews" now works. *Send a photo or file* sends a picture or document by link.
+- **RSS fields:** `items` — each with `title`, `text`, `summary` (≤ 280 chars), `link`, `image`
+  (enclosure, media:content/thumbnail or the first `<img>`) and `date`; ready-made text for all items
+  (`posts`, `postsShort`, `postsWithLinks`, `digest`, `titleLinks`, `numbered`, `bullets`, `titles`,
+  `texts`, `links`, `images`); the first item (`firstTitle`, `firstSummary`, `firstText`, `link`,
+  `image`, `firstDate`); `count`. CDATA and HTML entities are decoded.
+- **For each item.** Sending, AI and text steps can run once per item of a list (*How to run the
+  step → For each item*): `{{ $item.title }}`, `{{ $item.link }}`, `{{ $item.image }}`… are that
+  item's fields. The output keeps every result: `items` (each with its `result`, so the next step can
+  go on per item — AI per article, then a post per article), `results`, `count`. At most
+  `forEachLimit` items per run (default 10, max 50); messenger posts are spaced out (Telegram 1.5 s).
+- **Formatting.** In “Auto” (default) everyday Markdown — `**bold**`, `*italic*`, `[link](url)`,
+  `# heading`, `- list`, `> quote`, code — in the text *and in data from AI steps* becomes Telegram
+  formatting (sent as HTML, so stray `*`, `<` or `&` in data never break a post). “None” sends the
+  characters as typed; HTML stays for experts. Slack gets its own markup, Discord reads Markdown as
+  is, a plain email with Markdown is sent formatted.
+- **Picture + text = one post:** up to 1024 characters it is a photo with a caption; longer, the
+  picture is shown above the text (large link preview) — never a separate message.
+  *Send a photo or file* sends a picture or document by link.
+- **Data picker.** “+ Data” (or `{`) opens a window with categories: ready-made posts (title + text,
+  + link, + picture, styled, short — 60+ per list), the current item, each earlier step's data and
+  blocks made of it, date and time, formatting and emoji, and “How it works”. Cards show a live
+  preview; a field for a post shows how the post will look.
 - The bot must be an **admin of the channel** allowed to post; use `@channel` or the `-100…` id.
 - **AI: process data by instruction** takes *data* (e.g. the RSS list) and *what to do with it*. With
   "Open the links and read the articles" the server fetches the linked pages (SSRF-safe, up to 10),

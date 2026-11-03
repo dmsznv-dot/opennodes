@@ -319,6 +319,18 @@ async function waitSettled(ctx: Ctx, executionId: string, timeoutMs = 15_000) {
 }
 
 const trig = (cfg: Record<string, unknown> = {}) => node('t', 'trigger.manual', cfg);
+/** What a Telegram reader sees: HTML posts without tags and entities. */
+const shown = (body: { text?: string; caption?: string; parse_mode?: string }) => {
+  const t = body.text ?? body.caption ?? '';
+  return body.parse_mode === 'HTML'
+    ? t
+        .replace(/<[^>]+>/g, '')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&amp;/g, '&')
+    : t;
+};
 const compose = (id: string, template: string, extra = {}) =>
   node(id, 'text.compose', { template }, extra);
 const tgSend = (id: string, cfg: Record<string, unknown>, extra = {}) =>
@@ -602,7 +614,7 @@ describe('audit — chains of steps (recorded runs)', () => {
     expect(wh.statusCode).toBe(202);
     const res = await waitSettled(ctx, wh.body.executionId);
     expect(res.execution.status, JSON.stringify(res.steps)).toBe('SUCCEEDED');
-    expect(tgSent[0]!.body.text).toBe('Ivan <i@x.test> b Iv');
+    expect(shown(tgSent[0]!.body)).toBe('Ivan <i@x.test> b Iv');
   });
 
   it('webhook trigger receiving an HTML form (application/x-www-form-urlencoded): $trigger.name is the form field', async () => {
@@ -755,7 +767,7 @@ describe('audit — expression values crossing steps', () => {
       mix: `«${payload.quotes}»`,
     });
     expect(hookBodies[0]!.headers['content-type']).toBe('application/json');
-    expect(tgSent[0]!.body.text).toBe(`${payload.uni}\n${payload.quotes}\n${payload.lines}`);
+    expect(shown(tgSent[0]!.body)).toBe(`${payload.uni}\n${payload.quotes}\n${payload.lines}`);
   });
 
   it('a Telegram text that is only {{ object }} is sent as JSON, like text.compose does — not "[object Object]"', async () => {
@@ -938,7 +950,7 @@ describe('audit — disabled steps, branches and joins', () => {
     expect(res.execution.status).toBe('SUCCEEDED');
     expect(res.step('off').status).toBe('SKIPPED');
     expect(res.step('off').outputPayload).toEqual({ disabled: true });
-    expect(tgSent[0]!.body.text).toBe('<>A');
+    expect(shown(tgSent[0]!.body)).toBe('<>A');
   });
 
   it('a disabled false condition does not stop the flow', async () => {
@@ -1124,7 +1136,7 @@ describe('audit — Telegram formatting and limits', () => {
     });
   });
 
-  it('a caption over 1024 characters: photo first, then the text as its own message', async () => {
+  it('a caption over 1024 characters: one message with the picture above the text', async () => {
     reset();
     const long = 'x'.repeat(1500);
     const res = await testRun(
@@ -1133,9 +1145,12 @@ describe('audit — Telegram formatting and limits', () => {
       { long }
     );
     expect(res.execution.status).toBe('SUCCEEDED');
-    expect(tgSent.map((s) => s.method)).toEqual(['sendPhoto', 'sendMessage']);
-    expect(tgSent[0]!.body.caption).toBeUndefined();
-    expect(tgSent[1]!.body.text).toBe(long);
+    expect(tgSent.map((s) => s.method)).toEqual(['sendMessage']);
+    expect(tgSent[0]!.body.link_preview_options).toMatchObject({
+      url: 'https://x.test/p.jpg',
+      show_above_text: true,
+    });
+    expect(tgSent[0]!.body.text).toBe(long);
   });
 
   it('send file: document kind, caption from data, numeric chat id from the trigger', async () => {
@@ -1161,7 +1176,12 @@ describe('audit — Telegram formatting and limits', () => {
     expect(res.execution.status).toBe('SUCCEEDED');
     expect(tgSent[0]).toEqual({
       method: 'sendDocument',
-      body: { chat_id: 123456789, document: 'https://x.test/r.pdf', caption: 'Report for Анна' },
+      body: {
+        chat_id: 123456789,
+        document: 'https://x.test/r.pdf',
+        caption: 'Report for Анна',
+        parse_mode: 'HTML',
+      },
     });
     expect(res.step('f').outputPayload.messageId).toBe(501);
   });
@@ -1448,5 +1468,121 @@ describe('audit — data after a long delay (run suspended and resumed)', () => 
     const res = await waitSettled(ctx, first.execution.id);
     expect(res.execution.status).toBe('SUCCEEDED');
     expect(tgSent.map((s) => s.body.text)).toEqual(['later']);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('posts — formatting, pictures and one post per item', () => {
+  let ctx: Ctx;
+  beforeAll(async () => {
+    ctx = await boot({ forEachPauseMs: 0 });
+  });
+
+  it('turns everyday Markdown into Telegram formatting, also in data from an AI step', async () => {
+    reset();
+    modelReply = () =>
+      '**Итог:** всё *хорошо*, см. [доклад](https://example.com/r?a_b=1) — 2 < 3 & snake_case';
+    const r = await testRun(ctx, [
+      trig(),
+      node('ai', 'ai.openai', { prompt: 'x' }, { cred: 'ai' }),
+      tgSend('tg', { text: '# Сводка\n\n{{ $nodes.ai.output.text }}\n- пункт' }),
+    ]);
+    expect(r.execution.status).toBe('SUCCEEDED');
+    const sent = tgSent.find((x) => x.method === 'sendMessage')!.body;
+    expect(sent.parse_mode).toBe('HTML');
+    expect(sent.text).toBe(
+      '<b>Сводка</b>\n\n<b>Итог:</b> всё <i>хорошо</i>, см. <a href="https://example.com/r?a_b=1">доклад</a> — 2 &lt; 3 &amp; snake_case\n• пункт'
+    );
+  });
+
+  it('“None” sends the characters as typed', async () => {
+    reset();
+    await testRun(ctx, [trig(), tgSend('tg', { text: '**как есть**', parseMode: 'plain' })]);
+    const sent = tgSent.find((x) => x.method === 'sendMessage')!.body;
+    expect(sent.text).toBe('**как есть**');
+    expect(sent.parse_mode).toBeUndefined();
+  });
+
+  it('a picture with a long text is one post: the picture above the text', async () => {
+    reset();
+    const long = 'Абзац текста. '.repeat(120);
+    await testRun(ctx, [
+      trig(),
+      tgSend('tg', { text: `**Заголовок**\n\n${long}`, imageUrl: 'https://example.com/p.jpg' }),
+    ]);
+    expect(tgSent.map((x) => x.method)).toEqual(['sendMessage']);
+    expect(tgSent[0]!.body.link_preview_options).toEqual({
+      url: 'https://example.com/p.jpg',
+      show_above_text: true,
+      prefer_large_media: true,
+    });
+    expect(tgSent[0]!.body.text.startsWith('<b>Заголовок</b>')).toBe(true);
+  });
+
+  it('RSS → one Telegram post per item, each with its own title, link and picture', async () => {
+    reset();
+    feed = [1, 2, 3].map((n) => ({
+      guid: `g${n}`,
+      title: `Новость ${n}`,
+      link: `https://example.com/${n}`,
+      image: `https://example.com/${n}.jpg`,
+    }));
+    const r = await testRun(ctx, [
+      trig(),
+      node('rss', 'core.rss', { feedUrl: `http://${host}/feed.xml`, maxItems: 5, onlyNew: false }),
+      tgSend('tg', {
+        forEach: '{{ $nodes.rss.output.items }}',
+        forEachLimit: 2,
+        text: '**{{ $item.title }}**\n\n[Читать →]({{ $item.link }})',
+        imageUrl: '{{ $item.image }}',
+      }),
+    ]);
+    expect(r.execution.status, r.execution.errorMessage ?? '').toBe('SUCCEEDED');
+    expect(tgSent.map((x) => x.method)).toEqual(['sendPhoto', 'sendPhoto']);
+    expect(tgSent.map((x) => x.body.photo)).toEqual([
+      'https://example.com/1.jpg',
+      'https://example.com/2.jpg',
+    ]);
+    expect(tgSent[1]!.body.caption).toBe(
+      '<b>Новость 2</b>\n\n<a href="https://example.com/2">Читать →</a>'
+    );
+    const out = r.step('tg').outputPayload;
+    expect(out).toMatchObject({ count: 2, total: 3, skipped: 1 });
+    expect(out.items.map((i: any) => i.title)).toEqual(['Новость 1', 'Новость 2']);
+  });
+
+  it('AI for each item, then a post for each with the AI result', async () => {
+    reset();
+    feed = [1, 2].map((n) => ({
+      guid: `h${n}`,
+      title: `Статья ${n}`,
+      link: `https://example.com/a${n}`,
+    }));
+    modelReply = (b) => `Пересказ: ${b.messages.at(-1).content.split('\n')[0]}`;
+    const r = await testRun(ctx, [
+      trig(),
+      node('rss', 'core.rss', { feedUrl: `http://${host}/feed.xml`, maxItems: 5, onlyNew: false }),
+      node(
+        'ai',
+        'ai.openai',
+        { forEach: '{{ $nodes.rss.output.items }}', prompt: '{{ $item.title }}' },
+        { cred: 'ai' }
+      ),
+      tgSend('tg', {
+        forEach: '{{ $nodes.ai.output.items }}',
+        text: '**{{ $item.title }}**\n{{ $item.result }}\n{{ $item.link }}',
+      }),
+    ]);
+    expect(r.execution.status, r.execution.errorMessage ?? '').toBe('SUCCEEDED');
+    expect(modelRequests).toHaveLength(2);
+    expect(r.step('ai').outputPayload.items.map((i: any) => i.result)).toEqual([
+      'Пересказ: Статья 1',
+      'Пересказ: Статья 2',
+    ]);
+    expect(tgSent.map((x) => x.body.text)).toEqual([
+      '<b>Статья 1</b>\nПересказ: Статья 1\nhttps://example.com/a1',
+      '<b>Статья 2</b>\nПересказ: Статья 2\nhttps://example.com/a2',
+    ]);
   });
 });

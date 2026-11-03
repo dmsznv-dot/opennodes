@@ -60,6 +60,35 @@ export interface ExecutionContextInit {
 }
 
 const pad = (n: number) => String(n).padStart(2, '0');
+const MONTHS_RU = [
+  'январь',
+  'февраль',
+  'март',
+  'апрель',
+  'май',
+  'июнь',
+  'июль',
+  'август',
+  'сентябрь',
+  'октябрь',
+  'ноябрь',
+  'декабрь',
+];
+const MONTHS_RU_GENITIVE = [
+  'января',
+  'февраля',
+  'марта',
+  'апреля',
+  'мая',
+  'июня',
+  'июля',
+  'августа',
+  'сентября',
+  'октября',
+  'ноября',
+  'декабря',
+];
+
 const WEEKDAYS_RU = [
   'воскресенье',
   'понедельник',
@@ -81,6 +110,9 @@ export function nowParts(d: Date) {
     dateTime: `${date} ${time}`,
     dateRu: `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`,
     weekday: WEEKDAYS_RU[d.getDay()]!,
+    dayMonth: `${d.getDate()} ${MONTHS_RU_GENITIVE[d.getMonth()]!}`,
+    monthName: MONTHS_RU[d.getMonth()]!,
+    year: d.getFullYear(),
     unix: Math.floor(d.getTime() / 1000),
   };
 }
