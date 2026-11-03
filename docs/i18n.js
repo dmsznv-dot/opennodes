@@ -297,7 +297,7 @@ const DICT = {
     'dpick.textSwitch': 'Текст:',
     'dpick.toPicture': 'Картинка поставлена в поле «Картинка» — в посте она будет над текстом.',
     'dpick.textFull': 'полностью',
-    'dpick.textShort': 'кратко (до 280 знаков)',
+    'dpick.textShort': 'первые предложения (≈280 знаков, без обрывов)',
     'dpick.favorite': 'В избранное',
     'dpick.unfavorite': 'Убрать из избранного',
     'fe.processed':
@@ -693,7 +693,7 @@ const DICT = {
     'dpick.toPicture':
       'The picture went into the “Picture” field — the post shows it above the text.',
     'dpick.textFull': 'full',
-    'dpick.textShort': 'short (up to 280 chars)',
+    'dpick.textShort': 'first sentences (≈280 chars, never cut)',
     'dpick.favorite': 'Add to favourites',
     'dpick.unfavorite': 'Remove from favourites',
     'fe.processed':

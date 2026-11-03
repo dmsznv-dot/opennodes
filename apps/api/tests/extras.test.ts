@@ -168,7 +168,10 @@ describe('@localflow/api — new steps and template values', () => {
     expect(res.step('strip').outputPayload.result).toBe(
       'Привет, мир & друзья\nЧитать: https://a.example/x.'
     );
-    expect(res.step('cut').outputPayload.result).toBe('Привет, мир & друзь…'); // 20 characters with the mark
+    // One sentence: kept whole — a text is never cut in the middle.
+    expect(res.step('cut').outputPayload.result).toBe(
+      'Привет, мир & друзья\nЧитать: https://a.example/x.'
+    );
     expect(res.step('links').outputPayload.result).toBe('https://a.example/x');
     expect(res.step('swap').outputPayload.result).toMatch(/^Привет, всем & друзья/);
   });

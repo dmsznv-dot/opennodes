@@ -3,7 +3,7 @@ import net from 'node:net';
 import tls from 'node:tls';
 import { randomUUID } from 'node:crypto';
 import { ActionExecutionError } from '@localflow/connector-sdk';
-import { feedText, markdownToTelegramHtml } from '@localflow/connectors-core';
+import { feedText, markdownToTelegramHtml, splitTelegramText } from '@localflow/connectors-core';
 import {
   isAllowlisted,
   isBlockedHostname,
@@ -14,6 +14,7 @@ import type { NodeExecutor } from '@localflow/workflow-engine';
 import type { CredentialResolver } from './connectors.js';
 import { extractLinks } from './process.js';
 import { markdownToSlack, toText } from './text.js';
+import { shortText } from './connectors.js';
 
 export interface ExtrasOptions {
   httpClient: SafeHttpClient;
@@ -50,12 +51,9 @@ export function formatText(input: string, config: Record<string, unknown>): stri
         .filter(Boolean)
         .join('\n');
     case 'truncate': {
+      // Shorter, in whole sentences: about the length asked for, never cut mid-sentence.
       const max = Math.max(1, Number(config.maxLength) || 1000);
-      if (input.length <= max) return input;
-      // Cut at a word boundary when one is close, and mark the cut.
-      const cut = input.slice(0, max - 1);
-      const space = cut.lastIndexOf(' ');
-      return `${space > max * 0.8 ? cut.slice(0, space) : cut}…`;
+      return input.length <= max ? input : shortText(input, max);
     }
     case 'replace':
       return config.find
@@ -129,11 +127,13 @@ function webhookExecutor(kind: 'discord' | 'slack', options: ExtrasOptions): Nod
       const imageUrl = String(config.imageUrl ?? '').trim();
       if (!text && !imageUrl) fail(type, `${name}: write the message text.`);
 
-      // Discord takes up to 2000 characters per message, Slack about 40 000.
+      // Discord takes up to 2000 characters per message: a longer text goes in several
+      // messages, split between paragraphs — never cut off.
+      const [head = '', ...more] = kind === 'discord' ? splitTelegramText(text, 2000) : [text];
       const body =
         kind === 'discord'
           ? {
-              content: text.slice(0, 2000),
+              content: head,
               ...(config.username ? { username: String(config.username) } : {}),
               ...(imageUrl && { embeds: [{ image: { url: imageUrl } }] }),
             }
@@ -168,8 +168,25 @@ function webhookExecutor(kind: 'discord' | 'slack', options: ExtrasOptions): Nod
           `${name}: the webhook answered HTTP ${res.status}${detail ? ` — ${detail}` : ''}.`
         );
       }
+      for (const part of more) {
+        await options.httpClient.request<any>({
+          url: `${url}${url.includes('?') ? '&' : '?'}wait=true`,
+          method: 'POST',
+          data: {
+            content: part,
+            ...(config.username ? { username: String(config.username) } : {}),
+          },
+          timeoutMs: 20_000,
+          allowlist: options.ssrfAllowlist,
+        });
+      }
       return {
-        output: { ok: true, status: res.status, messageId: res.data?.id ?? null },
+        output: {
+          ok: true,
+          status: res.status,
+          messageId: res.data?.id ?? null,
+          ...(more.length && { parts: more.length + 1 }),
+        },
         activeOutputs: ['main'],
       };
     },

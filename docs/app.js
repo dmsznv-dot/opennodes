@@ -3172,7 +3172,8 @@ function nodePanel(a, node) {
 
 // ── Data tokens: chips, picker, formats ───────────────────────────────────────
 
-const FORMATS = ['', 'upper', 'lower', 'trim', 'first:200', 'first:1000'];
+// No “first N characters”: a text is never cut mid-sentence. Old chips with it still work.
+const FORMATS = ['', 'upper', 'lower', 'trim'];
 const fmtLabel = (fmt) =>
   fmt.startsWith('first:') ? t('fmt.first', { n: fmt.slice(6) }) : t(`fmt.${fmt || 'none'}`);
 

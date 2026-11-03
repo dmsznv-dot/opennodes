@@ -142,15 +142,42 @@ describe('@localflow/api — Control Plane REST API, RBAC, Versioning, Vault & W
         data: { label: 'Manual Start', config: {} },
         position: { x: 0, y: 0 },
         inputs: [],
-        outputs: [{ id: 'out', name: 'Output', type: 'json' as const, direction: 'output' as const, required: false }],
+        outputs: [
+          {
+            id: 'out',
+            name: 'Output',
+            type: 'json' as const,
+            direction: 'output' as const,
+            required: false,
+          },
+        ],
       },
       {
         id: 'map_1',
         type: 'primitive.map',
-        data: { label: 'Transform Payload', config: { mapping: { greeting: '{{ $trigger.name }}' } } },
+        data: {
+          label: 'Transform Payload',
+          config: { mapping: { greeting: '{{ $trigger.name }}' } },
+        },
         position: { x: 240, y: 0 },
-        inputs: [{ id: 'in', name: 'Input', type: 'any' as const, direction: 'input' as const, required: false }],
-        outputs: [{ id: 'out', name: 'Output', type: 'any' as const, direction: 'output' as const, required: false }],
+        inputs: [
+          {
+            id: 'in',
+            name: 'Input',
+            type: 'any' as const,
+            direction: 'input' as const,
+            required: false,
+          },
+        ],
+        outputs: [
+          {
+            id: 'out',
+            name: 'Output',
+            type: 'any' as const,
+            direction: 'output' as const,
+            required: false,
+          },
+        ],
       },
     ];
     const validEdges = [
@@ -200,7 +227,9 @@ describe('@localflow/api — Control Plane REST API, RBAC, Versioning, Vault & W
             data: { label: 'Loop Node', config: {} },
             position: { x: 480, y: 0 },
             inputs: [{ id: 'in', name: 'In', type: 'any', direction: 'input', required: false }],
-            outputs: [{ id: 'out', name: 'Out', type: 'any', direction: 'output', required: false }],
+            outputs: [
+              { id: 'out', name: 'Out', type: 'any', direction: 'output', required: false },
+            ],
           },
         ],
         edges: [

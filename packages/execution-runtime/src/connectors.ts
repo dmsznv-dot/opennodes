@@ -343,13 +343,38 @@ function normalizeOutput(
 
 const pad2 = (n: number) => String(n).padStart(2, '0');
 
-/** A short version of a text: whole words, at most `max` characters, with "…" when cut. */
-export function shortText(text: string, max = 280): string {
-  const s = text.replace(/\s+/g, ' ').trim();
-  if (s.length <= max) return s;
-  const cut = s.slice(0, max - 1);
-  const at = cut.lastIndexOf(' ');
-  return `${(at > max * 0.6 ? cut.slice(0, at) : cut).replace(/[\s,.;:—-]+$/, '')}…`;
+/**
+ * The sentences of a text. A sentence ends with . ! ? or … (and a closing quote or bracket)
+ * followed by a space and a capital letter, a digit or an opening quote — so “2.5”, “т. е.”
+ * and “e.g. this” stay inside their sentence.
+ */
+export function sentences(text: string): string[] {
+  return text
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(/(?<=[.!?…][»"”')\]]*)\s+(?=[A-ZА-ЯЁ0-9«"“(])/u)
+    .filter(Boolean);
+}
+
+/**
+ * A short version of a text: whole sentences, about `about` characters — never cut in the
+ * middle of a sentence and never marked “…”. The first sentence is always kept whole, even
+ * when it alone is longer; a later one is added only while the text stays near the length.
+ * Line breaks and paragraphs stay as they are.
+ */
+export function shortText(text: string, about = 280): string {
+  const t = String(text ?? '').trim();
+  const ends = [...t.matchAll(/[.!?…][»"”')\]]*(?=\s+[A-ZА-ЯЁ0-9«"“(]|$)/gu)].map(
+    (m) => m.index! + m[0].length
+  );
+  if (ends.at(-1) !== t.length) ends.push(t.length); // the rest is the last sentence
+  let cut = 0;
+  for (const end of ends) {
+    if (cut && end > about * 1.25) break;
+    cut = end;
+    if (cut >= about * 0.75) break;
+  }
+  return t.slice(0, cut).trim();
 }
 
 /** One feed item with the fields the editor offers for “each item”. Safe to apply twice. */

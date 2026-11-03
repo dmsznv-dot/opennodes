@@ -1814,8 +1814,10 @@ describe('posts — formatting, pictures and one post per item', () => {
     ]);
     const item = r.step('ai').outputPayload.items[0];
     expect(item.postText.length).toBeGreaterThan(400);
-    expect(item.postSummary.length).toBeLessThanOrEqual(280);
-    expect(item.postSummary.endsWith('…')).toBe(true);
+    // Whole sentences, about 280 characters, never cut and never “…”.
+    expect(item.postSummary.length).toBeLessThanOrEqual(350);
+    expect(item.postSummary.endsWith('текста.')).toBe(true);
+    expect(item.postText.startsWith(item.postSummary)).toBe(true);
   });
 
   it('a list of pictures in the picture field: the first one is used', async () => {

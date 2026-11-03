@@ -28,8 +28,11 @@ export const LIST_FIELDS = {
     },
     {
       key: 'summary',
-      label: tr('Текст статьи — кратко', 'Article text — short'),
-      example: tr('О чём запись — в двух строках…', 'What it is about, in two lines…'),
+      label: tr('Текст статьи — первые предложения', 'Article text — first sentences'),
+      example: tr(
+        'Первые одно-два предложения целиком, около 280 знаков.',
+        'The first sentence or two, whole, about 280 characters.'
+      ),
     },
     {
       key: 'text',
@@ -79,8 +82,11 @@ export const POST_FIELDS = [
   },
   {
     key: 'postSummary',
-    label: tr('Текст от ИИ — кратко', 'AI text — short'),
-    example: tr('Текст от ИИ, до 280 знаков…', 'The AI text, up to 280 characters…'),
+    label: tr('Текст от ИИ — первые предложения', 'AI text — first sentences'),
+    example: tr(
+      'Первые предложения ответа ИИ целиком, около 280 знаков.',
+      'The first sentences of the AI answer, whole, about 280 characters.'
+    ),
   },
 ];
 
@@ -139,12 +145,20 @@ const SAMPLE_FEED = tr(
 );
 
 const pad2 = (n) => String(n).padStart(2, '0');
-const shortText = (text, max = 280) => {
-  const s = String(text).replace(/\s+/g, ' ').trim();
-  if (s.length <= max) return s;
-  const cut = s.slice(0, max - 1);
-  const at = cut.lastIndexOf(' ');
-  return `${(at > max * 0.6 ? cut.slice(0, at) : cut).replace(/[\s,.;:—-]+$/, '')}…`;
+/** The same as the server: whole sentences, about `about` characters, never cut. */
+const shortText = (text, about = 280) => {
+  const t = String(text ?? '').trim();
+  const ends = [...t.matchAll(/[.!?…][»"”')\]]*(?=\s+[A-ZА-ЯЁ0-9«"“(]|$)/gu)].map(
+    (m) => m.index + m[0].length
+  );
+  if (ends.at(-1) !== t.length) ends.push(t.length);
+  let cut = 0;
+  for (const end of ends) {
+    if (cut && end > about * 1.25) break;
+    cut = end;
+    if (cut >= about * 0.75) break;
+  }
+  return t.slice(0, cut).trim();
 };
 
 /** The same fields the server's RSS step gives (execution-runtime summarizeFeed). */
@@ -253,7 +267,7 @@ export const SERVICES = {
       [
         'Адрес MCP-сервера (Streamable HTTP), например из Composio, Zapier MCP или вашего сервера.',
         'Токен доступа, если сервер его требует.',
-        'Через MCP AI-агент работает с Google Документами, Notion, GitHub и другими сервисами.',
+        'Через MCP ИИ-агент работает с Google Документами, Notion, GitHub и другими сервисами.',
       ],
       [
         'The MCP server address (Streamable HTTP), e.g. from Composio, Zapier MCP or your own server.',
@@ -1313,7 +1327,10 @@ export const ACTIONS = {
       },
       {
         key: 'postsWithLinks',
-        label: tr('Все записи: заголовок + кратко + ссылка', 'All items: title + summary + link'),
+        label: tr(
+          'Все записи: заголовок + первые предложения + ссылка',
+          'All items: title + first sentences + link'
+        ),
         example: tr(
           '**Новость 1**\nО чём она…\nhttps://example.com/1',
           '**Story 1**\nWhat it says…\nhttps://example.com/1'
@@ -1321,7 +1338,10 @@ export const ACTIONS = {
       },
       {
         key: 'postsShort',
-        label: tr('Все записи: заголовок + кратко', 'All items: title + summary'),
+        label: tr(
+          'Все записи: заголовок + первые предложения',
+          'All items: title + first sentences'
+        ),
         example: tr('**Новость 1**\nО чём она…', '**Story 1**\nWhat it says…'),
       },
       {
@@ -1382,7 +1402,7 @@ export const ACTIONS = {
       },
       {
         key: 'firstSummary',
-        label: tr('Первая запись: кратко', 'First item: summary'),
+        label: tr('Первая запись: первые предложения', 'First item: first sentences'),
         example: tr('О чём она в двух строках…', 'What it says in two lines…'),
       },
       {
@@ -1550,7 +1570,13 @@ export const ACTIONS = {
         default: 'stripHtml',
         options: [
           { value: 'stripHtml', label: tr('Убрать HTML-разметку', 'Strip HTML') },
-          { value: 'truncate', label: tr('Обрезать до N символов', 'Cut to N characters') },
+          {
+            value: 'truncate',
+            label: tr(
+              'Сократить: целые предложения, примерно до N знаков',
+              'Shorten: whole sentences, about N characters'
+            ),
+          },
           { value: 'replace', label: tr('Заменить текст', 'Replace text') },
           { value: 'extractLinks', label: tr('Вытащить ссылки', 'Pull out links') },
           {
@@ -1572,11 +1598,11 @@ export const ACTIONS = {
         type: 'number',
         required: false,
         basic: true,
-        label: tr('Сколько символов оставить', 'How many characters to keep'),
+        label: tr('Примерно сколько знаков', 'About how many characters'),
         default: 1000,
         help: tr(
-          'Telegram: сообщение до 4096, подпись к фото до 1024.',
-          'Telegram: message up to 4096, photo caption up to 1024.'
+          'Предложения остаются целыми: текст может выйти чуть длиннее или короче. Обрывов на середине фразы не будет.',
+          'Sentences stay whole: the text may come out a little longer or shorter. Nothing is cut mid-sentence.'
         ),
       },
       {
@@ -1983,11 +2009,11 @@ export const TEMPLATES = [
       'The model answer appears in the test result.'
     ),
     limitations: tr(
-      'Нужен AI-ключ в вашей установке; в демо — тестовое подключение.',
+      'Нужен API-ключ ИИ-сервиса в вашей установке; в демо — тестовое подключение.',
       'Needs an AI key in your install; a test connection in the demo.'
     ),
     setup: tr(
-      ['Подключите AI-сервис.', 'Измените тестовый текст при желании.', 'Нажмите «Проверить».'],
+      ['Подключите ИИ-сервис.', 'Измените тестовый текст при желании.', 'Нажмите «Проверить».'],
       ['Connect the AI service.', 'Change the test text if you like.', 'Press “Test”.']
     ),
     nodes: [
@@ -2028,7 +2054,7 @@ export const TEMPLATES = [
     setup: tr(
       [
         'Подключите Telegram-бота.',
-        'Подключите AI-сервис.',
+        'Подключите ИИ-сервис.',
         'Опишите, как отвечать.',
         'Проверьте и включите.',
       ],
@@ -2065,7 +2091,7 @@ export const TEMPLATES = [
   {
     id: 'rss_digest',
     category: 'notifications',
-    name: tr('RSS → AI-саммари → письмо', 'RSS → AI summary → email'),
+    name: tr('RSS → ИИ-саммари → письмо', 'RSS → AI summary → email'),
     desc: tr(
       'Каждое утро — краткая выжимка новостей из любимой ленты.',
       'Every morning — a short digest of your favourite feed.'
@@ -2077,7 +2103,7 @@ export const TEMPLATES = [
     ),
     limitations: tr('Лента должна быть в формате RSS или Atom.', 'The feed must be RSS or Atom.'),
     setup: tr(
-      ['Укажите адрес ленты.', 'Подключите AI и почту.', 'Укажите, кому отправлять.'],
+      ['Укажите адрес ленты.', 'Подключите ИИ и почту.', 'Укажите, кому отправлять.'],
       ['Set the feed URL.', 'Connect AI and email.', 'Choose the recipient.']
     ),
     nodes: [
@@ -2129,7 +2155,7 @@ export const TEMPLATES = [
     setup: tr(
       [
         'Укажите адрес ленты.',
-        'Подключите AI и Telegram-бота.',
+        'Подключите ИИ и Telegram-бота.',
         'Добавьте бота администратором канала и укажите @канал.',
       ],
       [
@@ -2350,7 +2376,7 @@ export const TEMPLATES = [
     id: 'tg_classify_sheet',
     category: 'sheets',
     planned: ['google_sheets'],
-    name: tr('Telegram → AI-классификация → таблица', 'Telegram → AI classification → spreadsheet'),
+    name: tr('Telegram → ИИ-классификация → таблица', 'Telegram → AI classification → spreadsheet'),
     desc: tr(
       'Каждое сообщение получает категорию и записывается в Google Таблицу.',
       'Every message gets a category and is written to Google Sheets.'
