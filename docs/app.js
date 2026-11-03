@@ -3370,6 +3370,7 @@ function openDataPicker(a, node, field, opts = {}) {
       seenKeys,
       useAi: ui.pickerUseAi !== false,
       short: ui.pickerShort === true,
+      dev: Boolean(store.settings.devMode),
     }).map((c) => ({
       ...c,
       entries: replace

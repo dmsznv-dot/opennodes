@@ -44,6 +44,40 @@ export function articleText(html: string): { title: string; text: string } {
   return { title, text };
 }
 
+/** A post read from an answer: `TITLE: …` / `TEXT: …` markers, else a short first line. */
+export function readPost(raw: string): { title: string; body: string } {
+  // Models often bold the labels: **TITLE:** / **TITLE**: — read them as plain labels.
+  const answer = raw.replace(
+    /\*\*\s*(TITLE|TEXT|ЗАГОЛОВОК|ТЕКСТ)\s*(:?)\s*\*\*\s*:?/gi,
+    (_m, label: string) => `${label}:`
+  );
+  const clean = (t: string) => t.replace(/^["«*#\s]+|["»*\s]+$/g, '').trim();
+  const marked = answer.match(
+    /^\s*(?:\*\*)?(?:TITLE|ЗАГОЛОВОК)(?:\*\*)?\s*:\s*(.+?)\s*\n+\s*(?:\*\*)?(?:TEXT|ТЕКСТ)(?:\*\*)?\s*:\s*([\s\S]*)$/i
+  );
+  if (marked) return { title: clean(marked[1]!), body: marked[2]!.trim() };
+  const onlyTitle = answer.match(/^\s*(?:TITLE|ЗАГОЛОВОК)\s*:\s*(.+?)\s*\n([\s\S]*)$/i);
+  if (onlyTitle)
+    return {
+      title: clean(onlyTitle[1]!),
+      body: onlyTitle[2]!.replace(/^\s*(?:TEXT|ТЕКСТ)\s*:\s*/i, '').trim(),
+    };
+  const lines = answer.split('\n');
+  const i = lines.findIndex((l) => l.trim());
+  const rest =
+    i < 0
+      ? ''
+      : lines
+          .slice(i + 1)
+          .join('\n')
+          .trim();
+  const first = i < 0 ? '' : lines[i]!.trim();
+  if (rest && first.length <= 160 && !/[.!?…]$/.test(first.replace(/\*+$/, ''))) {
+    return { title: clean(first), body: rest.replace(/^\s*(?:TEXT|ТЕКСТ)\s*:\s*/i, '') };
+  }
+  return { title: '', body: answer.replace(/^\s*(?:TEXT|ТЕКСТ)\s*:\s*/i, '').trim() };
+}
+
 export interface ProcessOptions {
   httpClient: SafeHttpClient;
   ssrfAllowlist?: string[];
@@ -103,31 +137,53 @@ export function buildProcessExecutor(chat: NodeExecutor, options: ProcessOptions
 
       // The instruction goes before and after the data: with a long article in between,
       // smaller models otherwise follow the data (its language, its form) instead.
+      // Per item (“for each item”) the answer is a post: a title and a text, both written as
+      // the instruction says (translated, shortened…). Asked for with markers, read back
+      // from them; a model that gives no title is asked once more for the title alone — so
+      // the post never falls back to the source's title in the source's language.
+      const perItem = config.__forEach === true;
       const prompt =
         `Instruction:\n${instruction}\n\nData:\n${data || '(empty)'}` +
         (articles ? `\n\nText of the linked pages:${articles}` : '') +
-        `\n\n---\nNow do exactly this with the data above: ${instruction}\nReply with the result only.`;
-      // Per item (“for each item”) the answer is a post: a title line, then the text — so the
-      // next step gets a processed title (e.g. translated) along with the text.
-      const titleLine =
-        config.titleLine === undefined || config.titleLine === ''
-          ? config.__forEach === true
-          : config.titleLine === true || config.titleLine === 'true';
-      const result = await chat.execute(
-        { ...node, type: 'ai.openai' },
-        {
-          model: config.model,
-          system:
-            'You process data for an automation. Follow the instruction exactly and reply with the result only — no preface, no questions. The instruction decides the language and the form of the answer, not the data. Everything you need is in the data and the page texts below.' +
-            (titleLine
-              ? ' Answer format: the first line is a short title, written the way the instruction asks (e.g. translated); then an empty line; then the text. No labels such as "Title:".'
-              : ''),
-          prompt,
-        },
-        step
+        `\n\n---\nNow do exactly this with the data above: ${instruction}\n` +
+        (perItem
+          ? 'Reply in exactly this form, nothing else:\nTITLE: <a short title, written as the instruction says — same language as the text>\nTEXT: <the text>'
+          : 'Reply with the result only.');
+      const ask = async (system: string, userPrompt: string) =>
+        String(
+          (
+            (
+              await chat.execute(
+                { ...node, type: 'ai.openai' },
+                { model: config.model, system, prompt: userPrompt },
+                step
+              )
+            ).output as { text?: unknown }
+          )?.text ?? ''
+        ).trim();
+      const answer = await ask(
+        'You process data for an automation. Follow the instruction exactly and reply with the result only — no preface, no questions. The instruction decides the language and the form of the answer, not the data. Everything you need is in the data and the page texts below.',
+        prompt
       );
-      const text = String((result.output as { text?: unknown })?.text ?? '');
-      return { output: { text, sources }, activeOutputs: ['main'] };
+      if (!perItem) return { output: { text: answer, sources }, activeOutputs: ['main'] };
+
+      let { title, body } = readPost(answer);
+      if (!title && body) {
+        title = (
+          await ask(
+            'You write titles. Reply with the title only: one line, no quotes, no label.',
+            `Write a short title (at most 12 words) for this text, in the same language as the text:\n\n${body.slice(0, 2000)}`
+          )
+        )
+          .split('\n')[0]!
+          .replace(/^(title|заголовок)\s*:\s*/i, '')
+          .replace(/^["«*#\s]+|["»*\s]+$/g, '')
+          .trim();
+      }
+      return {
+        output: { text: title ? `${title}\n\n${body}` : body, title, body, sources },
+        activeOutputs: ['main'],
+      };
     },
   };
 }

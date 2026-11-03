@@ -98,10 +98,10 @@ export function listSource(a, expr, seen = new Set()) {
   return null;
 }
 
-const resultLabel = (a, node) =>
+const resultLabel = () =>
   tr(
-    `Ответ шага ${stepNumbers(a).get(node.id)} целиком`,
-    `Step ${stepNumbers(a).get(node.id)}’s whole answer`
+    'Ответ ИИ как есть (заголовок и текст вместе)',
+    'The AI answer as is (title and text together)'
   );
 
 /**
@@ -205,7 +205,9 @@ export function postPresets({
   const ai = useAi && has('postTitle') && has('postText');
   const titleKey = ai ? 'postTitle' : 'title';
   const bodyKey = ai
-    ? 'postText'
+    ? short && has('postSummary')
+      ? 'postSummary'
+      : 'postText'
     : short && has('summary')
       ? 'summary'
       : has('text')
@@ -423,7 +425,7 @@ const EMOJI = [
 export function tagCategories(
   a,
   node,
-  { fieldKey, forEach, seenKeys = {}, useAi = true, short = false } = {}
+  { fieldKey, forEach, seenKeys = {}, useAi = true, short = false, dev = false } = {}
 ) {
   const target = targetInfo(node, fieldKey);
   const rich = target.rich;
@@ -443,15 +445,18 @@ export function tagCategories(
     const field = (k) => (keys.includes(k) ? tok({ scope: 'item', key: k }) : null);
     const hasAi = keys.includes('postTitle');
     const by = (source.processedBy ?? []).map((p) => nums.get(p.id)).join(', ');
+    // The AI's words first (when there are), then the article's: picture, link, own words.
     const FIELD_ORDER = [
       'postTitle',
       'postText',
-      'title',
+      'postSummary',
       'image',
+      'link',
+      'title',
       'text',
       'summary',
-      'link',
       'date',
+      'result',
     ];
     const rank = (k) => (FIELD_ORDER.includes(k) ? FIELD_ORDER.indexOf(k) : 99);
     cats.push({
@@ -481,7 +486,7 @@ export function tagCategories(
       icon: '✦',
       // Whose words the posts take after an AI step, and how much of the item's text.
       aiToggle: hasAi ? { on: useAi, step: by } : null,
-      shortToggle: !ai && keys.includes('summary') ? { on: short } : null,
+      shortToggle: keys.includes(ai ? 'postSummary' : 'summary') ? { on: short } : null,
       hint: ai
         ? tr(
             `Заголовок и текст — от ИИ (шаг ${by}), картинка и ссылка — из записи.`,
@@ -508,7 +513,7 @@ export function tagCategories(
   if (source?.fields.some((f) => f.key === 'link')) {
     links.push({
       id: 'item',
-      title: tr('ссылка записи', 'the item’s link'),
+      title: tr('ссылка на статью', 'the article link'),
       token: tok({ scope: 'item', key: 'link' }),
     });
   }
@@ -548,19 +553,29 @@ export function tagCategories(
     const isTrigger = act?.kind === 'trigger';
     const ref = (key) =>
       isTrigger ? { scope: 'trigger', nodeId: null, key } : { scope: 'nodes', nodeId: u.id, key };
-    const outs = [...(act?.outputs ?? [])];
-    if (act?.forEach && u.config?.forEach) {
-      outs.unshift(
-        {
-          key: 'results',
-          label: tr('Все результаты одним текстом', 'All results as one text'),
-          example: '…',
-        },
-        { key: 'count', label: tr('Сколько раз выполнен', 'How many times it ran'), example: '3' }
-      );
-    }
-    // Fields the step really gave in the latest run (a form's own fields), after the known ones.
-    for (const key of seenKeys[u.id] ?? []) {
+    // A step that ran for each item gives all its answers as one text and how many there
+    // were; per item they are in “Current item”. Its own lists stay out of sight.
+    const outs =
+      act?.forEach && u.config?.forEach
+        ? [
+            {
+              key: 'text',
+              label: tr(
+                `Все ответы шага ${nums.get(u.id)} одним текстом`,
+                `All answers of step ${nums.get(u.id)} as one text`
+              ),
+              example: '…',
+            },
+            {
+              key: 'count',
+              label: tr('Сколько записей обработано', 'How many items were processed'),
+              example: '3',
+            },
+          ]
+        : [...(act?.outputs ?? [])];
+    // A form may send any fields: those of the latest run are offered too (triggers only —
+    // a step's other keys are technical).
+    for (const key of isTrigger ? (seenKeys[u.id] ?? []) : []) {
       if (!outs.some((o) => o.key === key)) {
         outs.push({ key, label: tr(`Поле «${key}»`, `Field “${key}”`), example: '' });
       }
@@ -599,7 +614,7 @@ export function tagCategories(
       }
       blocks.push(...allItemsPresets(u.id, { rich, imageField: target.imageField }));
     }
-    if (data.length >= 2 && !listOut) {
+    if (isTrigger && data.length >= 2) {
       blocks.push({
         id: `${u.id}.all`,
         kind: 'preset',
@@ -675,21 +690,23 @@ export function tagCategories(
       ...datePresets(rich),
     ],
   });
-  cats.push({
-    id: 'run',
-    title: tr('Запуск', 'Run'),
-    icon: '▶',
-    entries: ['id', 'triggerType'].map((key) => ({
-      id: `run.${key}`,
-      kind: 'data',
-      group: 'data',
-      title: { ru: `tok.run.${key}`, en: `tok.run.${key}` },
-      i18nKey: `tok.run.${key}`,
-      template: tok({ scope: 'run', key }),
-      expr: buildExpr({ scope: 'run', key }),
-      sys: key,
-    })),
-  });
+  // Run details are technical: only in developer mode.
+  if (dev)
+    cats.push({
+      id: 'run',
+      title: tr('Запуск', 'Run'),
+      icon: '▶',
+      entries: ['id', 'triggerType'].map((key) => ({
+        id: `run.${key}`,
+        kind: 'data',
+        group: 'data',
+        title: { ru: `tok.run.${key}`, en: `tok.run.${key}` },
+        i18nKey: `tok.run.${key}`,
+        template: tok({ scope: 'run', key }),
+        expr: buildExpr({ scope: 'run', key }),
+        sys: key,
+      })),
+    });
 
   // 4. Formatting (only where the text is formatted).
   if (rich) {

@@ -54,3 +54,14 @@
 
 - An old post saved as `**[tag](tag)**` (a bold linked title) still shows its markup in the field. It is sent correctly.
 - Telegram removes blank lines and spaces at the very start and end of a message; the editor removes them on save, so the preview matches.
+
+## Second pass (after feedback)
+
+| # | Problem reported | Cause | Fix | Checked by |
+|---|---|---|---|---|
+| 11 | The AI title is Russian one time and English the next | The step had “title + text” saved as off, so the model was never asked for a title. When it wrote one anyway, the post used it; when it did not, the feed’s English title was used | Per item, the AI is always asked for `TITLE:` / `TEXT:`. The answer is read with or without bold labels, and Russian labels work too. With no title in the answer, the AI is asked for one more time. The switch is removed | `audit.test`: 6 kinds of model reply, none falls back to the feed title |
+| 12 | AI posts have no short text | Only the article had a short version | `postSummary` (“AI text — short”); the “full / short” switch works for AI posts too | `audit.test`, `tags.test` |
+| 13 | `items`, `total`, `skipped`, `outputs` in the picker | After a real run, every key of a step’s output was offered as a “field” | Only a form’s (trigger’s) own fields are offered from a run; a step that ran per item offers just “All answers as one text” and “How many items were processed” | `tags.test` with the real keys of a run |
+| 14 | Labels do not say what is what | “Title (AI)” next to “Title”; “Result” next to “All results as one text”; run ID for everyone | Every item field says where it comes from: “AI title”, “AI text — full / short”, “Article picture”, “Link to the article”, “Article title”, “Article text — full / short”, “Article date”. One label per value. Run details only in developer mode | `tags.test` (the full list of labels) |
+
+Not checked: a real model. Different models answer differently; the tests cover the forms of answer seen in practice (markers, bold markers, Russian markers, a title line, text only, a sentence first).

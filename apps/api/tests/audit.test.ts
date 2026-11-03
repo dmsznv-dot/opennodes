@@ -1632,7 +1632,7 @@ describe('posts — formatting, pictures and one post per item', () => {
     });
     // The instruction is repeated after the data, so a long article does not drown it.
     const prompt = modelRequests[0].messages.at(-1).content as string;
-    expect(prompt.trim().endsWith('Reply with the result only.')).toBe(true);
+    expect(prompt.trim().endsWith('TEXT: <the text>')).toBe(true);
     expect(prompt.match(/переведи на русский/g)).toHaveLength(2);
     expect(tgSent[0]!.body.text).toBe(
       '<b>Привет, мир</b>\nПереведённый текст.\n<a href="https://example.com/h">Читать далее</a>'
@@ -1702,41 +1702,107 @@ describe('posts — formatting, pictures and one post per item', () => {
     expect(out.image).toBe(`http://${host}/img/1.jpg`);
   });
 
-  it('an AI step per item answers as a post — a title line, then the text', async () => {
+  it('an AI step per item always gives a title written as instructed — whatever the model replies', async () => {
+    // What the model replies, and the title and text the post must get.
+    const replies: Array<[string, string, string, string]> = [
+      [
+        'markers',
+        'TITLE: Русский заголовок\nTEXT: Русский текст.',
+        'Русский заголовок',
+        'Русский текст.',
+      ],
+      [
+        'bold markers',
+        '**TITLE:** Русский заголовок\n\n**TEXT:** Русский текст.',
+        'Русский заголовок',
+        'Русский текст.',
+      ],
+      [
+        'Russian markers',
+        'Заголовок: Русский заголовок\nТекст: Русский текст.',
+        'Русский заголовок',
+        'Русский текст.',
+      ],
+      [
+        'a title line',
+        'Русский заголовок\n\nРусский текст.',
+        'Русский заголовок',
+        'Русский текст.',
+      ],
+      ['text only', 'Только русский текст.', 'Заголовок по тексту', 'Только русский текст.'],
+      [
+        'a sentence first',
+        'Первое предложение текста.\nВторое предложение.',
+        'Заголовок по тексту',
+        'Первое предложение текста.\nВторое предложение.',
+      ],
+    ];
+    for (const [name, reply, title, text] of replies) {
+      reset();
+      feed = [{ guid: `t-${name}`, title: 'English title', link: 'https://example.com/t' }];
+      const prompts: string[] = [];
+      modelReply = (b) => {
+        prompts.push(b.messages.at(-1).content);
+        // The second request, when there was no title: a title for the text.
+        return /You write titles/.test(b.messages[0].content) ? '«Заголовок по тексту»' : reply;
+      };
+      const r = await testRun(ctx, [
+        trig(),
+        node('rss', 'core.rss', {
+          feedUrl: `http://${host}/feed.xml`,
+          maxItems: 5,
+          onlyNew: false,
+        }),
+        node(
+          'ai',
+          'ai.process',
+          {
+            forEach: '{{ $nodes.rss.output.items }}',
+            input: '{{ $item.title }}',
+            instruction: 'переведи',
+            titleLine: false,
+          },
+          { cred: 'ai' }
+        ),
+        tgSend('tg', {
+          forEach: '{{ $nodes.ai.output.items }}',
+          text: '**{{ $item.postTitle }}**\n\n{{ $item.postText }}',
+        }),
+      ]);
+      expect(r.execution.status, `${name}: ${r.execution.errorMessage ?? ''}`).toBe('SUCCEEDED');
+      expect(prompts[0], name).toMatch(/TITLE: <a short title/);
+      const item = r.step('ai').outputPayload.items[0];
+      expect([item.postTitle, item.postText], name).toEqual([title, text]);
+      expect(item.postTitle, `${name}: never the feed's own title`).not.toBe('English title');
+      expect(tgSent[0]!.body.text.startsWith(`<b>${title}</b>`), name).toBe(true);
+    }
+  });
+
+  it('an AI step run once answers as it is — no title format forced', async () => {
     reset();
-    feed = [{ guid: 'q1', title: 'English title', link: 'https://example.com/q' }];
-    let system = '';
+    let prompt = '';
     modelReply = (b) => {
-      system = b.messages[0].content;
-      return 'Русский заголовок\n\nРусский текст.';
+      prompt = b.messages.at(-1).content;
+      return 'Сводка за день.';
     };
     const r = await testRun(ctx, [
-      trig(),
-      node('rss', 'core.rss', { feedUrl: `http://${host}/feed.xml`, maxItems: 5, onlyNew: false }),
+      trig({ text: 'данные' }),
       node(
         'ai',
         'ai.process',
-        {
-          forEach: '{{ $nodes.rss.output.items }}',
-          input: '{{ $item.title }}',
-          instruction: 'переведи',
-        },
+        { input: '{{ $trigger.text }}', instruction: 'сделай сводку' },
         { cred: 'ai' }
       ),
-      tgSend('tg', {
-        forEach: '{{ $nodes.ai.output.items }}',
-        text: '**{{ $item.postTitle }}**\n\n{{ $item.postText }}',
-      }),
     ]);
-    expect(r.execution.status, r.execution.errorMessage ?? '').toBe('SUCCEEDED');
-    expect(system).toMatch(/first line is a short title/);
-    expect(tgSent[0]!.body.text).toBe('<b>Русский заголовок</b>\n\nРусский текст.');
+    expect(r.step('ai').outputPayload.text).toBe('Сводка за день.');
+    expect(prompt).not.toMatch(/TITLE:/);
+  });
 
-    // A model that gives only text: the post keeps the item's own title.
+  it('AI text per item comes full and short', async () => {
     reset();
-    feed = [{ guid: 'q2', title: 'Own title', link: 'https://example.com/q2' }];
-    modelReply = () => 'Только текст.';
-    const r2 = await testRun(ctx, [
+    feed = [{ guid: 's1', title: 'T', link: 'https://example.com/s' }];
+    modelReply = () => `TITLE: Заголовок\nTEXT: ${'Длинное предложение текста. '.repeat(20)}`;
+    const r = await testRun(ctx, [
       trig(),
       node('rss', 'core.rss', { feedUrl: `http://${host}/feed.xml`, maxItems: 5, onlyNew: false }),
       node(
@@ -1746,10 +1812,10 @@ describe('posts — formatting, pictures and one post per item', () => {
         { cred: 'ai' }
       ),
     ]);
-    expect(r2.step('ai').outputPayload.items[0]).toMatchObject({
-      postTitle: 'Own title',
-      postText: 'Только текст.',
-    });
+    const item = r.step('ai').outputPayload.items[0];
+    expect(item.postText.length).toBeGreaterThan(400);
+    expect(item.postSummary.length).toBeLessThanOrEqual(280);
+    expect(item.postSummary.endsWith('…')).toBe(true);
   });
 
   it('a list of pictures in the picture field: the first one is used', async () => {

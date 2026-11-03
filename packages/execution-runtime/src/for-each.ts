@@ -1,6 +1,7 @@
 import { ActionExecutionError } from '@localflow/connector-sdk';
 import { ExpressionEvaluator, type NodeExecutor } from '@localflow/workflow-engine';
 import { toText } from './text.js';
+import { shortText } from './connectors.js';
 
 /** At most this many items per run, whatever the step says: a feed must not flood a channel. */
 export const FOR_EACH_MAX = 50;
@@ -80,12 +81,14 @@ export function splitResult(text: string): { resultTitle: string; resultBody: st
 export function postFields(item: unknown, result: string): Record<string, unknown> {
   const base = isObject(item) ? item : { value: item };
   const parts = splitResult(result);
+  const postText = parts.resultTitle ? parts.resultBody : result;
   return {
     ...base,
     result,
     ...parts,
     postTitle: parts.resultTitle || String(base.postTitle ?? base.title ?? ''),
-    postText: parts.resultTitle ? parts.resultBody : result,
+    postText,
+    postSummary: shortText(postText),
   };
 }
 

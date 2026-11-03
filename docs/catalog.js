@@ -23,26 +23,34 @@ export const LIST_FIELDS = {
   feedItem: [
     {
       key: 'title',
-      label: tr('Заголовок', 'Title'),
+      label: tr('Заголовок статьи', 'Article title'),
       example: tr('Новость дня', 'Story of the day'),
     },
     {
       key: 'summary',
-      label: tr('Кратко (до 280 знаков)', 'Summary (up to 280 chars)'),
+      label: tr('Текст статьи — кратко', 'Article text — short'),
       example: tr('О чём запись — в двух строках…', 'What it is about, in two lines…'),
     },
     {
       key: 'text',
-      label: tr('Текст целиком', 'Full text'),
+      label: tr('Текст статьи — целиком', 'Article text — full'),
       example: tr('Полный текст записи из ленты…', 'The item’s full text from the feed…'),
     },
-    { key: 'link', label: tr('Ссылка', 'Link'), example: 'https://example.com/1' },
+    {
+      key: 'link',
+      label: tr('Ссылка на статью', 'Link to the article'),
+      example: 'https://example.com/1',
+    },
     {
       key: 'image',
-      label: tr('Картинка', 'Picture'),
+      label: tr('Картинка статьи', 'Article picture'),
       example: 'https://example.com/1.jpg',
     },
-    { key: 'date', label: tr('Дата публикации', 'Published'), example: '03.11.2026 10:15' },
+    {
+      key: 'date',
+      label: tr('Дата публикации статьи', 'Article date'),
+      example: '03.11.2026 10:15',
+    },
   ],
 };
 
@@ -61,13 +69,18 @@ export const RESULT_FIELD = {
 export const POST_FIELDS = [
   {
     key: 'postTitle',
-    label: tr('Заголовок (ИИ)', 'Title (AI)'),
+    label: tr('Заголовок от ИИ', 'AI title'),
     example: tr('Заголовок от ИИ', 'AI title'),
   },
   {
     key: 'postText',
-    label: tr('Текст (ИИ)', 'Text (AI)'),
+    label: tr('Текст от ИИ — целиком', 'AI text — full'),
     example: tr('Текст статьи, обработанный ИИ…', 'The article text as the AI wrote it…'),
+  },
+  {
+    key: 'postSummary',
+    label: tr('Текст от ИИ — кратко', 'AI text — short'),
+    example: tr('Текст от ИИ, до 280 знаков…', 'The AI text, up to 280 characters…'),
   },
 ];
 
@@ -104,6 +117,7 @@ export function postFields(item, result) {
     ...parts,
     postTitle: parts.resultTitle || String(base.postTitle ?? base.title ?? ''),
     postText: parts.resultTitle ? parts.resultBody : result,
+    postSummary: shortText(parts.resultTitle ? parts.resultBody : result),
   };
 }
 
@@ -755,19 +769,6 @@ export const ACTIONS = {
         ),
       },
       {
-        key: 'titleLine',
-        type: 'boolean',
-        required: false,
-        basic: false,
-        showIf: { forEach: ['*'] },
-        label: tr('Ответ для поста: заголовок + текст', 'Answer for a post: title + text'),
-        help: tr(
-          'Для каждой записи ИИ пишет заголовок первой строкой, ниже текст — так переводится и заголовок. Выключите, если нужен только текст.',
-          'For each item the AI writes a title line, then the text — so the title gets translated too. Turn off for text only.'
-        ),
-        default: true,
-      },
-      {
         key: 'readLinks',
         type: 'boolean',
         required: false,
@@ -804,7 +805,7 @@ export const ACTIONS = {
     outputs: [
       {
         key: 'text',
-        label: tr('Результат', 'Result'),
+        label: tr('Ответ ИИ', 'AI answer'),
         example: tr(
           'Алекс Рорисон: фото как объект\nФотограф работает с отпечатками как с материалом…',
           'Alex Rorison: photos as objects\nThe photographer treats prints as material…'
@@ -1338,7 +1339,7 @@ export const ACTIONS = {
       },
       {
         key: 'titleLinks',
-        label: tr('Список: заголовки-ссылки', 'List: titles as links'),
+        label: tr('Все заголовки — ссылками', 'All titles as links'),
         example: '[Новость 1](https://example.com/1)',
       },
       {
@@ -1353,17 +1354,17 @@ export const ACTIONS = {
       },
       {
         key: 'titles',
-        label: tr('Заголовки записей', 'Item titles'),
+        label: tr('Все заголовки списком', 'All titles as a list'),
         example: tr('Новость 1\nНовость 2', 'Story 1\nStory 2'),
       },
       {
         key: 'texts',
-        label: tr('Тексты всех записей', 'Texts of all items'),
+        label: tr('Все тексты подряд', 'All texts in a row'),
         example: tr('Текст первой…\n\nТекст второй…', 'First text…\n\nSecond text…'),
       },
       {
         key: 'links',
-        label: tr('Ссылки всех записей', 'Links of all items'),
+        label: tr('Все ссылки списком', 'All links as a list'),
         example: 'https://example.com/1\nhttps://example.com/2',
       },
       {
@@ -1404,7 +1405,7 @@ export const ACTIONS = {
         label: tr('Первая запись: дата', 'First item: date'),
         example: '03.11.2026 10:15',
       },
-      { key: 'count', label: tr('Сколько записей', 'How many items'), example: '3' },
+      { key: 'count', label: tr('Сколько новых записей', 'How many new items'), example: '3' },
     ],
     simulate: (c) => ({
       output: feedSummary(L(SAMPLE_FEED)),

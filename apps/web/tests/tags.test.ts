@@ -33,11 +33,25 @@ describe('data picker — ready-made blocks', () => {
     // Like a mapping panel: the item's fields come before any ready-made combination.
     expect(cats.map((c: { id: string }) => c.id).slice(0, 2)).toEqual(['item', 'posts.item']);
     const item = cats[0];
-    expect(item.entries.map((e: { expr: string }) => e.expr).slice(0, 4)).toEqual([
+    expect(item.entries.map((e: { expr: string }) => e.expr).slice(0, 5)).toEqual([
       '$item.postTitle',
       '$item.postText',
-      '$item.title',
+      '$item.postSummary',
       '$item.image',
+      '$item.link',
+    ]);
+    // Every field says where it comes from: the AI or the article.
+    expect(item.entries.map((e: { title: { ru: string } }) => e.title.ru)).toEqual([
+      'Заголовок от ИИ',
+      'Текст от ИИ — целиком',
+      'Текст от ИИ — кратко',
+      'Картинка статьи',
+      'Ссылка на статью',
+      'Заголовок статьи',
+      'Текст статьи — целиком',
+      'Текст статьи — кратко',
+      'Дата публикации статьи',
+      'Ответ ИИ как есть (заголовок и текст вместе)',
     ]);
     const posts = cats[1];
     expect(posts.entries.length).toBeGreaterThanOrEqual(2);
@@ -59,6 +73,27 @@ describe('data picker — ready-made blocks', () => {
     // After an AI step: its title and text.
     expect(posts.entries[0].template).toBe('**{{ $item.postTitle }}**\n\n{{ $item.postText }}');
     expect(posts.aiToggle).toMatchObject({ on: true, step: '3' });
+    // AI posts come full or short, like the article's own.
+    expect(posts.shortToggle).toEqual({ on: false });
+    const aiShort = tagCategories(a, tg, {
+      fieldKey: 'text',
+      forEach: tg.config.forEach,
+      short: true,
+    })[1];
+    expect(aiShort.entries[0].template).toBe(
+      '**{{ $item.postTitle }}**\n\n{{ $item.postSummary }}'
+    );
+    // A step that ran per item shows no technical keys, even after a real run.
+    const seen = tagCategories(a, tg, {
+      fieldKey: 'text',
+      forEach: tg.config.forEach,
+      seenKeys: { ai_1: ['items', 'outputs', 'total', 'skipped', 'results', 'text', 'count'] },
+    });
+    const ai = seen.find((c: { id: string }) => c.id === 'step.ai_1');
+    expect(ai.entries.map((e: { expr: string }) => e.expr)).toEqual([
+      '$nodes.ai_1.output.text',
+      '$nodes.ai_1.output.count',
+    ]);
     // “From the item”: its own title and text, full or short.
     const own = tagCategories(a, tg, {
       fieldKey: 'text',
