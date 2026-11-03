@@ -879,6 +879,10 @@ export const ACTIONS = {
         basic: true,
         label: tr('Адрес ленты', 'Feed URL'),
         placeholder: 'https://example.com/feed.xml',
+        help: tr(
+          'Можно указать и адрес сайта — если сайт объявляет свою ленту, она найдётся сама.',
+          'A site address works too — if the site announces its feed, it is found automatically.'
+        ),
       },
       {
         key: 'maxItems',

@@ -12,6 +12,18 @@ const server = http.createServer((req, res) => {
   let raw = '';
   req.on('data', (c) => (raw += c));
   req.on('end', () => {
+    if (req.url === '/site') {
+      res.setHeader('content-type', 'text/html');
+      return res.end(
+        '<!doctype html><html><head><link rel="alternate" type="application/rss+xml" title="RSS" href="/feed.xml"></head><body>Блог</body></html>'
+      );
+    }
+    if (req.url === '/plain') {
+      res.setHeader('content-type', 'text/html');
+      return res.end(
+        '<!doctype html><html><head><title>Сайт</title></head><body>Нет ленты</body></html>'
+      );
+    }
     if (req.url === '/feed.xml') {
       res.setHeader('content-type', 'application/rss+xml');
       return res.end(
@@ -257,5 +269,33 @@ describe('@localflow/api — RSS → Telegram channel', () => {
     });
     expect(sent[1]!.body.text).toBe(caption);
     expect(step(res, 'file').outputPayload.messageId).toBe(102);
+  });
+
+  it('finds the feed of a site address, and explains a web page that has none', async () => {
+    const t = await setup();
+    feed = [{ guid: 'p', title: 'Пост', link: 'https://n.example/p' }];
+    const flow = (url: string) => [
+      node('t', 'trigger.manual', {}),
+      node('rss', 'core.rss', { feedUrl: url, maxItems: 5, onlyNew: true }),
+    ];
+    const site = await t.run(await t.create(flow(`http://${host}/site`)));
+    expect(site.execution.status).toBe('SUCCEEDED');
+    expect(step(site, 'rss').outputPayload).toMatchObject({
+      count: 1,
+      titles: 'Пост',
+      feedCount: 1,
+    });
+
+    const page = await t.run(await t.create(flow(`http://${host}/plain`)));
+    expect(page.execution.status).toBe('FAILED');
+    expect(step(page, 'rss').errorMessage).toMatch(/is a web page, not an RSS or Atom feed/);
+
+    feed = [];
+    const empty = await t.run(await t.create(flow(`http://${host}/feed.xml`)));
+    expect(step(empty, 'rss').outputPayload).toMatchObject({
+      count: 0,
+      stopped: true,
+      feedCount: 0,
+    });
   });
 });

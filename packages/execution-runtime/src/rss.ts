@@ -91,7 +91,12 @@ export function withOnlyNewItems(rss: NodeExecutor, db: DatabaseInstance): NodeE
           });
       }
 
-      const output = { ...summarizeFeed(handed.map((x) => x.item)), stopped: !handed.length };
+      const output = {
+        ...summarizeFeed(handed.map((x) => x.item)),
+        stopped: !handed.length,
+        // How many items the feed has in all: tells "nothing new" from "empty feed".
+        feedCount: all.length,
+      };
       return { output, activeOutputs: handed.length ? ['main'] : [] };
     },
   };

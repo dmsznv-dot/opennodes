@@ -294,7 +294,9 @@ function toStep(s, a, nums) {
     const stopped =
       (s.nodeType === 'logic.condition' && out?.passed === false) || out?.stopped === true;
     status = stopped ? 'stopped' : 'ok';
-    if (s.nodeType === 'core.rss' && out?.stopped) summary = t('run.noNewItems');
+    if (s.nodeType === 'core.rss' && out?.stopped) {
+      summary = out.feedCount === 0 ? t('run.emptyFeed') : t('run.noNewItems');
+    }
     if (s.nodeType?.startsWith('trigger.')) summary = triggerSummary(s.nodeType, out?.payload);
   } else if (s.status === 'FAILED') status = 'failed';
   else if (s.status === 'SKIPPED') status = out?.disabled ? 'skipped' : 'notReached';

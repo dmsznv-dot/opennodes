@@ -72,14 +72,18 @@ const ENTITIES: Record<string, string> = {
 /** Feed text as a person reads it: CDATA unwrapped, entities decoded, no markup. */
 export function feedText(raw: string | undefined, { stripTags = false } = {}): string {
   let s = (raw ?? '').replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1');
-  s = s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, code: string) => {
-    if (code[0] === '#') {
-      const n =
-        code[1]?.toLowerCase() === 'x' ? parseInt(code.slice(2), 16) : Number(code.slice(1));
-      return Number.isFinite(n) ? String.fromCodePoint(n) : m;
-    }
-    return ENTITIES[code.toLowerCase()] ?? m;
-  });
+  const decode = (text: string) =>
+    text.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, code: string) => {
+      if (code[0] === '#') {
+        const n =
+          code[1]?.toLowerCase() === 'x' ? parseInt(code.slice(2), 16) : Number(code.slice(1));
+        return Number.isFinite(n) ? String.fromCodePoint(n) : m;
+      }
+      return ENTITIES[code.toLowerCase()] ?? m;
+    });
+  // Feeds often encode twice (&amp;#8220;): one more pass if entities are left.
+  s = decode(s);
+  if (/&(#x?[0-9a-f]+|[a-z]+);/i.test(s)) s = decode(s);
   if (stripTags) {
     // Entities may have encoded the markup itself, hence decode first, then strip.
     s = s.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '');
@@ -347,6 +351,31 @@ export const csvAction: ConnectorAction<
 };
 
 // 6. F29: RSS / Atom Reader
+const FEED_HEADERS = {
+  'User-Agent': 'OpenNodes/0.1 (+RSS reader)',
+  Accept:
+    'application/rss+xml, application/atom+xml, application/xml;q=0.9, text/xml;q=0.9, */*;q=0.5',
+};
+
+export const isFeedDocument = (text: string) => /<(rss|feed|rdf:RDF)\b/i.test(text.slice(0, 4096));
+
+/** The feed a web page announces with <link rel="alternate" type="application/rss+xml">. */
+export function discoverFeedUrl(html: string, pageUrl: string): string | undefined {
+  for (const tag of html.match(/<link\b[^>]*>/gi) ?? []) {
+    if (!/rel=["']?alternate/i.test(tag)) continue;
+    if (!/type=["']?application\/(rss|atom)\+xml/i.test(tag)) continue;
+    const href = tag.match(/href=["']([^"']+)["']/i)?.[1];
+    if (href) {
+      try {
+        return new URL(feedText(href), pageUrl).toString();
+      } catch {
+        // Malformed href: keep looking.
+      }
+    }
+  }
+  return undefined;
+}
+
 export const rssAction: ConnectorAction<{ url?: string; xml?: string }, RssFeedItem[]> = {
   name: 'rss',
   description: 'Fetch and parse an RSS 2.0 or Atom XML feed into structured items.',
@@ -357,11 +386,26 @@ export const rssAction: ConnectorAction<{ url?: string; xml?: string }, RssFeedI
     if (!input.url) {
       throw new ActionExecutionError('RSS URL or XML string is required', 'rss', 'core.rss');
     }
-    const resp = await ctx.httpClient.request({
-      url: input.url,
-      method: 'GET',
-    });
-    return parseRssXml(String(resp.data ?? ''));
+    const get = async (url: string) =>
+      String(
+        (await ctx.httpClient.request({ url, method: 'GET', headers: FEED_HEADERS })).data ?? ''
+      );
+    let body = await get(input.url);
+    if (!isFeedDocument(body)) {
+      // A web page instead of its feed: follow the feed link the page announces.
+      const feedUrl = discoverFeedUrl(body, input.url);
+      if (feedUrl) body = await get(feedUrl);
+      if (!isFeedDocument(body)) {
+        throw new ActionExecutionError(
+          `${input.url} is a web page, not an RSS or Atom feed` +
+            `${feedUrl ? ' (the feed link on it did not lead to a feed either)' : ''}. ` +
+            'Use the feed address — often /feed, /rss or a link marked RSS on the site.',
+          'rss',
+          'core.rss'
+        );
+      }
+    }
+    return parseRssXml(body);
   },
 };
 
