@@ -995,17 +995,36 @@ textarea.input {
   min-height: 0;
 }
 .canvas {
+  position: relative;
   flex: 1;
-  overflow: auto;
-  padding: var(--space-8) var(--space-4) 120px;
+  overflow: hidden;
   background-color: var(--bg);
   background-image: radial-gradient(var(--canvas-dot) 1px, transparent 1px);
   background-size: 16px 16px;
   outline: none;
+  touch-action: none; /* the canvas handles pan and pinch itself */
+  overscroll-behavior: contain;
 }
-.canvas-inner {
-  position: relative;
-  margin: 0 auto;
+.canvas.canvas-empty {
+  overflow: auto;
+  touch-action: auto;
+}
+.canvas.space-pan {
+  cursor: grab;
+}
+.canvas.panning,
+.canvas.panning * {
+  cursor: grabbing !important;
+}
+.canvas-world {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+.canvas-world .node-card {
+  user-select: none;
 }
 .edges {
   position: absolute;
@@ -1939,4 +1958,134 @@ textarea.input {
 }
 .data-hint-line {
   margin-top: var(--space-1);
+}
+
+/* ── Canvas: toolbar, handles, edge actions ────────────────────────────── */
+.canvas-toolbar {
+  position: absolute;
+  left: var(--space-4);
+  bottom: var(--space-4);
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: var(--space-1);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+}
+.canvas-toolbar .icon-btn {
+  width: 28px;
+  height: 28px;
+  font-size: 16px;
+}
+.canvas-toolbar .icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.zoom-label {
+  min-width: 52px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.zoom-label:hover {
+  background: var(--surface-2);
+}
+.toolbar-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 var(--space-1);
+  background: var(--border);
+}
+.edges {
+  overflow: visible;
+}
+.edge-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 14;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+.edge-hit:hover + .edge,
+.edge-hit:hover {
+  stroke: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+.connect-preview {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-dasharray: 5 4;
+}
+.out-handle {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  background: var(--surface);
+  cursor: crosshair;
+  z-index: 2;
+  opacity: 0.6;
+  transition:
+    opacity 120ms var(--ease),
+    transform 120ms var(--ease);
+}
+.out-handle:hover {
+  opacity: 1;
+  transform: scale(1.2);
+}
+.edge-pluses {
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+.edge-plus {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--accent);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.35;
+  transition: opacity 120ms var(--ease);
+}
+.edge-plus:hover,
+.edge-plus:focus-visible {
+  opacity: 1;
+}
+.click-anchor {
+  position: fixed;
+  width: 0;
+  height: 0;
+}
+.quick-add {
+  width: min(360px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.quick-add .picker-list {
+  max-height: 340px;
+  overflow: auto;
+}
+.quick-add .search-input {
+  min-height: 36px;
+  font-size: 14px;
+}
+@media (max-width: 640px) {
+  .canvas-toolbar {
+    bottom: 72px;
+  }
 }

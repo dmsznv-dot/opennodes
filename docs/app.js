@@ -20,6 +20,7 @@ import {
 } from './i18n.js';
 import * as live from './live.js';
 import { tokenField, parseExpr, buildExpr } from './tokens.js';
+import { attachCanvas, isTyping } from './canvas.js';
 import {
   ACTIONS,
   SERVICES,
@@ -175,6 +176,36 @@ window.addEventListener('hashchange', () => {
 });
 
 document.addEventListener('keydown', (e) => {
+  // Canvas shortcuts: only in the editor, never while typing or with a dialog open.
+  if (
+    ui.route.view === 'editor' &&
+    ui.canvas &&
+    !isTyping(e.target) &&
+    !document.querySelector('.modal-backdrop, .popover')
+  ) {
+    const mod = e.metaKey || e.ctrlKey;
+    const a = getAutomation(ui.route.id);
+    if (mod && e.key.toLowerCase() === 'z') {
+      e.preventDefault();
+      if (a) (e.shiftKey ? redo : undo)(a);
+      return;
+    }
+    if (mod && e.key.toLowerCase() === 'y') {
+      e.preventDefault();
+      if (a) redo(a);
+      return;
+    }
+    if (!mod && !e.altKey) {
+      const act = { '+': 'zoomIn', '=': 'zoomIn', '-': 'zoomOut', 0: 'reset', f: 'fit', F: 'fit' }[
+        e.key
+      ];
+      if (act) {
+        e.preventDefault();
+        ui.canvas[act]();
+        return;
+      }
+    }
+  }
   if (e.key !== 'Escape') return;
   if (hintEl) return hideHint();
   if (document.querySelector('.modal-backdrop')) closeModal();
@@ -198,9 +229,8 @@ function render() {
   else if (r.view === 'history') view.append(viewHistory());
   else if (r.view === 'editor') {
     view.append(viewEditor(r.id));
-    // On narrow screens wide branches overflow: start scrolled to the centre (the trigger).
-    const canvas = view.querySelector('.canvas');
-    if (canvas) canvas.scrollLeft = (canvas.scrollWidth - canvas.clientWidth) / 2;
+    ui.afterRender?.();
+    ui.afterRender = null;
   } else view.append(viewAutomations());
   renderTour();
   if (store.onboarding.status === 'new' && !document.querySelector('.modal-backdrop'))
@@ -1419,6 +1449,47 @@ function touch(a) {
   save();
 }
 
+/** Where steps sit on the canvas is layout, not logic: saving it does not mark a change. */
+function savePositions() {
+  save();
+}
+
+// ── Undo / redo (per automation, this session) ────────────────────────────────
+
+const snapshot = (a) => JSON.stringify({ nodes: a.nodes, edges: a.edges });
+
+/** Call before changing the graph, so Cmd/Ctrl+Z can bring this state back. */
+function checkpoint(a) {
+  if (ui.history?.id !== a.id) ui.history = { id: a.id, past: [], future: [] };
+  ui.history.past.push(snapshot(a));
+  if (ui.history.past.length > 50) ui.history.past.shift();
+  ui.history.future = [];
+}
+
+function restore(a, snap) {
+  const { nodes, edges } = JSON.parse(snap);
+  a.nodes = nodes;
+  a.edges = edges;
+  if (ui.panelNodeId && !a.nodes.some((n) => n.id === ui.panelNodeId)) ui.panelNodeId = null;
+  ui.panelDirty = false;
+  touch(a);
+  render();
+}
+
+function undo(a) {
+  const h = ui.history;
+  if (h?.id !== a.id || !h.past.length) return;
+  h.future.push(snapshot(a));
+  restore(a, h.past.pop());
+}
+
+function redo(a) {
+  const h = ui.history;
+  if (h?.id !== a.id || !h.future.length) return;
+  h.past.push(snapshot(a));
+  restore(a, h.future.pop());
+}
+
 function viewEditor(id) {
   const a = getAutomation(id);
   if (!a) {
@@ -1544,11 +1615,7 @@ function viewEditor(id) {
   const body = h(
     'div',
     { class: ['editor-body', ui.panelNodeId && 'with-panel'] },
-    h(
-      'div',
-      { class: 'canvas', tabindex: '-1' },
-      a.nodes.length ? canvasContent(a) : emptyCanvas(a)
-    ),
+    a.nodes.length ? canvasView(a) : h('div', { class: 'canvas canvas-empty' }, emptyCanvas(a)),
     ui.panelNodeId
       ? nodePanel(
           a,
@@ -1606,57 +1673,150 @@ function emptyCanvas(a) {
   );
 }
 
-function canvasContent(a) {
-  const cardH = store.settings.devMode ? CARD_H + 20 : CARD_H;
-  const { pos, width, height } = layout(a, cardH);
-  const nums = stepNumbers(a);
-  const PLUS = 56;
-  const leaves = a.nodes.filter((n) => !a.edges.some((e) => e.source === n.id));
-  const totalH = height + PLUS;
+// ── Canvas: free layout, pan/zoom, drag, connect, quick add ───────────────────
 
+const GRID = 8;
+const snap = (v) => Math.round(v / GRID) * GRID;
+
+/** Steps without a saved position get the automatic layout once (old automations). */
+function ensurePositions(a, cardH) {
+  if (a.nodes.every((n) => n.position)) return;
+  const { pos } = layout(a, cardH);
+  for (const n of a.nodes) n.position ??= { ...(pos.get(n.id) ?? { x: 0, y: 0 }) };
+  savePositions(a);
+}
+
+function graphBounds(a, cardH) {
+  if (!a.nodes.length) return null;
+  const xs = a.nodes.map((n) => n.position.x);
+  const ys = a.nodes.map((n) => n.position.y);
+  return {
+    minX: Math.min(...xs),
+    minY: Math.min(...ys),
+    maxX: Math.max(...xs) + CARD_W,
+    maxY: Math.max(...ys) + cardH + 56,
+  };
+}
+
+const viewKey = (id) => `opennodes.view.${id}`;
+function loadView(id) {
+  try {
+    const v = JSON.parse(localStorage.getItem(viewKey(id)) ?? 'null');
+    return v && Number.isFinite(v.x) && Number.isFinite(v.z) ? v : null;
+  } catch {
+    return null;
+  }
+}
+function saveView(id, view) {
+  try {
+    localStorage.setItem(viewKey(id), JSON.stringify(view));
+  } catch {
+    /* private mode: the view is not remembered */
+  }
+}
+
+function edgePath(a, cardH, e) {
+  const s = a.nodes.find((n) => n.id === e.source)?.position;
+  const d = a.nodes.find((n) => n.id === e.target)?.position;
+  if (!s || !d) return null;
+  const x1 = s.x + CARD_W / 2;
+  const y1 = s.y + cardH;
+  const x2 = d.x + CARD_W / 2;
+  const y2 = d.y;
+  const bend = Math.max(40, Math.abs(y2 - y1) / 2);
+  return {
+    d: `M ${x1} ${y1} C ${x1} ${y1 + bend}, ${x2} ${y2 - bend}, ${x2} ${y2}`,
+    mid: { x: (x1 + x2) / 2, y: (y1 + y2) / 2 },
+  };
+}
+
+function canvasView(a) {
+  const cardH = store.settings.devMode ? CARD_H + 20 : CARD_H;
+  ensurePositions(a, cardH);
+  const nums = stepNumbers(a);
+  const leaves = a.nodes.filter((n) => !a.edges.some((e) => e.source === n.id));
+
+  const edgeGroup = svg('g');
+  const preview = svg('path', { class: 'connect-preview' });
   const edgeLayer = svg(
     'svg',
-    {
-      class: 'edges',
-      width,
-      height: totalH,
-      viewBox: `0 0 ${width} ${totalH}`,
-      'aria-hidden': 'true',
-    },
-    a.edges.map((e) => {
-      const s = pos.get(e.source);
-      const d = pos.get(e.target);
-      if (!s || !d) return null;
-      const x1 = s.x + CARD_W / 2;
-      const y1 = s.y + cardH;
-      const x2 = d.x + CARD_W / 2;
-      const y2 = d.y;
-      const my = (y1 + y2) / 2;
-      return svg('path', {
-        d: `M ${x1} ${y1} C ${x1} ${my}, ${x2} ${my}, ${x2} ${y2}`,
-        class: 'edge',
-      });
-    }),
-    leaves.map((n) => {
-      const p = pos.get(n.id);
-      return svg('path', {
-        d: `M ${p.x + CARD_W / 2} ${p.y + cardH} L ${p.x + CARD_W / 2} ${p.y + cardH + 20}`,
-        class: 'edge edge-dashed',
-      });
-    })
+    { class: 'edges', width: 1, height: 1, 'aria-hidden': 'true' },
+    edgeGroup,
+    preview
   );
+  const edgePluses = h('div', { class: 'edge-pluses' });
 
-  const cards = a.nodes.map((n) => {
-    const p = pos.get(n.id);
+  const drawEdges = () => {
+    clear(edgeGroup);
+    clear(edgePluses);
+    for (const e of a.edges) {
+      const p = edgePath(a, cardH, e);
+      if (!p) continue;
+      edgeGroup.append(
+        svg('path', { d: p.d, class: 'edge' }),
+        svg('path', {
+          d: p.d,
+          class: 'edge-hit',
+          'data-edge-id': e.id,
+          onclick: (ev) => openEdgeMenu(a, e, ev),
+        })
+      );
+      edgePluses.append(
+        h(
+          'button',
+          {
+            type: 'button',
+            class: 'edge-plus',
+            style: { left: `${p.mid.x - 11}px`, top: `${p.mid.y - 11}px` },
+            'aria-label': t('cv.insertHere'),
+            title: t('cv.insertHere'),
+            'data-edge-id': e.id,
+            onclick: () =>
+              openPicker(a, e.source, {
+                insertEdge: e,
+                position: { x: snap(p.mid.x - CARD_W / 2), y: snap(p.mid.y - cardH / 2) },
+              }),
+          },
+          '＋'
+        )
+      );
+    }
+    for (const n of leaves) {
+      const p = n.position;
+      edgeGroup.append(
+        svg('path', {
+          d: `M ${p.x + CARD_W / 2} ${p.y + cardH} L ${p.x + CARD_W / 2} ${p.y + cardH + 20}`,
+          class: 'edge edge-dashed',
+        })
+      );
+    }
+  };
+
+  const cardEls = new Map();
+  const place = (n) => {
+    const els = cardEls.get(n.id);
+    if (!els) return;
+    els.card.style.left = `${n.position.x}px`;
+    els.card.style.top = `${n.position.y}px`;
+    els.handle.style.left = `${n.position.x + CARD_W / 2 - 7}px`;
+    els.handle.style.top = `${n.position.y + cardH - 7}px`;
+    if (els.plus) {
+      els.plus.style.left = `${n.position.x + CARD_W / 2 - 16}px`;
+      els.plus.style.top = `${n.position.y + cardH + 20}px`;
+    }
+  };
+
+  const world = h('div', { class: 'canvas-world' }, edgeLayer, edgePluses);
+  for (const n of a.nodes) {
     const act = ACTIONS[n.action];
     const state = nodeState(a, n, store.connections);
-    const sub = nodeSubtitle(a, n);
-    return h(
+    const card = h(
       'button',
       {
         type: 'button',
         class: ['node-card', ui.panelNodeId === n.id && 'selected', `ns-${state}`],
-        style: { left: `${p.x}px`, top: `${p.y}px`, width: `${CARD_W}px`, height: `${cardH}px` },
+        style: { width: `${CARD_W}px`, height: `${cardH}px` },
+        'data-node-id': n.id,
         'aria-label': `${t('step.n', { n: nums.get(n.id) })}: ${nodeTitle(n)} — ${t(`step.${state}`)}`,
         'data-hint': 'node',
         onclick: () => openPanel(a, n.id),
@@ -1673,34 +1833,219 @@ function canvasContent(a) {
         stepStatePill(state)
       ),
       h('span', { class: 'node-title' }, nodeTitle(n)),
-      h('span', { class: 'node-sub' }, sub),
+      h('span', { class: 'node-sub' }, nodeSubtitle(a, n)),
       store.settings.devMode ? h('span', { class: 'node-dev' }, `${act?.type} · ${n.id}`) : null
     );
-  });
+    const handle = h('div', {
+      class: 'out-handle',
+      'data-out-handle': n.id,
+      title: t('cv.dragToConnect'),
+      'data-hint': 'connect',
+    });
+    const plus = leaves.includes(n)
+      ? h(
+          'button',
+          {
+            type: 'button',
+            class: 'plus-btn',
+            'aria-label': `${t('ed.addNext')} (${nodeTitle(n)})`,
+            'data-hint': 'addStep',
+            onclick: () => openPicker(a, n.id),
+          },
+          '＋'
+        )
+      : null;
+    cardEls.set(n.id, { card, handle, plus });
+    world.append(...[card, handle, plus].filter(Boolean));
+    place(n);
+  }
+  drawEdges();
 
-  const pluses = leaves.map((n) => {
-    const p = pos.get(n.id);
-    return h(
+  const zoomLabel = h('span', {}, '100%');
+  const toolbar = h(
+    'div',
+    {
+      class: 'canvas-toolbar',
+      role: 'toolbar',
+      'aria-label': t('cv.toolbar'),
+      'data-hint': 'canvasNav',
+    },
+    h(
       'button',
       {
         type: 'button',
-        class: 'plus-btn',
-        style: { left: `${p.x + CARD_W / 2 - 16}px`, top: `${p.y + cardH + 20}px` },
-        'aria-label': `${t('ed.addNext')} (${nodeTitle(n)})`,
-        'data-hint': 'addStep',
-        onclick: () => openPicker(a, n.id),
+        class: 'icon-btn',
+        title: t('cv.zoomOut'),
+        'aria-label': t('cv.zoomOut'),
+        onclick: () => ui.canvas?.zoomOut(),
       },
-      '＋'
-    );
+      '−'
+    ),
+    h(
+      'button',
+      {
+        type: 'button',
+        class: 'zoom-label',
+        title: t('cv.reset'),
+        onclick: () => ui.canvas?.reset(),
+      },
+      zoomLabel
+    ),
+    h(
+      'button',
+      {
+        type: 'button',
+        class: 'icon-btn',
+        title: t('cv.zoomIn'),
+        'aria-label': t('cv.zoomIn'),
+        onclick: () => ui.canvas?.zoomIn(),
+      },
+      '+'
+    ),
+    h(
+      'button',
+      {
+        type: 'button',
+        class: 'icon-btn',
+        title: t('cv.fit'),
+        'aria-label': t('cv.fit'),
+        onclick: () => ui.canvas?.fit(),
+      },
+      '⤢'
+    ),
+    h('span', { class: 'toolbar-sep' }),
+    h(
+      'button',
+      {
+        type: 'button',
+        class: 'icon-btn',
+        title: t('cv.undo'),
+        'aria-label': t('cv.undo'),
+        disabled: !(ui.history?.id === a.id && ui.history.past.length),
+        onclick: () => undo(a),
+      },
+      '↶'
+    ),
+    h(
+      'button',
+      {
+        type: 'button',
+        class: 'icon-btn',
+        title: t('cv.redo'),
+        'aria-label': t('cv.redo'),
+        disabled: !(ui.history?.id === a.id && ui.history.future.length),
+        onclick: () => redo(a),
+      },
+      '↷'
+    )
+  );
+
+  const viewport = h('div', { class: 'canvas', tabindex: '-1' }, world, toolbar);
+  viewport.addEventListener('canvas:view', (e) => {
+    zoomLabel.textContent = `${Math.round(e.detail.z * 100)}%`;
   });
 
-  return h(
-    'div',
-    { class: 'canvas-inner', style: { width: `${width}px`, height: `${totalH}px` } },
-    edgeLayer,
-    cards,
-    pluses
-  );
+  ui.afterRender = () => {
+    ui.canvas = attachCanvas(viewport, world, {
+      view: ui.views?.[a.id] ?? loadView(a.id),
+      bounds: () => graphBounds(a, cardH),
+      onView: (view) => {
+        (ui.views ??= {})[a.id] = view;
+        saveView(a.id, view);
+      },
+      onEmptyClick: (pt, client) => {
+        if (ui.panelNodeId) return closePanel();
+        openPicker(a, null, {
+          at: client,
+          position: { x: snap(pt.x - CARD_W / 2), y: snap(pt.y - 20) },
+        });
+      },
+      onNodeDragStart: () => checkpoint(a),
+      onNodeDrag: (id, dx, dy) => {
+        const n = a.nodes.find((x) => x.id === id);
+        if (!n) return;
+        n.position = { x: n.position.x + dx, y: n.position.y + dy };
+        place(n);
+        drawEdges();
+      },
+      onNodeDragEnd: (id) => {
+        const n = a.nodes.find((x) => x.id === id);
+        if (n) n.position = { x: snap(n.position.x), y: snap(n.position.y) };
+        savePositions(a);
+        // After the click that ends the drag, which the old canvas still has to swallow.
+        setTimeout(render);
+      },
+      connectPreview: (from, to) => {
+        preview.setAttribute('d', from && to ? `M ${from.x} ${from.y} L ${to.x} ${to.y}` : '');
+      },
+      onConnect: (source, target) => connectSteps(a, source, target),
+    });
+  };
+  return viewport;
+}
+
+/** A connection drawn from one step's dot to another step. */
+function connectSteps(a, source, target) {
+  if (!target || target === source) return;
+  if (ACTIONS[a.nodes.find((n) => n.id === target)?.action]?.kind === 'trigger') {
+    toast(t('cv.triggerNoInput'), 'error');
+    return;
+  }
+  if (a.edges.some((e) => e.source === source && e.target === target)) return;
+  const edges = [...a.edges, { id: uid('e'), source, target }];
+  if (!validateDag(a.nodes, edges).valid) {
+    toast(t('cv.cycle'), 'error');
+    return;
+  }
+  checkpoint(a);
+  a.edges = edges;
+  touch(a);
+  render();
+}
+
+function openEdgeMenu(a, edge, ev) {
+  const anchor = h('span', {
+    class: 'click-anchor',
+    style: { left: `${ev.clientX}px`, top: `${ev.clientY}px` },
+  });
+  document.body.append(anchor);
+  openPopover(anchor, [
+    h(
+      'button',
+      {
+        type: 'button',
+        role: 'menuitem',
+        class: 'menu-item',
+        onclick: () => {
+          closePopover();
+          const s = a.nodes.find((n) => n.id === edge.source)?.position;
+          const d = a.nodes.find((n) => n.id === edge.target)?.position;
+          openPicker(a, edge.source, {
+            insertEdge: edge,
+            ...(s && d && { position: { x: snap((s.x + d.x) / 2), y: snap((s.y + d.y) / 2) } }),
+          });
+        },
+      },
+      t('cv.insertHere')
+    ),
+    h(
+      'button',
+      {
+        type: 'button',
+        role: 'menuitem',
+        class: 'menu-item danger',
+        onclick: () => {
+          closePopover();
+          checkpoint(a);
+          a.edges = a.edges.filter((e) => e.id !== edge.id);
+          touch(a);
+          render();
+        },
+      },
+      t('cv.deleteEdge')
+    ),
+  ]);
+  anchor.remove();
 }
 
 function nodeSubtitle(a, n) {
@@ -1919,11 +2264,58 @@ function setPaused(a) {
 
 // ── Step picker ───────────────────────────────────────────────────────────────
 
-function openPicker(a, parentId) {
-  const triggerMode = !a.nodes.length || parentId === null;
+/** Steps most people reach for first; shown above the catalog when nothing is typed. */
+const FREQUENT_ACTIONS = [
+  'telegram.sendMessage',
+  'ai.process',
+  'text.compose',
+  'logic.filter',
+  'logic.delay',
+  'http.request',
+];
+
+/**
+ * The step catalog: a dialog, or (`opts.at`) a compact menu at the click point.
+ * `opts.position` places the new step there; `opts.insertEdge` puts it between two steps.
+ */
+function openPicker(a, parentId, opts = {}) {
+  const hasTrigger = a.nodes.some((n) => ACTIONS[n.action]?.kind === 'trigger');
+  const triggerMode = !hasTrigger && (!a.nodes.length || parentId === null);
   const list = h('div', { class: 'picker-list' });
+  const choose = (id) => {
+    if (opts.at) closePopover();
+    else closeModal();
+    addStep(a, parentId, id, opts);
+  };
+  const quickRow = (id) => {
+    const act = ACTIONS[id];
+    return h(
+      'button',
+      { type: 'button', class: 'picker-item', onclick: () => choose(id) },
+      serviceIcon(act.service),
+      h('span', { class: 'picker-text' }, h('span', { class: 'picker-name' }, L(act.name)))
+    );
+  };
   const fill = (query) => {
     clear(list);
+    if (!query.trim() && !triggerMode) {
+      const recent = (store.settings.recentActions ?? []).filter(
+        (id) => ACTIONS[id] && !ACTIONS[id].planned && ACTIONS[id].kind !== 'trigger'
+      );
+      if (recent.length)
+        list.append(
+          h('h3', { class: 'picker-group' }, t('picker.recent')),
+          ...recent.map(quickRow)
+        );
+      const frequent = FREQUENT_ACTIONS.filter(
+        (id) => ACTIONS[id] && !ACTIONS[id].planned && !recent.includes(id)
+      );
+      if (frequent.length)
+        list.append(
+          h('h3', { class: 'picker-group' }, t('picker.frequent')),
+          ...frequent.map(quickRow)
+        );
+    }
     const groups = PICKER_GROUPS.filter((g) =>
       triggerMode ? g.id === 'trigger' : g.id !== 'trigger'
     );
@@ -1953,10 +2345,7 @@ function openPicker(a, parentId) {
             type: 'button',
             class: 'picker-item',
             disabled: !!act.planned,
-            onclick: () => {
-              closeModal();
-              addStep(a, parentId, id);
-            },
+            onclick: () => choose(id),
           },
           serviceIcon(act.service),
           h(
@@ -1979,24 +2368,68 @@ function openPicker(a, parentId) {
     if (!total) list.append(h('p', { class: 'empty' }, t('picker.empty')));
   };
   fill('');
+  const search = h('input', {
+    type: 'search',
+    class: 'input search-input',
+    placeholder: t('picker.search'),
+    'aria-label': t('picker.title'),
+    oninput: (e) => fill(e.target.value),
+    onkeydown: (e) => {
+      // Arrows walk the list, Enter takes the first match.
+      const items = [...list.querySelectorAll('.picker-item:not(:disabled)')];
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        items[0]?.focus();
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        items[0]?.click();
+      }
+    },
+  });
+  list.addEventListener('keydown', (e) => {
+    const items = [...list.querySelectorAll('.picker-item:not(:disabled)')];
+    const i = items.indexOf(document.activeElement);
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      items[Math.min(i + 1, items.length - 1)]?.focus();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      (i <= 0 ? search : items[i - 1]).focus();
+    }
+  });
+  if (opts.at) {
+    const anchor = h('span', {
+      class: 'click-anchor',
+      style: { left: `${opts.at.x}px`, top: `${opts.at.y}px` },
+    });
+    document.body.append(anchor);
+    openPopover(anchor, [
+      h(
+        'div',
+        { class: 'quick-add' },
+        h(
+          'div',
+          { class: 'menu-label' },
+          triggerMode ? t('picker.titleTrigger') : t('picker.title')
+        ),
+        search,
+        list
+      ),
+    ]);
+    anchor.remove();
+    search.focus();
+    return;
+  }
   openModal({
     title: triggerMode ? t('picker.titleTrigger') : t('picker.title'),
     wide: true,
-    body: [
-      h('input', {
-        type: 'search',
-        class: 'input search-input',
-        placeholder: t('picker.search'),
-        'aria-label': t('picker.title'),
-        oninput: (e) => fill(e.target.value),
-      }),
-      list,
-    ],
+    body: [search, list],
     actions: [],
   });
 }
 
-function addStep(a, parentId, actionId) {
+function addStep(a, parentId, actionId, opts = {}) {
+  checkpoint(a);
   const act = ACTIONS[actionId];
   const base = actionId.split('.')[0].replace(/[^a-z]/g, '') || 'step';
   let n = 1;
@@ -2010,10 +2443,65 @@ function addStep(a, parentId, actionId) {
     config: defaultConfig(actionId),
     connectionId: autoConnection(actionId),
     disabled: false,
+    position: opts.position ?? positionBelow(a, parentId),
   });
-  if (parentId) a.edges.push({ id: uid('e'), source: parentId, target: id });
+  if (opts.insertEdge) {
+    // Between two steps: source → new → target, in one undoable change.
+    const e = opts.insertEdge;
+    a.edges = a.edges.filter((x) => x.id !== e.id);
+    a.edges.push({ id: uid('e'), source: e.source, target: id });
+    a.edges.push({ id: uid('e'), source: id, target: e.target });
+    makeRoom(a, id, e.source, e.target);
+  } else if (parentId) {
+    a.edges.push({ id: uid('e'), source: parentId, target: id });
+  } else if (act.kind !== 'trigger' && a.nodes.length > 1) {
+    toast(t('cv.addedUnlinked'));
+  }
+  store.settings.recentActions = [
+    actionId,
+    ...(store.settings.recentActions ?? []).filter((x) => x !== actionId),
+  ].slice(0, 5);
   touch(a);
   openPanel(a, id);
+}
+
+/**
+ * A step inserted between two others gets its own row: it moves below the source, and
+ * the target with everything after it moves down when they would overlap.
+ */
+function makeRoom(a, id, sourceId, targetId) {
+  const gap = 48;
+  const at = (nid) => a.nodes.find((n) => n.id === nid)?.position;
+  const p = at(id);
+  const src = at(sourceId);
+  if (!p) return;
+  if (src && p.y < src.y + CARD_H + gap) p.y = snap(src.y + CARD_H + gap);
+  const tgt = at(targetId);
+  const shift = tgt ? snap(p.y + CARD_H + gap - tgt.y) : 0;
+  if (shift <= 0) return;
+  const after = new Set([targetId]);
+  for (const nid of after) {
+    for (const e of a.edges) if (e.source === nid && e.target !== id) after.add(e.target);
+  }
+  for (const nid of after) {
+    const q = at(nid);
+    if (q) q.y += shift;
+  }
+}
+
+/** A free spot under a step (or the top for a first step). */
+function positionBelow(a, parentId) {
+  const parent = a.nodes.find((n) => n.id === parentId)?.position;
+  const base = parent ? { x: parent.x, y: parent.y + CARD_H + 96 } : { x: 0, y: 0 };
+  const taken = (p) =>
+    a.nodes.some(
+      (n) =>
+        n.position && Math.abs(n.position.x - p.x) < CARD_W && Math.abs(n.position.y - p.y) < CARD_H
+    );
+  const pos = { ...base };
+  for (let i = 1; taken(pos) && i < 20; i++)
+    pos.x = base.x + (i % 2 ? 1 : -1) * Math.ceil(i / 2) * (CARD_W + 32);
+  return pos;
 }
 
 // ── Node panel ────────────────────────────────────────────────────────────────
@@ -2336,6 +2824,7 @@ function nodePanel(a, node) {
       resultBox.replaceChildren(h('div', { class: 'alert error' }, t('common.saveError')));
       return false;
     }
+    checkpoint(a);
     node.config = config;
     node.label = labelInput.value.trim();
     node.disabled = disabledInput.checked;
@@ -2810,6 +3299,7 @@ function insertAtCursor(el, text) {
 }
 
 function deleteStep(a, id) {
+  checkpoint(a);
   const parents = parentsOf(a, id);
   const children = a.edges.filter((e) => e.source === id).map((e) => e.target);
   a.nodes = a.nodes.filter((n) => n.id !== id);
@@ -3611,8 +4101,7 @@ async function boot() {
   try {
     const status = await live.setupStatus();
     if (!status.bootstrapped) ui.auth = 'setup';
-    else if (!live.session.token) ui.auth = 'login';
-    else return await enterWorkspace();
+    else return await enterWorkspace(); // 401 without a session cookie → sign in
   } catch (err) {
     ui.auth = err.status === 401 ? 'login' : 'offline';
     // The API may still be starting: keep trying while this screen is shown.

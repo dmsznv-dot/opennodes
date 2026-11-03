@@ -30,6 +30,10 @@ export const ApiConfigSchema = z.object({
   telegramPollTimeoutSec: z.coerce.number().int().min(0).max(50).default(25),
   telegramMinPollIntervalMs: z.coerce.number().int().min(0).default(1_000),
   telegramRetryMs: z.coerce.number().int().min(0).default(5_000),
+  /** Mark session cookies `Secure` (HTTPS only). Also on when a proxy sends X-Forwarded-Proto: https. */
+  cookieSecure: z.boolean().default(false),
+  /** Finished runs older than this many days are deleted (hourly); 0 keeps them. */
+  runRetentionDays: z.coerce.number().int().min(0).default(90),
 });
 
 export type ApiConfig = z.infer<typeof ApiConfigSchema>;
@@ -49,6 +53,8 @@ export function loadApiConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     inlineDelayMaxMs: env.INLINE_DELAY_MAX_MS,
     triggerTickMs: env.TRIGGER_TICK_MS,
     telegramApiBase: env.TELEGRAM_API_BASE,
+    cookieSecure: env.COOKIE_SECURE === 'true',
+    runRetentionDays: env.RUN_RETENTION_DAYS,
     ssrfAllowlist: (env.SSRF_ALLOWLIST ?? '')
       .split(',')
       .map((h) => h.trim())

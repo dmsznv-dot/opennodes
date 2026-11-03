@@ -23,3 +23,6 @@ coverage/
 
 .agents/
 .data/
+
+# Backups (database + encryption key)
+backups/

@@ -35,6 +35,7 @@ import {
   loadPublishedDefinition,
 } from './store.js';
 import { TriggerScheduler, type TriggerSchedulerOptions } from './triggers.js';
+import { pruneHistory } from './retention.js';
 
 export interface RuntimeLogger {
   info(meta: unknown, msg?: string): void;
@@ -291,6 +292,8 @@ export interface ExecutionWorkerOptions {
   recoveryIntervalMs?: number;
   /** Runs older than this that never finished are failed instead of resumed. */
   hardTimeoutMs?: number;
+  /** Finished runs older than this many days are deleted (hourly); 0 keeps them. Default 90. */
+  retentionDays?: number;
   /** Schedule and Telegram triggers; `false` leaves them to another process. */
   triggers?: false | Omit<TriggerSchedulerOptions, 'db' | 'runtime' | 'queue' | 'logger'>;
   logger?: RuntimeLogger;
@@ -305,6 +308,7 @@ export class ExecutionWorker {
   private timer?: NodeJS.Timeout;
   private readonly recovery: CrashRecoveryService;
   private readonly logger: RuntimeLogger;
+  private lastPrune = 0;
   readonly scheduler?: TriggerScheduler;
 
   constructor(private readonly options: ExecutionWorkerOptions) {
@@ -352,6 +356,22 @@ export class ExecutionWorker {
       }
     } catch (err) {
       this.logger.error({ err }, 'Orphaned-run recovery scan failed');
+    }
+    if (Date.now() - this.lastPrune >= 3_600_000) {
+      this.lastPrune = Date.now();
+      await this.prune();
+    }
+  }
+
+  /** Deletes old finished runs and expired sign-ins (see `pruneHistory`). */
+  async prune(): Promise<void> {
+    try {
+      const removed = await pruneHistory(this.options.db, this.options.retentionDays ?? 90);
+      if (removed.executions || removed.triggerLogs) {
+        this.logger.info({ removed }, 'Removed old run history');
+      }
+    } catch (err) {
+      this.logger.error({ err }, 'Run history cleanup failed');
     }
   }
 

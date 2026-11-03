@@ -15,6 +15,8 @@ export const WorkerConfigSchema = z.object({
   WORKER_DRAIN_TIMEOUT_MS: z.coerce.number().int().default(10_000),
   WORKER_HEARTBEAT_INTERVAL_MS: z.coerce.number().int().default(5_000),
   ORPHAN_SCAN_INTERVAL_MS: z.coerce.number().int().default(60_000),
+  /** Finished runs older than this many days are deleted; 0 keeps the whole history. */
+  RUN_RETENTION_DAYS: z.coerce.number().int().min(0).default(90),
   ORPHAN_THRESHOLD_MS: z.coerce.number().int().default(45_000),
   /** Runs that never finished within this long are failed instead of resumed. */
   HARD_TIMEOUT_MS: z.coerce

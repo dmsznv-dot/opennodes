@@ -105,7 +105,10 @@ Open http://localhost:3000. The first visit asks you to create the owner account
 environment.
 
 What the web app adds to the demo editor, in live mode:
-- **Sign-in and first-run setup**; drafts are saved to the server as you edit.
+- **Sign-in and first-run setup**; drafts are saved to the server as you edit. The browser
+  session is an `HttpOnly` cookie (page scripts never see the token) and every change carries a
+  CSRF token (double submit). API clients use `Authorization: Bearer <token>` from
+  `POST /api/v1/auth/login` instead, without CSRF.
 - **“Test” runs the steps for real** (in the API, not recorded in history) and asks first when a
   step would send something outside; “Test step” runs a step with the steps before it.
 - **Turn on** publishes the version and starts its trigger (schedule, Telegram, webhook);
@@ -113,8 +116,19 @@ What the web app adds to the demo editor, in live mode:
   polling errors, webhook steps show their URL. Manual automations get a **Run** button.
 - **Connections** are stored encrypted on the server (Telegram bot token, OpenAI key or a local
   model server) and can be checked (`getMe`, model list).
-- **History** lists real runs from the server. Steps the server cannot run yet (email, external
-  Postgres) and templates that use them are shown as planned.
+- **History** lists real runs from the server. Finished runs older than `RUN_RETENTION_DAYS`
+  (default 90, `0` keeps everything) are deleted hourly with their steps. Steps the server
+  cannot run yet (external Postgres) and templates that use them are shown as planned.
+
+**Canvas.** Steps sit where you put them (older automations are laid out once, then keep their
+places). Two fingers or the wheel pan, pinch or ⌘/Ctrl + wheel zooms at the pointer, Space + drag
+or the middle button pans too. `+` `−` `0` `F` zoom in, out, to 100% and fit everything; ⌘/Ctrl+Z
+and ⇧⌘/Ctrl+Shift+Z undo and redo. Click an empty spot to add a step there; drag from the dot
+under a step to another step to connect them; the `＋` on a connection inserts a step into it.
+
+**Backups.** `pnpm backup` archives `./.data` (database **and** `encryption.key` — connection
+secrets cannot be restored without the key) into `backups/`; stop the app first. Restore by
+replacing `.data` with the folder from the archive.
 
 ### 3. Self-Hosted Docker Compose Deployment
 
@@ -124,6 +138,16 @@ docker compose up -d --build
 ```
 
 The web app is served on port 3000 and talks to the API through the same origin.
+
+- Set your own `ENCRYPTION_KEY` (`openssl rand -hex 32`) and `SESSION_SECRET` in `.env` before the
+  first start. Behind HTTPS set `COOKIE_SECURE=true` (or have the proxy send `X-Forwarded-Proto: https`).
+- **Backup:** `pnpm backup -- --docker` writes a `pg_dump` of Postgres and the encryption key to
+  `backups/`. Restore with
+  `docker compose exec -T postgres pg_restore -U localflow -d localflow --clean < backups/<file>.dump`
+  and the same `ENCRYPTION_KEY`.
+- **Check an install:** `pnpm smoke` (or `SMOKE_URL=https://… pnpm smoke`) signs in through the
+  web app, publishes a test automation, runs it through the worker and its webhook, then removes it.
+  GitHub Actions runs the tests and this check against a fresh `docker compose up` on every push.
 
 ### How runs are executed
 
@@ -137,6 +161,7 @@ a worker executes it. Poll `GET /executions/:id` or the event stream for the res
 Guarantees, in both modes:
 - **Delays are real.** Up to `INLINE_DELAY_MAX_MS` (5 s) the worker just waits; longer delays pause the run (`WAITING`), free the worker and resume on time — also after a restart.
 - **A run is executed once.** Workers atomically claim a run in the database, so a job delivered twice (retry, recovery) does nothing the second time. Runs are never blindly retried, because steps may have side effects.
+- **…but a step's effect outside is not exactly-once.** If a worker dies *while* a step is sending something (a message, an email, an HTTP call), recovery runs that step again, because the engine cannot know whether the other side got it. Make such steps safe to repeat where it matters (an idempotency key in an HTTP call, RSS steps remember what they posted).
 - **Crash recovery.** A running run heartbeats; if its worker dies, the run is re-queued and resumes after the last finished step, on the same branch.
 - **Cancel works across processes.** `POST /executions/:id/cancel` stops a queued or waiting run, and a running one between steps.
 
@@ -154,7 +179,7 @@ the runs. Publishing a version with another trigger, or rolling back, updates or
   `"onlyCommands": "/start, /ask"`. `$trigger` = `{ text, command, args, chatId, fromName, username, message, … }`.
   The bot is polled with `getUpdates`, so it must not have a webhook set. Messages sent before the
   trigger was published are ignored.
-- **Each tick and each message starts exactly one run**, with several workers and across restarts:
+- **Each tick and each message starts one run, never two**, with several workers and across restarts:
   a schedule tick is claimed together with the run it creates, and a bot's update cursor advances
   in the same transaction that records its runs (only one process polls a bot at a time).
 - `GET /api/v1/workflows/:id/triggers` shows the next and last run, the last run id and polling errors

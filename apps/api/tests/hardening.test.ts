@@ -1,6 +1,9 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import crypto from 'node:crypto';
 import { LocalFlowApiServer } from '../src/index.js';
+import { executions, nodeExecutions } from '@localflow/db';
+import { pruneHistory } from '@localflow/execution-runtime';
+import { eq, inArray } from 'drizzle-orm';
 
 const servers: LocalFlowApiServer[] = [];
 afterEach(async () => {
@@ -149,5 +152,44 @@ describe('@localflow/api — input hardening (BUG-09 S-6, S-8, S-9, S-10, S-11)'
       headers,
     });
     expect(after.body.execution.status).toBe('SUCCEEDED');
+  });
+
+  it('history retention: old finished runs go with their steps; recent and unfinished stay', async () => {
+    const { api, headers, workflowId } = await setup();
+    await api.inject({ method: 'POST', url: `/api/v1/workflows/${workflowId}/publish`, headers });
+    const run = () =>
+      api
+        .inject<{ execution: { id: string } }>({
+          method: 'POST',
+          url: `/api/v1/workflows/${workflowId}/execute`,
+          headers,
+          body: { payload: { a: 1 }, wait: true },
+        })
+        .then((r) => r.body.execution.id);
+    const [old, recent, stuck] = [await run(), await run(), await run()];
+    const db = (await api.database()) as any;
+    const longAgo = new Date(Date.now() - 100 * 86_400_000);
+    await db.update(executions).set({ finishedAt: longAgo }).where(eq(executions.id, old));
+    await db
+      .update(executions)
+      .set({ status: 'WAITING', finishedAt: null, createdAt: longAgo })
+      .where(eq(executions.id, stuck));
+
+    const removed = await pruneHistory(db, 90);
+    expect(removed.executions).toBe(1);
+    const left = await db
+      .select({ id: executions.id })
+      .from(executions)
+      .where(inArray(executions.id, [old, recent, stuck]));
+    expect(left.map((r: { id: string }) => r.id).sort()).toEqual([recent, stuck].sort());
+    const steps = await db
+      .select({ id: nodeExecutions.id })
+      .from(nodeExecutions)
+      .where(eq(nodeExecutions.executionId, old));
+    expect(steps).toEqual([]);
+
+    // 0 keeps the whole history.
+    await db.update(executions).set({ finishedAt: longAgo }).where(eq(executions.id, recent));
+    expect((await pruneHistory(db, 0)).executions).toBe(0);
   });
 });

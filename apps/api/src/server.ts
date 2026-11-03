@@ -50,6 +50,17 @@ import { loadApiConfig, type ApiConfig } from './config.js';
 import { openDatabase } from './store/database.js';
 import { ApiRepository, isUuid, type StoredWorkflow } from './store/repository.js';
 import { PgSessionStore } from './store/session-store.js';
+import {
+  CSRF_COOKIE,
+  CSRF_HEADER,
+  SESSION_COOKIE,
+  SESSION_TTL_MS,
+  clearedCookies,
+  csrfMatches,
+  needsCsrf,
+  parseCookies,
+  sessionCookies,
+} from './cookies.js';
 
 export type { StoredWorkflow, WorkflowVersionSnapshot } from './store/repository.js';
 
@@ -98,7 +109,7 @@ const CANCELLABLE_STATUSES = new Set(['QUEUED', 'RUNNING', 'WAITING']);
 
 export interface InjectResponse<T = unknown> {
   statusCode: number;
-  headers: Record<string, string>;
+  headers: Record<string, string | string[]>;
   body: T;
   rawBody: string;
 }
@@ -213,6 +224,7 @@ export class LocalFlowApiServer {
         db,
         concurrency: this.config.workerConcurrency,
         recoveryIntervalMs: this.config.recoveryIntervalMs,
+        retentionDays: this.config.runRetentionDays,
         triggers: {
           tickMs: this.config.triggerTickMs,
           telegramApiBase: this.config.telegramApiBase,
@@ -274,16 +286,25 @@ export class LocalFlowApiServer {
       .join('');
   }
 
+  /** Bearer token (API clients) or the session cookie (the browser). */
   private async authenticate(
     rt: ApiRuntime,
     headers: Record<string, string>
-  ): Promise<{ userId: string } | null> {
+  ): Promise<{ userId: string; token: string; viaCookie: boolean } | null> {
     const authHeader = headers['authorization'] ?? headers['Authorization'];
-    if (!authHeader?.startsWith('Bearer ')) return null;
-    const token = authHeader.slice('Bearer '.length).trim();
+    const bearer = authHeader?.startsWith('Bearer ')
+      ? authHeader.slice('Bearer '.length).trim()
+      : '';
+    const token = bearer || parseCookies(headers['cookie'])[SESSION_COOKIE] || '';
+    if (!token) return null;
     const session = await rt.sessions.validateSession(token);
     if (!session) return null;
-    return { userId: session.userId };
+    return { userId: session.userId, token, viaCookie: !bearer };
+  }
+
+  /** Secure cookies behind HTTPS (directly or via a proxy that says so). */
+  private secureCookies(headers: Record<string, string>): boolean {
+    return this.config.cookieSecure || headers['x-forwarded-proto'] === 'https';
   }
 
   private async requireWorkspacePermission(
@@ -309,7 +330,7 @@ export class LocalFlowApiServer {
     const respond = (
       statusCode: number,
       body: unknown,
-      customHeaders?: Record<string, string>
+      customHeaders?: Record<string, string | string[]>
     ): InjectResponse<T> => {
       const mergedHeaders = { ...headers, ...customHeaders };
       const rawBody = typeof body === 'string' ? body : JSON.stringify(body);
@@ -374,8 +395,12 @@ export class LocalFlowApiServer {
           fullName: payload.fullName,
           workspaceName: payload.workspaceName,
         });
-        const { token } = await rt.sessions.createSession(result.userId);
-        return respond(201, { ...result, token });
+        const { token } = await rt.sessions.createSession(result.userId, SESSION_TTL_MS);
+        return respond(
+          201,
+          { ...result, token },
+          { 'set-cookie': sessionCookies(token, this.secureCookies(reqHeaders)) }
+        );
       }
 
       // 3. Auth Login
@@ -389,8 +414,12 @@ export class LocalFlowApiServer {
             message: 'Invalid email or password.',
           });
         }
-        const { token } = await rt.sessions.createSession(user.id);
-        return respond(200, { userId: user.id, email: user.email, token });
+        const { token } = await rt.sessions.createSession(user.id, SESSION_TTL_MS);
+        return respond(
+          200,
+          { userId: user.id, email: user.email, token },
+          { 'set-cookie': sessionCookies(token, this.secureCookies(reqHeaders)) }
+        );
       }
 
       // 4. Public Webhook Ingress (HMAC + Idempotency)
@@ -462,6 +491,18 @@ export class LocalFlowApiServer {
       if (!auth) {
         return respond(401, { code: 'ERR_UNAUTHORIZED', message: 'Authentication required.' });
       }
+      // A cookie is sent by the browser on its own, even for a request another site
+      // started: changes must prove they come from our page (double-submit token).
+      if (
+        auth.viaCookie &&
+        needsCsrf(req.method) &&
+        !csrfMatches(parseCookies(reqHeaders['cookie'])[CSRF_COOKIE], reqHeaders[CSRF_HEADER])
+      ) {
+        return respond(403, {
+          code: 'ERR_CSRF_INVALID',
+          message: 'Missing or wrong CSRF token. Reload the page and try again.',
+        });
+      }
       if (typeof req.body === 'string') {
         return respond(400, {
           code: 'ERR_INVALID_JSON',
@@ -474,9 +515,12 @@ export class LocalFlowApiServer {
         return respond(200, await rt.repo.getProfile(auth.userId));
       }
       if (req.method === 'POST' && pathname === '/api/v1/auth/logout') {
-        const token = (reqHeaders['authorization'] ?? '').replace(/^Bearer\s+/i, '');
-        if (token) await rt.sessions.deleteSession(token);
-        return respond(200, { ok: true });
+        await rt.sessions.deleteSession(auth.token);
+        return respond(
+          200,
+          { ok: true },
+          { 'set-cookie': clearedCookies(this.secureCookies(reqHeaders)) }
+        );
       }
       if (req.method === 'GET' && pathname === '/api/v1/catalog') {
         return respond(200, rt.execution.catalog());

@@ -45,6 +45,7 @@ export class WorkerDaemon {
       concurrency: config.WORKER_CONCURRENCY,
       recoveryIntervalMs: config.ORPHAN_SCAN_INTERVAL_MS,
       hardTimeoutMs: config.HARD_TIMEOUT_MS,
+      retentionDays: config.RUN_RETENTION_DAYS,
       triggers: {
         tickMs: config.TRIGGER_TICK_MS,
         telegramApiBase: config.TELEGRAM_API_BASE,

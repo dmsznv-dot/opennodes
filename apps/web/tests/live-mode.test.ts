@@ -54,6 +54,10 @@ describe('live mode — editor graph ⇄ engine graph', () => {
       if (tpl.nodes.some((n: { action: string }) => !ACTIONS[n.action]?.type)) continue; // planned
       const editor = fromTemplate(tpl);
       editor.nodes[1] && Object.assign(editor.nodes[1], { label: 'Мой шаг', disabled: true });
+      // Where a step sits on the canvas is saved with the draft.
+      editor.nodes.forEach((n: Record<string, unknown>, i: number) => {
+        n.position = { x: i * 40 - 120, y: i * 184 };
+      });
       const graph = toEngineGraph(editor);
       for (const n of graph.nodes) expect(WorkflowNodeSchema.safeParse(n).success).toBe(true);
       for (const e of graph.edges) expect(WorkflowEdgeSchema.safeParse(e).success).toBe(true);

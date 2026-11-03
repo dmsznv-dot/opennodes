@@ -15,31 +15,26 @@ import { t, formatDateTime } from './i18n.js';
 export const API = (typeof window !== 'undefined' && window.OPENNODES?.api) || null;
 export const isLive = Boolean(API);
 
-const TOKEN_KEY = 'opennodes.session';
-
+/**
+ * The session is an HttpOnly cookie the server sets on sign-in: page scripts never see the
+ * token. Changes carry the CSRF cookie back in a header (double submit).
+ */
 export const session = {
-  token: readToken(),
   user: null,
   workspace: null,
 };
 
-function readToken() {
-  try {
-    return localStorage.getItem(TOKEN_KEY);
-  } catch {
-    return null;
-  }
+// Older versions kept the token in localStorage; it is no longer used.
+try {
+  localStorage.removeItem('opennodes.session');
+} catch {
+  /* private mode */
 }
 
-function writeToken(token) {
-  session.token = token;
-  try {
-    if (token) localStorage.setItem(TOKEN_KEY, token);
-    else localStorage.removeItem(TOKEN_KEY);
-  } catch {
-    /* private mode: the session lasts until the tab closes */
-  }
-}
+const csrfToken = () =>
+  typeof document === 'undefined'
+    ? ''
+    : decodeURIComponent(document.cookie.match(/(?:^|;\s*)on_csrf=([^;]*)/)?.[1] ?? '');
 
 export class ApiError extends Error {
   constructor(status, body) {
@@ -56,9 +51,10 @@ export async function api(method, path, body) {
   try {
     res = await fetch(API + path, {
       method,
+      credentials: 'same-origin',
       headers: {
         ...(body !== undefined && { 'content-type': 'application/json' }),
-        ...(session.token && { authorization: `Bearer ${session.token}` }),
+        ...(method !== 'GET' && { 'x-csrf-token': csrfToken() }),
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
@@ -67,8 +63,7 @@ export async function api(method, path, body) {
   }
   const data = await res.json().catch(() => null);
   if (!res.ok) {
-    if (res.status === 401 && session.token && !path.startsWith('/auth/')) {
-      writeToken(null);
+    if (res.status === 401 && session.user && !path.startsWith('/auth/')) {
       window.dispatchEvent(new Event('opennodes:signed-out'));
     }
     throw new ApiError(res.status, data);
@@ -81,21 +76,15 @@ export async function api(method, path, body) {
 export const setupStatus = () => api('GET', '/setup/status');
 
 export async function signIn(email, password) {
-  const res = await api('POST', '/auth/login', { email, password });
-  writeToken(res.token);
+  await api('POST', '/auth/login', { email, password });
 }
 
 export async function createOwner(email, password, workspaceName) {
-  const res = await api('POST', '/setup', { email, password, workspaceName });
-  writeToken(res.token);
+  await api('POST', '/setup', { email, password, workspaceName });
 }
 
 export async function signOut() {
-  try {
-    await api('POST', '/auth/logout');
-  } finally {
-    writeToken(null);
-  }
+  await api('POST', '/auth/logout').catch(() => {}); // the server clears the cookies
 }
 
 // ── Editor graph ⇄ engine graph ───────────────────────────────────────────────
@@ -125,6 +114,9 @@ export function toEngineGraph(a) {
         },
         inputs: action?.kind === 'trigger' ? [] : [port('main', 'input')],
         outputs: [port('main', 'output')],
+        ...(n.position && {
+          position: { x: Math.round(n.position.x), y: Math.round(n.position.y) },
+        }),
       };
     }),
     edges: a.edges.map((e) => ({
@@ -148,11 +140,15 @@ export function fromEngineGraph(nodes = [], edges = []) {
         config: n.data?.config ?? {},
         connectionId: n.data?.credentialId ?? null,
         disabled: Boolean(n.data?.disabled),
+        ...(n.position && { position: { x: n.position.x, y: n.position.y } }),
       };
     }),
     edges: edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
   };
 }
+
+const logicOf = (g) =>
+  JSON.stringify({ nodes: g.nodes.map(({ position: _p, ...n }) => n), edges: g.edges });
 
 function toAutomation(wf) {
   const draft = fromEngineGraph(wf.draft.nodes, wf.draft.edges);
@@ -163,7 +159,8 @@ function toAutomation(wf) {
     name: wf.name,
     templateId: null,
     status: wf.isActive ? 'active' : wf.activeVersion ? 'paused' : 'draft',
-    dirty: Boolean(published) && JSON.stringify(published) !== JSON.stringify(draft),
+    // Moving steps around is layout, not a change to publish.
+    dirty: Boolean(published) && logicOf(published) !== logicOf(draft),
     publishedVersion: wf.activeVersion ?? 0,
     published,
     nodes: draft.nodes,

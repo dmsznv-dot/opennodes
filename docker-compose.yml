@@ -58,6 +58,9 @@ services:
       SSRF_ALLOWLIST: ${SSRF_ALLOWLIST:-}
       # Runs are queued in Redis and executed by the worker service.
       EXECUTION_MODE: queue
+      # Session cookies only over HTTPS: set to true behind a TLS proxy (or send
+      # X-Forwarded-Proto: https from it).
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -91,6 +94,8 @@ services:
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
       ALLOWED_FS_ROOT: ${ALLOWED_FS_ROOT:-/data/allowed}
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-10}
+      # Finished runs older than this many days are deleted (0 keeps all history).
+      RUN_RETENTION_DAYS: ${RUN_RETENTION_DAYS:-90}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       # Steps run here, so the worker needs the same allowlist as the API.
       SSRF_ALLOWLIST: ${SSRF_ALLOWLIST:-}
