@@ -161,6 +161,21 @@ the runs. Publishing a version with another trigger, or rolling back, updates or
   (e.g. a webhook still set on the bot); `PUT` the same path with `{ "enabled": false | true }` pauses
   or resumes it — resuming never replays what was missed.
 
+### Posting to a Telegram channel from a feed
+
+Template **RSS → AI → post to a Telegram channel**: a schedule reads a feed, AI writes the post, the bot publishes it.
+
+- **Only new items.** With "Only items new since last run" (on by default) each feed item goes on
+  once. Items are recorded when the run succeeds and released when it fails, so a failed post is
+  retried, not lost. On the first run the feed's backlog is skipped. When nothing is new the steps
+  below do not run (the run still succeeds). Tests from the editor do not use items up.
+- **RSS fields:** `titles`, `digest` (title — link per line), `link`, `image` (enclosure,
+  media:content/thumbnail or the first `<img>`), `count`. CDATA and HTML entities are decoded.
+- **Telegram:** the message step takes an optional picture link (the post becomes a photo with the
+  text as its caption; a caption over 1024 characters follows as its own message) and
+  "Disable link previews" now works. *Send a photo or file* sends a picture or document by link.
+- The bot must be an **admin of the channel** allowed to post; use `@channel` or the `-100…` id.
+
 ### 4. Local models (Hugging Face GGUF, LM Studio, Ollama, llama.cpp)
 
 OpenNodes does not run models itself. It calls a model server you run, over the

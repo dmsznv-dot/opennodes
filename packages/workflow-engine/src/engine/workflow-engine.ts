@@ -775,6 +775,7 @@ export class WorkflowEngine {
         workflowId: context.workflowId,
         nodeId: node.id,
         nodeType: node.type,
+        triggerType: context.triggerType,
         credentials: options.credentials,
         fsRoot: options.allowedFsRoot,
         logger: stepLogger,

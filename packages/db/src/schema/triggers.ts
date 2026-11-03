@@ -1,4 +1,15 @@
-import { pgTable, uuid, varchar, text, boolean, timestamp, jsonb, index, bigint } from 'drizzle-orm/pg-core';
+import {
+  pgTable,
+  uuid,
+  varchar,
+  text,
+  boolean,
+  timestamp,
+  jsonb,
+  index,
+  bigint,
+  primaryKey,
+} from 'drizzle-orm/pg-core';
 import { webhookAuthTypeEnum } from './enums.js';
 import { workspaces } from './workspaces.js';
 import { workflows } from './workflows.js';
@@ -91,3 +102,22 @@ export const telegramBotCursors = pgTable('telegram_bot_cursors', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+/** RSS "only new items": what a step already handed on (pending until its run succeeds). */
+export const rssSeenItems = pgTable(
+  'rss_seen_items',
+  {
+    workflowId: uuid('workflow_id')
+      .notNull()
+      .references(() => workflows.id, { onDelete: 'cascade' }),
+    nodeId: varchar('node_id', { length: 100 }).notNull(),
+    itemKey: varchar('item_key', { length: 64 }).notNull(),
+    executionId: uuid('execution_id'),
+    committed: boolean('committed').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.workflowId, table.nodeId, table.itemKey] }),
+    index('idx_rss_seen_execution').on(table.executionId),
+  ]
+);

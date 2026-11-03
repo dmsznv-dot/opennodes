@@ -167,6 +167,7 @@ export class LocalFlowApiServer {
       db,
       encryptionKey: this.config.encryptionKey,
       ssrfAllowlist: this.config.ssrfAllowlist,
+      telegramApiBase: this.config.telegramApiBase,
       allowedFsRoot: this.config.allowedFsRoot,
       inlineDelayMaxMs: this.config.inlineDelayMaxMs,
       staleMs: this.config.recoveryStaleMs,

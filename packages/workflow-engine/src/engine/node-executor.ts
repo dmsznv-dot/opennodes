@@ -15,6 +15,8 @@ export interface StepExecutionContext {
   readonly workflowId: string;
   readonly nodeId: string;
   readonly nodeType: string;
+  /** What started the run: 'manual', 'cron', 'webhook', 'telegram', or 'test' for editor tests. */
+  readonly triggerType?: string;
   readonly credentials?: Record<string, unknown>;
   readonly fsRoot?: string;
   readonly logger: StepLogger;

@@ -566,6 +566,19 @@ export const ACTIONS = {
         ],
       },
       {
+        key: 'imageUrl',
+        type: 'text',
+        required: false,
+        basic: false,
+        acceptsData: true,
+        label: tr('Картинка (ссылка)', 'Picture (link)'),
+        placeholder: 'https://example.com/cover.jpg',
+        help: tr(
+          'Пост выйдет с фото, текст станет подписью. Подпись длиннее 1024 символов уйдёт отдельным сообщением.',
+          'The post goes out with a photo and the text as its caption. A caption over 1024 characters is sent as a separate message.'
+        ),
+      },
+      {
         key: 'disablePreview',
         type: 'boolean',
         required: false,
@@ -582,20 +595,97 @@ export const ACTIONS = {
       },
     ],
     simulate: (c) => ({
-      output: { simulated: true, wouldSendTo: c.chatId, text: c.text },
+      output: {
+        simulated: true,
+        wouldSendTo: c.chatId,
+        text: c.text,
+        ...(c.imageUrl && { photo: c.imageUrl }),
+      },
       summary: tr(
-        `Было бы отправлено в ${c.chatId}: «${clip(c.text)}». В демо ничего не отправлено.`,
+        `Было бы отправлено в ${c.chatId}${c.imageUrl ? ' (с фото)' : ''}: «${clip(c.text)}». В демо ничего не отправлено.`,
         `Would send to ${c.chatId}: “${clip(c.text)}”. Nothing was sent in the demo.`
       ),
     }),
   },
   'telegram.sendFile': {
+    type: 'telegram.sendFile',
     service: 'telegram',
     kind: 'action',
-    planned: true,
-    name: tr('Отправить файл в Telegram', 'Send a file to Telegram'),
-    desc: tr('Документ или изображение в чат.', 'A document or image to a chat.'),
-    keywords: 'telegram файл документ картинка file document image',
+    external: true,
+    name: tr('Отправить фото или файл в Telegram', 'Send a photo or file to Telegram'),
+    desc: tr(
+      'Картинка или документ по ссылке, с подписью.',
+      'A picture or document by link, with a caption.'
+    ),
+    keywords:
+      'telegram файл документ картинка фото изображение pdf file document image photo picture',
+    fields: [
+      {
+        key: 'chatId',
+        type: 'text',
+        required: true,
+        basic: true,
+        acceptsData: true,
+        label: tr('Куда отправить (чат или @канал)', 'Where to send (chat or @channel)'),
+        placeholder: '@my_channel',
+      },
+      {
+        key: 'fileUrl',
+        type: 'text',
+        required: true,
+        basic: true,
+        acceptsData: true,
+        label: tr('Ссылка на файл', 'Link to the file'),
+        placeholder: 'https://example.com/report.pdf',
+      },
+      {
+        key: 'kind',
+        type: 'select',
+        required: true,
+        basic: true,
+        label: tr('Как отправить', 'Send as'),
+        default: 'photo',
+        options: [
+          { value: 'photo', label: tr('Фото', 'Photo') },
+          { value: 'document', label: tr('Документ', 'Document') },
+        ],
+      },
+      {
+        key: 'caption',
+        type: 'textarea',
+        required: false,
+        basic: true,
+        acceptsData: true,
+        label: tr('Подпись', 'Caption'),
+      },
+      {
+        key: 'parseMode',
+        type: 'select',
+        required: false,
+        basic: false,
+        label: tr('Форматирование подписи', 'Caption formatting'),
+        default: '',
+        options: [
+          { value: '', label: tr('Обычный текст', 'Plain text') },
+          { value: 'Markdown', label: 'Markdown' },
+          { value: 'HTML', label: 'HTML' },
+        ],
+      },
+    ],
+    outputs: [
+      {
+        key: 'messageId',
+        label: tr('ID отправленного сообщения', 'Sent message ID'),
+        example: '4522',
+      },
+    ],
+    simulate: (c) => ({
+      output: { simulated: true, wouldSendTo: c.chatId, file: c.fileUrl, caption: c.caption ?? '' },
+      summary: tr(
+        `Было бы отправлено в ${c.chatId}: ${c.kind === 'document' ? 'документ' : 'фото'} ${clip(c.fileUrl, 50)}. В демо ничего не отправлено.`,
+        `Would send to ${c.chatId}: ${c.kind === 'document' ? 'document' : 'photo'} ${clip(c.fileUrl, 50)}. Nothing was sent in the demo.`
+      ),
+    }),
   },
   'email.send': {
     type: 'core.smtp',
@@ -687,6 +777,10 @@ export const ACTIONS = {
         required: false,
         basic: false,
         label: tr('Только новые с прошлого запуска', 'Only items new since last run'),
+        help: tr(
+          'Каждая запись уйдёт дальше один раз. Если новых нет — следующие шаги не выполнятся. Проверка из редактора записи не «съедает».',
+          'Each item goes on once. With nothing new the next steps do not run. Tests from the editor do not use items up.'
+        ),
         default: true,
       },
     ],
@@ -694,7 +788,25 @@ export const ACTIONS = {
       {
         key: 'titles',
         label: tr('Заголовки записей', 'Item titles'),
-        example: tr('Новость 1; Новость 2', 'Story 1; Story 2'),
+        example: tr('Новость 1\nНовость 2', 'Story 1\nStory 2'),
+      },
+      {
+        key: 'digest',
+        label: tr('Список: заголовок — ссылка', 'List: title — link'),
+        example: tr(
+          'Новость 1 — https://example.com/1\nНовость 2 — https://example.com/2',
+          'Story 1 — https://example.com/1\nStory 2 — https://example.com/2'
+        ),
+      },
+      {
+        key: 'link',
+        label: tr('Ссылка на первую запись', 'Link to the first item'),
+        example: 'https://example.com/1',
+      },
+      {
+        key: 'image',
+        label: tr('Картинка первой записи', 'Picture of the first item'),
+        example: 'https://example.com/cover.jpg',
       },
       { key: 'count', label: tr('Количество', 'Count'), example: '3' },
     ],
@@ -703,10 +815,18 @@ export const ACTIONS = {
         count: 3,
         titles: L(
           tr(
-            'Пример заголовка 1; Пример заголовка 2; Пример заголовка 3',
-            'Sample title 1; Sample title 2; Sample title 3'
+            'Пример заголовка 1\nПример заголовка 2\nПример заголовка 3',
+            'Sample title 1\nSample title 2\nSample title 3'
           )
         ),
+        digest: L(
+          tr(
+            'Пример заголовка 1 — https://example.com/1\nПример заголовка 2 — https://example.com/2',
+            'Sample title 1 — https://example.com/1\nSample title 2 — https://example.com/2'
+          )
+        ),
+        link: 'https://example.com/1',
+        image: 'https://example.com/cover.jpg',
       },
       summary: tr(
         `Из ${clip(c.feedUrl, 50)} получили бы до ${c.maxItems} записей (пример: 3)`,
@@ -1233,6 +1353,70 @@ export const TEMPLATES = [
       ['trigger', 'rss_1'],
       ['rss_1', 'ai_1'],
       ['ai_1', 'mail_1'],
+    ],
+  },
+  {
+    id: 'rss_ai_channel',
+    category: 'notifications',
+    recommended: false,
+    name: tr('RSS → AI → пост в Telegram-канал', 'RSS → AI → post to a Telegram channel'),
+    desc: tr(
+      'Новые записи ленты превращаются в короткий пост для вашего канала — каждая один раз.',
+      'New feed items become a short post in your channel — each one only once.'
+    ),
+    sampleInput: tr('2 новые записи в ленте.', '2 new items in the feed.'),
+    outputPreview: tr(
+      'Пост в канале: пересказ, ссылки и картинка первой записи.',
+      'A channel post: summary, links and the first item’s picture.'
+    ),
+    limitations: tr(
+      'Бот должен быть администратором канала с правом публикации. Если новых записей нет, пост не выходит.',
+      'The bot must be a channel admin allowed to post. With no new items no post goes out.'
+    ),
+    setup: tr(
+      [
+        'Укажите адрес ленты.',
+        'Подключите AI и Telegram-бота.',
+        'Добавьте бота администратором канала и укажите @канал.',
+      ],
+      [
+        'Set the feed URL.',
+        'Connect AI and a Telegram bot.',
+        'Make the bot a channel admin and enter @channel.',
+      ]
+    ),
+    nodes: [
+      { id: 'trigger', action: 'schedule.every', config: { every: 'daily', time: '10:00' } },
+      {
+        id: 'rss_1',
+        action: 'rss.read',
+        config: { feedUrl: 'https://hnrss.org/frontpage', maxItems: 3, onlyNew: true },
+      },
+      {
+        id: 'ai_1',
+        action: 'ai.reply',
+        config: {
+          prompt: tr(
+            'Напиши пост для Telegram-канала на русском по этим новостям: 2–4 предложения, без хэштегов, в конце ссылки списком.\n\n{{ $nodes.rss_1.output.digest }}',
+            'Write a Telegram channel post about these stories: 2–4 sentences, no hashtags, links listed at the end.\n\n{{ $nodes.rss_1.output.digest }}'
+          ),
+        },
+      },
+      {
+        id: 'tg_1',
+        action: 'telegram.sendMessage',
+        config: {
+          chatId: '@my_channel',
+          text: '{{ $nodes.ai_1.output.text }}',
+          imageUrl: '{{ $nodes.rss_1.output.image }}',
+          disablePreview: true,
+        },
+      },
+    ],
+    edges: [
+      ['trigger', 'rss_1'],
+      ['rss_1', 'ai_1'],
+      ['ai_1', 'tg_1'],
     ],
   },
   {

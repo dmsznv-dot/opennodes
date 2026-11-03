@@ -31,6 +31,7 @@ export class WorkerDaemon {
       ssrfAllowlist: config.SSRF_ALLOWLIST.split(',')
         .map((h) => h.trim())
         .filter(Boolean),
+      telegramApiBase: config.TELEGRAM_API_BASE,
       allowedFsRoot: config.ALLOWED_FS_ROOT,
       inlineDelayMaxMs: config.INLINE_DELAY_MAX_MS,
       heartbeatMs: config.WORKER_HEARTBEAT_INTERVAL_MS,

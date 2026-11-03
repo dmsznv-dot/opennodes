@@ -274,7 +274,11 @@ function toStep(s, a, nums) {
   let status;
   let summary = summarize(out);
   if (s.status === 'SUCCEEDED') {
-    status = s.nodeType === 'logic.condition' && out?.passed === false ? 'stopped' : 'ok';
+    // A condition that did not hold, or an RSS step with nothing new, stops the flow below.
+    const stopped =
+      (s.nodeType === 'logic.condition' && out?.passed === false) || out?.stopped === true;
+    status = stopped ? 'stopped' : 'ok';
+    if (s.nodeType === 'core.rss' && out?.stopped) summary = t('run.noNewItems');
     if (s.nodeType?.startsWith('trigger.')) summary = triggerSummary(s.nodeType, out?.payload);
   } else if (s.status === 'FAILED') status = 'failed';
   else if (s.status === 'SKIPPED') status = out?.disabled ? 'skipped' : 'notReached';

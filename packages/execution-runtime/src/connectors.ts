@@ -24,6 +24,8 @@ export interface ConnectorRuntimeOptions {
   resolveCredential: CredentialResolver;
   /** Hosts that may be reached despite the SSRF policy (e.g. a local Ollama). */
   ssrfAllowlist?: string[];
+  /** Telegram Bot API base for sending (tests, a local Bot API server). */
+  telegramApiBase?: string;
 }
 
 /**
@@ -57,7 +59,8 @@ interface CredentialPolicy {
 const CREDENTIAL_POLICY: Record<string, CredentialPolicy> = {
   'core.telegramBot': {
     types: ['telegram', 'core.telegramBot'],
-    configSecretKeys: ['botToken'],
+    // apiBase is set by the server, never by a workflow (it would receive the token).
+    configSecretKeys: ['botToken', 'apiBase'],
     check: (_input, secrets) =>
       !secrets
         ? 'no connection selected for this step. Add a Telegram bot connection and select it.'
@@ -219,6 +222,9 @@ function connectorExecutor(
         }
       }
       if (connector.id === 'core.rss' && input.url === undefined) input.url = input.feedUrl;
+      if (connector.id === 'core.telegramBot' && options.telegramApiBase) {
+        input.apiBase = options.telegramApiBase;
+      }
       if (connector.id === 'ai.openai' && !input.messages && typeof input.prompt === 'string') {
         input.messages = [
           ...(typeof input.system === 'string' && input.system
@@ -286,22 +292,34 @@ function normalizeOutput(
     case 'core.outgoingWebhook':
       return { ...o, status: o.statusCode };
     case 'core.rss': {
-      const all: Array<Record<string, unknown>> = Array.isArray(o.items) ? o.items : [];
+      // The reader returns the item list itself.
+      const all: Array<Record<string, unknown>> = Array.isArray(output)
+        ? output
+        : Array.isArray(o.items)
+          ? o.items
+          : [];
       const max = Number(input.maxItems);
-      const items = Number.isFinite(max) && max > 0 ? all.slice(0, max) : all;
-      return {
-        ...o,
-        items,
-        count: items.length,
-        titles: items
-          .map((i) => String(i.title ?? ''))
-          .filter(Boolean)
-          .join('\n'),
-      };
+      return summarizeFeed(Number.isFinite(max) && max > 0 ? all.slice(0, max) : all);
     }
     default:
       return o;
   }
+}
+
+/** The fields RSS steps expose: the items plus ready-to-use text for posts and prompts. */
+export function summarizeFeed(items: Array<Record<string, unknown>>) {
+  const titles = items.map((i) => String(i.title ?? '')).filter(Boolean);
+  return {
+    items,
+    count: items.length,
+    titles: titles.join('\n'),
+    digest: items
+      .map((i) => [i.title, i.link].filter(Boolean).join(' — '))
+      .filter(Boolean)
+      .join('\n'),
+    link: String(items[0]?.link ?? ''),
+    image: String(items.find((i) => i.image)?.image ?? ''),
+  };
 }
 
 /** Node executors for every packaged connector, keyed by node type (= connector id). */
@@ -313,7 +331,34 @@ export function buildConnectorExecutors(
     Object.values(all).map((connector) => [connector.id, connectorExecutor(connector, options)])
   );
   executors['ai.classify'] = classifyExecutor(executors['ai.openai']!);
+  executors['telegram.sendFile'] = telegramFileExecutor(executors['core.telegramBot']!);
   return executors;
+}
+
+/** "Send a file to Telegram": a photo or document by URL, with an optional caption. */
+function telegramFileExecutor(telegram: NodeExecutor): NodeExecutor {
+  return {
+    execute(node, config, step) {
+      const url = String(config.fileUrl ?? '').trim();
+      if (!url) {
+        throw new ActionExecutionError(
+          'Send a file to Telegram: enter the link to the file.',
+          'telegramBot',
+          'telegram.sendFile'
+        );
+      }
+      return telegram.execute(
+        { ...node, type: 'core.telegramBot' },
+        {
+          chatId: config.chatId,
+          text: config.caption ?? '',
+          parseMode: config.parseMode,
+          ...(config.kind === 'document' ? { fileUrl: url } : { imageUrl: url }),
+        },
+        step
+      );
+    },
+  };
 }
 
 /** Node types whose connector exists but does not work yet (the step fails honestly). */

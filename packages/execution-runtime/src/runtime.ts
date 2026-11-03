@@ -24,6 +24,7 @@ import { buildConnectorExecutors, notImplementedNodeTypes } from './connectors.j
 const TRIGGER_TYPES = ['trigger.manual', 'trigger.webhook', 'trigger.cron', 'trigger.telegram'];
 import { buildDelayExecutors } from './delay.js';
 import { buildLogicExecutors } from './logic.js';
+import { settleRssItems, withOnlyNewItems } from './rss.js';
 import {
   DbCancellationToken,
   claimExecution,
@@ -46,6 +47,8 @@ export interface ExecutionRuntimeOptions {
   /** Same key the API encrypts credentials with (64 hex chars). */
   encryptionKey: string;
   ssrfAllowlist?: string[];
+  /** Telegram Bot API base for sending (tests, a local Bot API server). */
+  telegramApiBase?: string;
   allowedFsRoot?: string;
   /** Delays up to this long run inline in the worker; longer ones suspend. */
   inlineDelayMaxMs?: number;
@@ -87,12 +90,15 @@ export class ExecutionRuntime {
     this.staleMs = options.staleMs ?? 45_000;
     this.ssrfAllowlist = options.ssrfAllowlist ?? [];
     this.logger = options.logger ?? silentLogger;
+    const connectors = buildConnectorExecutors({
+      httpClient: new SafeHttpClient(),
+      ssrfAllowlist: options.ssrfAllowlist,
+      telegramApiBase: options.telegramApiBase,
+      resolveCredential: createCredentialResolver(options.db, this.encryption),
+    });
+    connectors['core.rss'] = withOnlyNewItems(connectors['core.rss']!, options.db);
     const nodeExecutors = {
-      ...buildConnectorExecutors({
-        httpClient: new SafeHttpClient(),
-        ssrfAllowlist: options.ssrfAllowlist,
-        resolveCredential: createCredentialResolver(options.db, this.encryption),
-      }),
+      ...connectors,
       ...buildLogicExecutors(),
       ...buildDelayExecutors({
         journal: this.journal,
@@ -223,6 +229,9 @@ export class ExecutionRuntime {
           }),
         });
 
+        if (result.execution.status !== 'WAITING') {
+          await settleRssItems(db, executionId, result.execution.status === 'SUCCEEDED');
+        }
         if (result.execution.status === 'WAITING' && result.suspension) {
           const resumeAt = result.suspension.resumeAt.getTime();
           await queue.executionProducer.add(
@@ -238,6 +247,7 @@ export class ExecutionRuntime {
         return { executionId, status: result.execution.status };
       } catch (err) {
         this.logger.error({ err, executionId }, 'Run crashed outside of a step');
+        await settleRssItems(db, executionId, false).catch(() => {});
         await failExecution(
           db,
           executionId,

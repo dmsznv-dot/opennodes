@@ -37,9 +37,7 @@ export function generateCsv(rows: Record<string, unknown>[]): string {
     const line = headers
       .map((h) => {
         const val = String(row[h] ?? '');
-        return val.includes(',') || val.includes('"')
-          ? `"${val.replace(/"/g, '""')}"`
-          : val;
+        return val.includes(',') || val.includes('"') ? `"${val.replace(/"/g, '""')}"` : val;
       })
       .join(',');
     lines.push(line);
@@ -53,52 +51,99 @@ export interface RssFeedItem {
   link: string;
   description: string;
   pubDate: string;
+  /** Picture of the item: enclosure, media:content / media:thumbnail, or first <img>. */
+  image?: string;
+}
+
+const ENTITIES: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  nbsp: ' ',
+  mdash: '—',
+  ndash: '–',
+  hellip: '…',
+  laquo: '«',
+  raquo: '»',
+};
+
+/** Feed text as a person reads it: CDATA unwrapped, entities decoded, no markup. */
+export function feedText(raw: string | undefined, { stripTags = false } = {}): string {
+  let s = (raw ?? '').replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1');
+  s = s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, code: string) => {
+    if (code[0] === '#') {
+      const n =
+        code[1]?.toLowerCase() === 'x' ? parseInt(code.slice(2), 16) : Number(code.slice(1));
+      return Number.isFinite(n) ? String.fromCodePoint(n) : m;
+    }
+    return ENTITIES[code.toLowerCase()] ?? m;
+  });
+  if (stripTags) {
+    // Entities may have encoded the markup itself, hence decode first, then strip.
+    s = s.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '');
+  }
+  return s.replace(/[ \t]+/g, ' ').trim();
+}
+
+function tag(block: string, name: string): string | undefined {
+  return block.match(new RegExp(`<${name}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${name}>`, 'i'))?.[1];
+}
+
+function itemImage(block: string, description: string): string | undefined {
+  const enclosure = block.match(/<enclosure\b[^>]*>/i)?.[0];
+  if (enclosure && /type=["']image\//i.test(enclosure)) {
+    const url = enclosure.match(/url=["']([^"']+)["']/i)?.[1];
+    if (url) return feedText(url);
+  }
+  const media =
+    block.match(/<media:content\b[^>]*url=["']([^"']+)["'][^>]*medium=["']image["']/i)?.[1] ??
+    block.match(/<media:content\b[^>]*medium=["']image["'][^>]*url=["']([^"']+)["']/i)?.[1] ??
+    block.match(/<media:thumbnail\b[^>]*url=["']([^"']+)["']/i)?.[1] ??
+    block.match(
+      /<media:content\b[^>]*url=["']([^"']+\.(?:jpe?g|png|gif|webp)(?:\?[^"']*)?)["']/i
+    )?.[1];
+  if (media) return feedText(media);
+  const img = feedText(description).match(/<img\b[^>]*src=["']([^"']+)["']/i)?.[1];
+  return img || undefined;
 }
 
 export function parseRssXml(xml: string): RssFeedItem[] {
   const items: RssFeedItem[] = [];
-  const itemRegex = /<item>([\s\S]*?)<\/item>/g;
+  const itemRegex = /<item\b[^>]*>([\s\S]*?)<\/item>/gi;
   let match: RegExpExecArray | null;
 
   while ((match = itemRegex.exec(xml)) !== null) {
     const block = match[1]!;
-    const title = block.match(/<title>([\s\S]*?)<\/title>/)?.[1]?.trim() ?? '';
-    const link = block.match(/<link>([\s\S]*?)<\/link>/)?.[1]?.trim() ?? '';
-    const guid =
-      block.match(/<guid.*?>([\s\S]*?)<\/guid>/)?.[1]?.trim() ||
-      link ||
-      `guid_${items.length}`;
-    const description =
-      block.match(/<description>([\s\S]*?)<\/description>/)?.[1]?.trim() ?? '';
-    const pubDate =
-      block.match(/<pubDate>([\s\S]*?)<\/pubDate>/)?.[1]?.trim() ??
-      new Date().toISOString();
-
-    items.push({ guid, title, link, description, pubDate });
+    const title = feedText(tag(block, 'title'), { stripTags: true });
+    const link = feedText(tag(block, 'link'));
+    const guid = feedText(tag(block, 'guid')) || link || `guid_${items.length}`;
+    const rawDescription = tag(block, 'description') ?? tag(block, 'content:encoded') ?? '';
+    const description = feedText(rawDescription, { stripTags: true });
+    const pubDate = feedText(tag(block, 'pubDate')) || new Date().toISOString();
+    const image = itemImage(block, rawDescription);
+    items.push({ guid, title, link, description, pubDate, ...(image && { image }) });
   }
 
   // Also support Atom <entry> elements
   if (items.length === 0) {
-    const entryRegex = /<entry>([\s\S]*?)<\/entry>/g;
+    const entryRegex = /<entry\b[^>]*>([\s\S]*?)<\/entry>/gi;
     while ((match = entryRegex.exec(xml)) !== null) {
       const block = match[1]!;
-      const title = block.match(/<title.*?>([\s\S]*?)<\/title>/)?.[1]?.trim() ?? '';
-      const link =
-        block.match(/<link[^>]*href=["']([^"']+)["']/)?.[1]?.trim() ??
-        block.match(/<link>([\s\S]*?)<\/link>/)?.[1]?.trim() ??
-        '';
-      const guid =
-        block.match(/<id>([\s\S]*?)<\/id>/)?.[1]?.trim() ||
-        link ||
-        `entry_${items.length}`;
-      const description =
-        block.match(/<summary.*?>([\s\S]*?)<\/summary>/)?.[1]?.trim() ??
-        block.match(/<content.*?>([\s\S]*?)<\/content>/)?.[1]?.trim() ??
-        '';
+      const title = feedText(tag(block, 'title'), { stripTags: true });
+      const link = feedText(
+        block.match(/<link[^>]*rel=["']alternate["'][^>]*href=["']([^"']+)["']/i)?.[1] ??
+          block.match(/<link[^>]*href=["']([^"']+)["']/i)?.[1] ??
+          tag(block, 'link')
+      );
+      const guid = feedText(tag(block, 'id')) || link || `entry_${items.length}`;
+      const rawDescription = tag(block, 'summary') ?? tag(block, 'content') ?? '';
+      const description = feedText(rawDescription, { stripTags: true });
       const pubDate =
-        block.match(/<updated>([\s\S]*?)<\/updated>/)?.[1]?.trim() ??
-        new Date().toISOString();
-      items.push({ guid, title, link, description, pubDate });
+        feedText(tag(block, 'updated') ?? tag(block, 'published')) || new Date().toISOString();
+      const image = itemImage(block, rawDescription);
+      items.push({ guid, title, link, description, pubDate, ...(image && { image }) });
     }
   }
 
@@ -111,10 +156,7 @@ export class SandboxedFilesystem {
   resolveSafePath(targetPath: string, allowedRoot: string): string {
     const canonicalRoot = path.resolve(allowedRoot);
     const resolved = path.resolve(canonicalRoot, targetPath);
-    if (
-      resolved !== canonicalRoot &&
-      !resolved.startsWith(canonicalRoot + path.sep)
-    ) {
+    if (resolved !== canonicalRoot && !resolved.startsWith(canonicalRoot + path.sep)) {
       const err = new ActionExecutionError(
         `ERR_PATH_TRAVERSAL_DETECTED: Path "${targetPath}" attempts to escape sandbox root "${allowedRoot}"`,
         'filesystem',
@@ -149,9 +191,7 @@ export class SandboxedFilesystem {
       }
       case 'readFile': {
         if (!this.files.has(safePath)) {
-          const err = new Error(
-            `ENOENT: no such file or directory, open "${safePath}"`
-          );
+          const err = new Error(`ENOENT: no such file or directory, open "${safePath}"`);
           (err as unknown as { code: string }).code = 'ENOENT';
           throw err;
         }
@@ -307,10 +347,7 @@ export const csvAction: ConnectorAction<
 };
 
 // 6. F29: RSS / Atom Reader
-export const rssAction: ConnectorAction<
-  { url?: string; xml?: string },
-  RssFeedItem[]
-> = {
+export const rssAction: ConnectorAction<{ url?: string; xml?: string }, RssFeedItem[]> = {
   name: 'rss',
   description: 'Fetch and parse an RSS 2.0 or Atom XML feed into structured items.',
   execute: async (input, ctx: ConnectorContext) => {
@@ -359,10 +396,7 @@ export const postgresSqlAction: ConnectorAction<
   {
     query: string;
     params?: unknown[];
-    executor?: (
-      query: string,
-      params: unknown[]
-    ) => Promise<{ rows: unknown[]; rowCount: number }>;
+    executor?: (query: string, params: unknown[]) => Promise<{ rows: unknown[]; rowCount: number }>;
   },
   { rows: unknown[]; rowCount: number }
 > = {
@@ -385,32 +419,75 @@ export const postgresSqlAction: ConnectorAction<
 };
 
 // 9. F32: Telegram Bot
+/** Telegram's caption limit; a longer text goes out as a separate message after the media. */
+const TELEGRAM_CAPTION_MAX = 1024;
+
 export const telegramBotAction: ConnectorAction<
   {
     botToken?: string;
     chatId: string | number;
-    text: string;
-    parseMode?: 'Markdown' | 'MarkdownV2' | 'HTML';
+    text?: string;
+    parseMode?: 'Markdown' | 'MarkdownV2' | 'HTML' | '';
+    disablePreview?: boolean | string;
+    /** A picture by URL: the post becomes a photo with the text as its caption. */
+    imageUrl?: string;
+    /** A document by URL (PDF, archive, …), with the text as its caption. */
+    fileUrl?: string;
+    /** Bot API base, set by the runtime (tests, a local Bot API server). */
+    apiBase?: string;
   },
   unknown
 > = {
   name: 'telegramBot',
-  description: 'Send a message via Telegram Bot API.',
+  description: 'Send a message, photo or document via Telegram Bot API.',
   execute: async (input, ctx: ConnectorContext) => {
     const token =
-      input.botToken ??
-      (ctx.credentials?.botToken as string | undefined) ??
-      'default_token';
-    const resp = await ctx.httpClient.request({
-      url: `https://api.telegram.org/bot${token}/sendMessage`,
-      method: 'POST',
-      data: {
+      input.botToken ?? (ctx.credentials?.botToken as string | undefined) ?? 'default_token';
+    const base = `${(input.apiBase ?? 'https://api.telegram.org').replace(/\/+$/, '')}/bot${token}`;
+    const text = String(input.text ?? '');
+    const parse_mode = input.parseMode || undefined;
+    const imageUrl = String(input.imageUrl ?? '').trim();
+    const fileUrl = String(input.fileUrl ?? '').trim();
+    const call = async (method: string, data: Record<string, unknown>) =>
+      (await ctx.httpClient.request({ url: `${base}/${method}`, method: 'POST', data })).data as {
+        ok?: boolean;
+      };
+
+    if (!imageUrl && !fileUrl) {
+      if (!text.trim()) {
+        throw new ActionExecutionError(
+          'Message text is required.',
+          'telegramBot',
+          'core.telegramBot'
+        );
+      }
+      return call('sendMessage', {
         chat_id: input.chatId,
-        text: input.text,
-        parse_mode: input.parseMode,
-      },
+        text,
+        parse_mode,
+        link_preview_options: {
+          is_disabled: input.disablePreview === true || input.disablePreview === 'true',
+        },
+      });
+    }
+
+    const [method, field, url] = imageUrl
+      ? ['sendPhoto', 'photo', imageUrl]
+      : ['sendDocument', 'document', fileUrl];
+    const fits = text.length <= TELEGRAM_CAPTION_MAX;
+    const media = await call(method, {
+      chat_id: input.chatId,
+      [field]: url,
+      ...(fits && text && { caption: text, parse_mode }),
     });
-    return resp.data;
+    if (fits || media.ok === false) return media;
+    const message = await call('sendMessage', {
+      chat_id: input.chatId,
+      text,
+      parse_mode,
+      link_preview_options: { is_disabled: true },
+    });
+    return message.ok === false ? message : { ...message, media };
   },
 };
 

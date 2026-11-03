@@ -334,6 +334,18 @@ CREATE TABLE IF NOT EXISTS telegram_bot_cursors (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_triggers_due ON triggers(type, is_enabled, next_trigger_at);
+
+-- 0003: RSS "only new items" — feed items a workflow step has already handed on
+CREATE TABLE IF NOT EXISTS rss_seen_items (
+  workflow_id UUID NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+  node_id VARCHAR(100) NOT NULL,
+  item_key VARCHAR(64) NOT NULL,
+  execution_id UUID,
+  committed BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (workflow_id, node_id, item_key)
+);
+CREATE INDEX IF NOT EXISTS idx_rss_seen_execution ON rss_seen_items(execution_id);
 `;
 }
 
