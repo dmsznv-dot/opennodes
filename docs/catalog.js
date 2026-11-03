@@ -50,8 +50,48 @@ export const LIST_FIELDS = {
 export const RESULT_FIELD = {
   key: 'result',
   label: tr('Результат шага для этой записи', 'The step’s result for this item'),
-  example: tr('Ответ для этой записи…', 'The answer for this item…'),
+  example: tr('Заголовок от ИИ\nОтвет для этой записи…', 'AI title\nThe answer for this item…'),
 };
+
+/** The result split in two: an AI step asked to translate or rewrite puts the title first. */
+export const RESULT_PARTS = [
+  {
+    key: 'resultTitle',
+    label: tr('Результат: первая строка (заголовок от ИИ)', 'Result: first line (AI title)'),
+    example: tr('Заголовок от ИИ', 'AI title'),
+  },
+  {
+    key: 'resultBody',
+    label: tr(
+      'Результат без первой строки (текст от ИИ)',
+      'Result without the first line (AI text)'
+    ),
+    example: tr('Ответ для этой записи…', 'The answer for this item…'),
+  },
+];
+
+/** The same split the server does (execution-runtime splitResult). */
+export function splitResult(text) {
+  const lines = String(text ?? '').split('\n');
+  const i = lines.findIndex((l) => l.trim());
+  const rest =
+    i < 0
+      ? ''
+      : lines
+          .slice(i + 1)
+          .join('\n')
+          .trim();
+  const first = i < 0 ? '' : lines[i].trim();
+  if (!rest || first.length > 200)
+    return { resultTitle: '', resultBody: String(text ?? '').trim() };
+  const title = first
+    .replace(/^#{1,6}\s+/, '')
+    .replace(/^\*\*(.+)\*\*$/, '$1')
+    .replace(/^__(.+)__$/, '$1')
+    .replace(/^(заголовок|title)\s*:\s*/i, '')
+    .trim();
+  return { resultTitle: title, resultBody: rest };
+}
 
 const SAMPLE_FEED = tr(
   [1, 2, 3].map((n) => ({
@@ -654,8 +694,12 @@ export const ACTIONS = {
         acceptsData: true,
         label: tr('Что сделать', 'Instruction'),
         placeholder: tr(
-          'Сделай саммари каждой статьи и переведи на русский: заголовок, под ним 2–3 предложения.',
-          'Summarize each article: the title, then 2–3 sentences under it.'
+          'Переведи на русский. Первой строкой — заголовок, ниже — текст.',
+          'Translate into English. The title on the first line, the text below.'
+        ),
+        help: tr(
+          'Чтобы в посте был и ваш заголовок от ИИ (например, переведённый), попросите: «Первой строкой — заголовок, ниже — текст». Тогда в данных появятся «заголовок от ИИ» и «текст от ИИ».',
+          'For an AI-made title too (e.g. translated), ask: “the title on the first line, the text below”. The data then has “AI title” and “AI text”.'
         ),
       },
       {
@@ -705,8 +749,8 @@ export const ACTIONS = {
       output: {
         text: L(
           tr(
-            'Пример результата (симуляция) по инструкции.',
-            'Sample result (simulation) per the instruction.'
+            'Заголовок от ИИ (симуляция)\nПример результата по инструкции.',
+            'AI title (simulation)\nSample result per the instruction.'
           )
         ),
         sources: [],
@@ -1158,6 +1202,18 @@ export const ACTIONS = {
         help: tr(
           'Каждая запись уйдёт дальше один раз. Если новых нет — следующие шаги не выполнятся. Проверка из редактора записи не «съедает».',
           'Each item goes on once. With nothing new the next steps do not run. Tests from the editor do not use items up.'
+        ),
+        default: true,
+      },
+      {
+        key: 'rememberTests',
+        type: 'boolean',
+        required: false,
+        basic: false,
+        label: tr('Проверки тоже запоминают записи', 'Tests remember items too'),
+        help: tr(
+          'Каждая удачная проверка берёт следующие новые записи — удобно посмотреть, как шаги справятся с разными. Начать заново — «Сбросить память».',
+          'Each successful test takes the next new items — handy to see how the steps cope with different ones. Start over with “Reset memory”.'
         ),
         default: true,
       },
@@ -2001,8 +2057,8 @@ export const TEMPLATES = [
           forEach: '{{ $nodes.rss_1.output.items }}',
           input: '{{ $item.title }}\n{{ $item.text }}\n{{ $item.link }}',
           instruction: tr(
-            'Перескажи статью по-русски в 2–3 предложениях — по её тексту. Без заголовка, хэштегов и вступлений.',
-            'Summarise the article in 2–3 sentences, from its text. No title, hashtags or intro.'
+            'Первой строкой — заголовок статьи по-русски. Ниже — пересказ по-русски в 2–3 предложениях, по её тексту. Без хэштегов и вступлений.',
+            'The article’s title on the first line. Below — a 2–3 sentence summary from its text. No hashtags, no intro.'
           ),
           readLinks: true,
           maxLinks: 1,
@@ -2014,7 +2070,7 @@ export const TEMPLATES = [
         config: {
           chatId: '@my_channel',
           forEach: '{{ $nodes.ai_1.output.items }}',
-          text: '**{{ $item.title }}**\n\n{{ $item.result }}\n\n[Читать полностью →]({{ $item.link }})',
+          text: '**{{ $item.resultTitle }}**\n\n{{ $item.resultBody }}\n\n[Читать полностью →]({{ $item.link }})',
           imageUrl: '{{ $item.image }}',
           parseMode: 'auto',
         },

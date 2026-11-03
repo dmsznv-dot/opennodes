@@ -9,7 +9,7 @@
  * Everything is plain template text (`**{{ $item.title }}**\n{{ $item.link }}`), so what a
  * block inserts can be edited like anything typed by hand. Pure data: no DOM here.
  */
-import { ACTIONS, LIST_FIELDS, RESULT_FIELD, SERVICES } from './catalog.js';
+import { ACTIONS, LIST_FIELDS, RESULT_FIELD, RESULT_PARTS, SERVICES } from './catalog.js';
 import { ancestorsOf, nodeTitle, stepNumbers, stepOrder } from './engine.js';
 import { L } from './i18n.js';
 import { buildExpr } from './tokens.js';
@@ -85,7 +85,8 @@ export function listSource(a, expr, seen = new Set()) {
       n,
       fields: [
         { ...RESULT_FIELD, label: resultLabel(a, node) },
-        ...inner.fields.filter((f) => f.key !== 'result'),
+        ...RESULT_PARTS,
+        ...inner.fields.filter((f) => !['result', 'resultTitle', 'resultBody'].includes(f.key)),
       ],
       label: inner.label,
     };
@@ -134,6 +135,7 @@ export function listChoices(a, node) {
 // ── Ready-made posts from the fields of one item ────────────────────────────────
 
 const BODY_NAMES = {
+  ai: tr('текст от ИИ', 'AI text'),
   result: tr('результат', 'result'),
   summary: tr('кратко', 'summary'),
   text: tr('текст', 'text'),
@@ -235,6 +237,7 @@ export const GROUPS = {
   styled: tr('Оформленные', 'Styled'),
   short: tr('Короткие', 'Short'),
   all: tr('Все записи одним сообщением', 'All items in one message'),
+  links: tr('Ссылка с вашим текстом', 'A link with your own words'),
   data: tr('Данные', 'Data'),
   blocks: tr('Готовые блоки', 'Ready-made blocks'),
 };
@@ -246,20 +249,33 @@ export const GROUPS = {
  */
 export function postPresets({ field, keys, imageField, rich = true, prefix = 'p' }) {
   const has = (k) => keys.includes(k) && field(k);
-  const bodies = ['result', 'summary', 'text'].filter(has);
+  // `ai`: the AI step's own title (first line of its answer) and text — e.g. a translation.
+  const ai = has('resultTitle') && has('resultBody');
+  const bodies = [...(ai ? ['ai'] : []), ...['result', 'summary', 'text'].filter(has)];
   const out = [];
   const add = (layout, body) => {
     if ((layout.needs ?? []).some((k) => !has(k))) return;
     if (!has('title') && /\{T\}/.test(L(layout.tpl))) return;
     if (!has('link') && /\{L\}/.test(L(layout.tpl))) return;
+    const titleKey = body === 'ai' ? 'resultTitle' : 'title';
+    const bodyKey = body === 'ai' ? 'resultBody' : body;
     const fill = (s) =>
       s
-        .replace(/\{T\}/g, field('title'))
-        .replace(/\{B\}/g, body ? field(body) : '')
+        .replace(/\{T\}/g, field(titleKey))
+        .replace(/\{B\}/g, body ? field(bodyKey) : '')
         .replace(/\{L\}/g, field('link') ?? '')
         .replace(/\{D\}/g, field('date') ?? '');
     const template = (rich ? (s) => s : plain)(fill(L(layout.tpl)));
-    const name = (lang) => layout.name[lang].replace('{b}', body ? BODY_NAMES[body][lang] : '');
+    const name = (lang) => {
+      const s = layout.name[lang].replace('{b}', body ? BODY_NAMES[body][lang] : '');
+      if (body !== 'ai') return s;
+      return lang === 'ru'
+        ? s
+            .replace('Заголовок-ссылка', 'Заголовок от ИИ — ссылкой')
+            .replace(/Заголовок(?! от ИИ)/, 'Заголовок от ИИ')
+            .replace('заголовок', 'заголовок от ИИ')
+        : s.replace(/Title|title/, (m) => `AI ${m.toLowerCase()}`);
+    };
     const base = {
       id: `${prefix}.${layout.id}${body ? `.${body}` : ''}`,
       kind: 'preset',
@@ -441,6 +457,54 @@ function allItemsPresets(nodeId, { rich, imageField }) {
     .map((x) => ({ ...x, kind: 'preset', group: 'all' }));
 }
 
+// ── Links with your own words: [Read more →](link) ────────────────────────────
+
+const LINK_WORDS = [
+  tr('Читать далее', 'Read more'),
+  tr('Читать полностью →', 'Read the full story →'),
+  tr('Подробнее', 'Details'),
+  tr('Источник', 'Source'),
+  tr('🔗 Ссылка на статью', '🔗 Link to the article'),
+  tr('👉 Открыть', '👉 Open'),
+  tr('ваш текст', 'your text'),
+];
+
+function linkEntries(links) {
+  const out = [];
+  for (const l of links) {
+    for (const w of LINK_WORDS) {
+      out.push({
+        id: `link.${l.id}.${w.en}`,
+        kind: 'preset',
+        group: 'links',
+        title: tr(`«${w.ru}» → ${l.title.ru}`, `“${w.en}” → ${l.title.en}`),
+        template: tr(`[${w.ru}](${l.token})`, `[${w.en}](${l.token})`),
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * When a step repeats for a list (say RSS items) while an earlier step already did the same
+ * for each item (an AI translating them), that step's result is not in `$item` — the post
+ * would go out untranslated. Returns that step and the list that carries its result.
+ */
+export function processedBy(a, node, forEach) {
+  const src = listSource(a, forEach);
+  if (!src) return null;
+  const up = ancestorsOf(a, node.id);
+  for (const id of [...stepOrder(a)].reverse()) {
+    if (!up.has(id)) continue;
+    const u = a.nodes.find((n) => n.id === id);
+    if (u.id === src.node.id) continue;
+    if (ACTIONS[u.action]?.forEach && u.config?.forEach === forEach) {
+      return { node: u, n: stepNumbers(a).get(u.id), expr: `{{ $nodes.${u.id}.output.items }}` };
+    }
+  }
+  return null;
+}
+
 // ── Date, run, formatting ─────────────────────────────────────────────────────
 
 const NOW_KEYS = ['dateTime', 'dateRu', 'date', 'dayMonth', 'weekday', 'time', 'monthName', 'year'];
@@ -543,10 +607,16 @@ export function tagCategories(a, node, { fieldKey, forEach } = {}) {
       id: 'posts.item',
       title: tr('Готовые посты — для каждой записи', 'Ready-made posts — for each item'),
       icon: '✦',
-      hint: tr(
-        `Шаг выполнится для каждой записи из шага ${source.n}; блок соберёт пост из её полей.`,
-        `The step runs for each item of step ${source.n}; a block builds the post from its fields.`
-      ),
+      hint: processedBy(a, node, forEach)
+        ? tr(
+            `⚠ Шаг ${processedBy(a, node, forEach).n} уже обработал каждую запись, но его результат сюда не попадёт: в настройках шага выберите «Для каждой записи: Шаг ${processedBy(a, node, forEach).n} … записи с результатом».`,
+            `⚠ Step ${processedBy(a, node, forEach).n} already processed each item, but its result does not get here: in the step settings choose “For each item: Step ${processedBy(a, node, forEach).n} … items with the result”.`
+          )
+        : tr(
+            `Шаг выполнится для каждой записи из шага ${source.n}; блок соберёт пост из её полей.`,
+            `The step runs for each item of step ${source.n}; a block builds the post from its fields.`
+          ),
+      warn: Boolean(processedBy(a, node, forEach)),
       entries: postPresets({ field, keys, imageField: target.imageField, rich, prefix: 'item' }),
     });
     cats.push({
@@ -566,6 +636,43 @@ export function tagCategories(a, node, { fieldKey, forEach } = {}) {
         expr: buildExpr({ scope: 'item', key: f.key }),
         sample: f.example,
       })),
+    });
+  }
+
+  // Links with your own words: the item's link, a step's link.
+  const links = [];
+  if (source?.fields.some((f) => f.key === 'link')) {
+    links.push({
+      id: 'item',
+      title: tr('ссылка записи', 'the item’s link'),
+      token: tok({ scope: 'item', key: 'link' }),
+    });
+  }
+  for (const u of upstream) {
+    for (const o of ACTIONS[u.action]?.outputs ?? []) {
+      if (!['link', 'url'].includes(o.key)) continue;
+      const isTrigger = ACTIONS[u.action]?.kind === 'trigger';
+      links.push({
+        id: `${u.action}.${o.key}`,
+        title: tr(`шаг ${nums.get(u.id)}: ${o.label.ru}`, `step ${nums.get(u.id)}: ${o.label.en}`),
+        token: tok(
+          isTrigger
+            ? { scope: 'trigger', key: o.key }
+            : { scope: 'nodes', nodeId: u.id, key: o.key }
+        ),
+      });
+    }
+  }
+  if (links.length && rich) {
+    cats.push({
+      id: 'links',
+      title: tr('Ссылки с вашим текстом', 'Links with your own words'),
+      icon: '🔗',
+      hint: tr(
+        'Текст в квадратных скобках станет ссылкой, сам адрес спрячется. Слова можно поменять прямо в поле. Любой тег-ссылку можно превратить в такую — нажмите на него в поле.',
+        'The words in brackets become the link, the address itself is hidden. Change the words right in the field. Any link chip can become one — click it in the field.'
+      ),
+      entries: linkEntries(links),
     });
   }
 
@@ -650,6 +757,8 @@ export function tagCategories(a, node, { fieldKey, forEach } = {}) {
     }
     cats.push({
       id: `step.${u.id}`,
+      nodeId: u.id,
+      action: u.action,
       title: tr(
         `Шаг ${nums.get(u.id)} · ${nodeTitle(u)}`,
         `Step ${nums.get(u.id)} · ${nodeTitle(u)}`
@@ -736,7 +845,15 @@ export function tagCategories(a, node, { fieldKey, forEach } = {}) {
   }
   // Blocks are written per language; the field gets the one for the interface language.
   return cats
-    .map((c) => ({ ...c, entries: c.entries.map((e) => ({ ...e, template: L(e.template) })) }))
+    .map((c) => ({
+      ...c,
+      entries: c.entries.map((e) => ({
+        ...e,
+        template: L(e.template),
+        // Favourites are kept across automations: a step's blocks by its kind, not its id.
+        fav: c.nodeId ? e.id.split(c.nodeId).join(c.action) : e.id,
+      })),
+    }))
     .filter((c) => c.entries.length);
 }
 

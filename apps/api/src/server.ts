@@ -41,6 +41,8 @@ import {
   listConnectionModels,
   listMcpTools,
   listWorkflowTriggers,
+  resetRssMemory,
+  rssMemory,
   setWorkflowTriggersEnabled,
   syncWorkflowTriggers,
 } from '@localflow/execution-runtime';
@@ -763,6 +765,25 @@ export class LocalFlowApiServer {
       }
 
       // 7. Single Workflow Operations (Draft Update, Publish, Rollback, Execute)
+      // What the RSS steps remember as already handed on; DELETE forgets it (all or ?nodeId=).
+      const wfRssMatch = pathname.match(/^\/api\/v1\/workflows\/([^/]+)\/rss-memory$/);
+      if ((req.method === 'GET' || req.method === 'DELETE') && wfRssMatch) {
+        const wf = await rt.repo.findWorkflow(wfRssMatch[1]!);
+        if (!wf) return respond(404, { code: 'ERR_NOT_FOUND', message: 'Workflow not found.' });
+        await this.requireWorkspacePermission(
+          rt,
+          wf.workspaceId,
+          auth.userId,
+          req.method === 'GET' ? PERMISSIONS.WORKFLOW_VIEW : PERMISSIONS.WORKFLOW_EDIT
+        );
+        if (req.method === 'DELETE') {
+          const nodeId = urlObj.searchParams.get('nodeId') || undefined;
+          const removed = await resetRssMemory(rt.db, wf.id, nodeId);
+          return respond(200, { removed, nodes: await rssMemory(rt.db, wf.id) });
+        }
+        return respond(200, { nodes: await rssMemory(rt.db, wf.id) });
+      }
+
       const wfDraftMatch = pathname.match(/^\/api\/v1\/workflows\/([^/]+)\/draft$/);
       if (req.method === 'PUT' && wfDraftMatch) {
         const wf = await rt.repo.findWorkflow(wfDraftMatch[1]!);

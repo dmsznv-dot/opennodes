@@ -20,7 +20,8 @@ const isOn = (v: unknown) => v === true || v === 'true';
  * "Only items new since the last run" for the RSS step. A real run hands on the newest
  * unseen items (at most `maxItems`) and records them as pending; they become seen when
  * the run succeeds and are released when it fails, so a failed post is retried rather
- * than lost. Editor tests read the feed but record nothing. When nothing is new the
+ * than lost. Editor tests read the feed but record nothing — unless `rememberTests` is on,
+ * then a successful test uses its items up like a run. When nothing is new the
  * flow below the step stops (the run still succeeds), so no empty post goes out.
  */
 export function withOnlyNewItems(rss: NodeExecutor, db: DatabaseInstance): NodeExecutor {
@@ -58,7 +59,9 @@ export function withOnlyNewItems(rss: NodeExecutor, db: DatabaseInstance): NodeE
       const fresh = all.filter((x) => !seen.has(x.key));
       const handed = fresh.slice(0, max);
 
-      if (step.triggerType !== 'test' && fresh.length) {
+      // Editor tests leave the memory alone, unless the step says tests count too.
+      const remember = step.triggerType !== 'test' || isOn(config.rememberTests);
+      if (remember && fresh.length) {
         const [{ n }] = await (db as Db)
           .select({ n: sql<number>`count(*)::int` })
           .from(rssSeenItems)
@@ -69,7 +72,10 @@ export function withOnlyNewItems(rss: NodeExecutor, db: DatabaseInstance): NodeE
         const rows = [
           ...handed.map((x) => ({ key: x.key, pending: true })),
           // First run: the feed's backlog counts as seen, or it would come out run after run.
-          ...(n === 0 ? fresh.slice(max).map((x) => ({ key: x.key, pending: false })) : []),
+          // Not in a test: a remembering test is for walking through the items one by one.
+          ...(n === 0 && step.triggerType !== 'test'
+            ? fresh.slice(max).map((x) => ({ key: x.key, pending: false }))
+            : []),
         ];
         await (db as Db)
           .insert(rssSeenItems)
@@ -103,6 +109,36 @@ export function withOnlyNewItems(rss: NodeExecutor, db: DatabaseInstance): NodeE
 }
 
 /** Settles a run's pending RSS items: seen if it succeeded, released if it failed. */
+/** How many items each RSS step of a workflow remembers as already handed on. */
+export async function rssMemory(
+  db: DatabaseInstance,
+  workflowId: string
+): Promise<Record<string, number>> {
+  const rows = await (db as Db)
+    .select({ nodeId: rssSeenItems.nodeId, n: sql<number>`count(*)::int` })
+    .from(rssSeenItems)
+    .where(eq(rssSeenItems.workflowId, workflowId))
+    .groupBy(rssSeenItems.nodeId);
+  return Object.fromEntries(rows.map((r: { nodeId: string; n: number }) => [r.nodeId, r.n]));
+}
+
+/** Forgets what an RSS step (or every RSS step of the workflow) has handed on. */
+export async function resetRssMemory(
+  db: DatabaseInstance,
+  workflowId: string,
+  nodeId?: string
+): Promise<number> {
+  const rows = await (db as Db)
+    .delete(rssSeenItems)
+    .where(
+      nodeId
+        ? and(eq(rssSeenItems.workflowId, workflowId), eq(rssSeenItems.nodeId, nodeId))
+        : eq(rssSeenItems.workflowId, workflowId)
+    )
+    .returning({ key: rssSeenItems.itemKey });
+  return rows.length;
+}
+
 export async function settleRssItems(
   db: DatabaseInstance,
   executionId: string,

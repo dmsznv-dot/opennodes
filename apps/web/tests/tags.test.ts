@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { ACTIONS, TEMPLATES, feedSummary } from '../../../docs/catalog.js';
-import { tagCategories, listChoices } from '../../../docs/tags.js';
+import { ACTIONS, TEMPLATES, feedSummary, splitResult } from '../../../docs/catalog.js';
+import { tagCategories, listChoices, processedBy } from '../../../docs/tags.js';
 import { parseExpr, splitTemplate } from '../../../docs/tokens.js';
 
 type Node = { id: string; action: string; config: Record<string, unknown> };
@@ -33,11 +33,13 @@ describe('data picker — ready-made blocks', () => {
     const posts = cats.find((c: { id: string }) => c.id === 'posts.item');
     expect(posts.entries.length).toBeGreaterThanOrEqual(20);
     const top = posts.entries.filter((e: { group: string }) => e.group === 'top');
+    // After an AI step: its own title and text first (a translation keeps no English title).
     expect(top.map((e: { title: { ru: string } }) => e.title.ru).slice(0, 3)).toEqual([
-      'Заголовок + результат',
-      'Заголовок + результат + ссылка',
-      'Заголовок + результат + ссылка + картинка',
+      'Заголовок от ИИ + текст от ИИ',
+      'Заголовок от ИИ + текст от ИИ + ссылка',
+      'Заголовок от ИИ + текст от ИИ + ссылка + картинка',
     ]);
+    expect(top[0].template).toBe('**{{ $item.resultTitle }}**\n\n{{ $item.resultBody }}');
     // A block with a picture fills the step's picture field with the item's picture.
     expect(top[2].extra).toEqual({ imageUrl: '{{ $item.image }}' });
     const item = cats.find((c: { id: string }) => c.id === 'item');
@@ -132,5 +134,40 @@ describe('data picker — ready-made blocks', () => {
     );
     expect(out.items[0].summary.length).toBeLessThanOrEqual(280);
     for (const o of ACTIONS['rss.read'].outputs) expect(out, o.key).toHaveProperty(o.key);
+  });
+
+  it('warns when a post repeats for the raw items while an AI step already processed each', () => {
+    const raw = '{{ $nodes.rss_1.output.items }}';
+    expect(processedBy(a, tg, raw)).toMatchObject({ n: 3, expr: '{{ $nodes.ai_1.output.items }}' });
+    expect(processedBy(a, tg, tg.config.forEach)).toBeNull();
+    const posts = tagCategories(a, tg, { fieldKey: 'text', forEach: raw })[0];
+    expect(posts.warn).toBe(true);
+  });
+
+  it('links with your own words hide the address behind them', () => {
+    const cats = tagCategories(a, tg, { fieldKey: 'text', forEach: tg.config.forEach });
+    const links = cats.find((c: { id: string }) => c.id === 'links');
+    const templates = links.entries.map((e: { template: string }) => e.template);
+    expect(templates.length).toBeGreaterThanOrEqual(7);
+    for (const tpl of templates)
+      expect(tpl).toMatch(/^\[[^\]]+\]\(\{\{ \$(item\.link|nodes\.rss_1\.output\.link) \}\}\)$/);
+    expect(templates.filter((x: string) => x.includes('$item.link'))).toHaveLength(7);
+  });
+
+  it('favourites are kept by step kind, so they work in every automation', () => {
+    const cats = tagCategories(a, tg, { fieldKey: 'text', forEach: '' });
+    const rss = cats.find((c: { id: string }) => c.id === 'step.rss_1');
+    expect(rss.entries.every((e: { fav: string }) => !e.fav.includes('rss_1'))).toBe(true);
+  });
+
+  it('an AI answer splits into its title line and the text', () => {
+    expect(splitResult('**Новый заголовок**\n\nПересказ.')).toEqual({
+      resultTitle: 'Новый заголовок',
+      resultBody: 'Пересказ.',
+    });
+    expect(splitResult('Одной строкой.')).toEqual({
+      resultTitle: '',
+      resultBody: 'Одной строкой.',
+    });
   });
 });

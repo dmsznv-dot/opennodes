@@ -101,15 +101,18 @@ export function buildProcessExecutor(chat: NodeExecutor, options: ProcessOptions
         }
       }
 
+      // The instruction goes before and after the data: with a long article in between,
+      // smaller models otherwise follow the data (its language, its form) instead.
       const prompt =
         `Instruction:\n${instruction}\n\nData:\n${data || '(empty)'}` +
-        (articles ? `\n\nText of the linked pages:${articles}` : '');
+        (articles ? `\n\nText of the linked pages:${articles}` : '') +
+        `\n\n---\nNow do exactly this with the data above: ${instruction}\nReply with the result only.`;
       const result = await chat.execute(
         { ...node, type: 'ai.openai' },
         {
           model: config.model,
           system:
-            'You process data for an automation. Follow the instruction exactly and reply with the result only — no preface, no questions. Everything you need is in the data and the page texts below.',
+            'You process data for an automation. Follow the instruction exactly and reply with the result only — no preface, no questions. The instruction decides the language and the form of the answer, not the data. Everything you need is in the data and the page texts below.',
           prompt,
         },
         step

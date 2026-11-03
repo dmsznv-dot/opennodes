@@ -4,7 +4,7 @@
  * never calls real connectors (see docs/README note and BUG-01 in the UX audit).
  */
 import { parseExpr, splitTemplate } from './tokens.js';
-import { ACTIONS, SERVICES } from './catalog.js';
+import { ACTIONS, SERVICES, splitResult } from './catalog.js';
 import { L, t, getLocale } from './i18n.js';
 
 // ── Graph validation (single trigger + Kahn cycle check) ────────────────────
@@ -477,6 +477,7 @@ function simulateEach(action, config, ctx) {
       items: items.map((item, i) => ({
         ...(item && typeof item === 'object' ? item : { value: item }),
         result: results[i],
+        ...splitResult(results[i]),
       })),
       results: results.join('\n\n'),
       text: results.join('\n\n'),

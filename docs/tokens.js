@@ -195,6 +195,14 @@ export function tokenField(opts) {
     insertNode(chip(expr));
     changed();
   };
+  /** A chip becomes a template, e.g. the link chip → `[Read more]({{ … }})`. */
+  field.replaceWithTemplate = (el, template) => {
+    const frag = document.createDocumentFragment();
+    for (const p of splitTemplate(template))
+      frag.append(p.expr ? chip(p.expr) : document.createTextNode(p.text));
+    el.replaceWith(frag);
+    changed();
+  };
   field.replaceToken = (el, expr) => {
     el.replaceWith(chip(expr));
     changed();

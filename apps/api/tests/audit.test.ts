@@ -1585,4 +1585,84 @@ describe('posts — formatting, pictures and one post per item', () => {
       '<b>Статья 2</b>\nПересказ: Статья 2\nhttps://example.com/a2',
     ]);
   });
+
+  it('an AI step for each item gives its title line and text separately', async () => {
+    reset();
+    feed = [{ guid: 'tr1', title: 'Hello world', link: 'https://example.com/h' }];
+    modelReply = () => '**Привет, мир**\n\nПереведённый текст.';
+    const r = await testRun(ctx, [
+      trig(),
+      node('rss', 'core.rss', { feedUrl: `http://${host}/feed.xml`, maxItems: 5, onlyNew: false }),
+      node(
+        'ai',
+        'ai.process',
+        {
+          forEach: '{{ $nodes.rss.output.items }}',
+          input: '{{ $item.title }}',
+          instruction: 'переведи на русский',
+        },
+        { cred: 'ai' }
+      ),
+      tgSend('tg', {
+        forEach: '{{ $nodes.ai.output.items }}',
+        text: '**{{ $item.resultTitle }}**\n{{ $item.resultBody }}\n[Читать далее]({{ $item.link }})',
+      }),
+    ]);
+    expect(r.execution.status, r.execution.errorMessage ?? '').toBe('SUCCEEDED');
+    expect(r.step('ai').outputPayload.items[0]).toMatchObject({
+      resultTitle: 'Привет, мир',
+      resultBody: 'Переведённый текст.',
+    });
+    // The instruction is repeated after the data, so a long article does not drown it.
+    const prompt = modelRequests[0].messages.at(-1).content as string;
+    expect(prompt.trim().endsWith('Reply with the result only.')).toBe(true);
+    expect(prompt.match(/переведи на русский/g)).toHaveLength(2);
+    expect(tgSent[0]!.body.text).toBe(
+      '<b>Привет, мир</b>\nПереведённый текст.\n<a href="https://example.com/h">Читать далее</a>'
+    );
+  });
+
+  it('tests that remember walk through the feed; resetting the memory starts over', async () => {
+    reset();
+    feed = [1, 2, 3].map((n) => ({
+      guid: `m${n}`,
+      title: `Запись ${n}`,
+      link: `https://example.com/m${n}`,
+    }));
+    const flow = [
+      trig(),
+      node('rss', 'core.rss', {
+        feedUrl: `http://${host}/feed.xml`,
+        maxItems: 1,
+        onlyNew: true,
+        rememberTests: true,
+      }),
+    ];
+    const titles = async () => (await testRun(ctx, flow)).step('rss').outputPayload.titles;
+    expect(await titles()).toBe('Запись 1');
+    expect(await titles()).toBe('Запись 2');
+    const memory = await ctx.api.inject<any>({
+      method: 'GET',
+      url: `/api/v1/workflows/${ctx.scratchWf}/rss-memory`,
+      headers: ctx.headers,
+    });
+    expect(memory.body.nodes).toEqual({ rss: 2 });
+    const cleared = await ctx.api.inject<any>({
+      method: 'DELETE',
+      url: `/api/v1/workflows/${ctx.scratchWf}/rss-memory?nodeId=rss`,
+      headers: ctx.headers,
+    });
+    expect(cleared.body).toEqual({ removed: 2, nodes: {} });
+    expect(await titles()).toBe('Запись 1');
+
+    // Without “tests remember” a test leaves the memory alone, as before.
+    await ctx.api.inject({
+      method: 'DELETE',
+      url: `/api/v1/workflows/${ctx.scratchWf}/rss-memory`,
+      headers: ctx.headers,
+    });
+    (flow[1]!.data.config as Record<string, unknown>).rememberTests = false;
+    expect(await titles()).toBe('Запись 1');
+    expect(await titles()).toBe('Запись 1');
+  });
 });

@@ -21,7 +21,7 @@ import {
 import * as live from './live.js';
 import { tokenField, parseExpr, buildExpr } from './tokens.js';
 import { attachCanvas, isTyping } from './canvas.js';
-import { tagCategories, listChoices, listSource, targetInfo, GROUPS } from './tags.js';
+import { tagCategories, listChoices, listSource, processedBy, targetInfo, GROUPS } from './tags.js';
 import { markdownNodes } from './markdown.js';
 import {
   ACTIONS,
@@ -2526,6 +2526,52 @@ function closePanel() {
   render();
 }
 
+/**
+ * What an RSS step remembers (“only new items”) and a button to forget it — after a series
+ * of tests, to see the newest items again. The server keeps the memory; the demo has none.
+ */
+function rssMemoryBlock(a, node) {
+  const line = h('span', { class: 'small muted' }, t('rss.memoryDemo'));
+  const reset = h(
+    'button',
+    {
+      type: 'button',
+      class: 'btn btn-small',
+      disabled: !live.isLive,
+      onclick: async () => {
+        if (!confirm(t('rss.resetConfirm'))) return;
+        try {
+          await live.flushSync(store);
+          await live.api(
+            'DELETE',
+            `/workflows/${a.id}/rss-memory?nodeId=${encodeURIComponent(node.id)}`
+          );
+          toast(t('rss.resetDone'));
+          show(0);
+        } catch (err) {
+          showApiError(err);
+        }
+      },
+    },
+    t('rss.reset')
+  );
+  const show = (n) => {
+    line.textContent = n ? t('rss.memoryCount', { n }) : t('rss.memoryEmpty');
+  };
+  if (live.isLive) {
+    live
+      .api('GET', `/workflows/${a.id}/rss-memory`)
+      .then((r) => show(r.nodes?.[node.id] ?? 0))
+      .catch(() => (line.textContent = ''));
+  }
+  return h(
+    'div',
+    { class: 'field rss-memory' },
+    h('div', { class: 'field-label' }, t('rss.memory')),
+    h('div', { class: 'row-gap', style: { flexWrap: 'wrap', alignItems: 'center' } }, line, reset)
+  );
+}
+
 /** A step's fields, plus “for each item” on steps that can repeat and have a list before them. */
 function stepFields(a, node, act) {
   const base = act?.fields ?? [];
@@ -2804,10 +2850,31 @@ function nodePanel(a, node) {
       forEachHelp = () => {
         const src = listSource(a, control.value);
         const first = listChoices(a, node)[0];
-        help.textContent = src
-          ? L(f.help)
-          : t('fe.nudge', { n: listSource(a, first?.expr)?.n ?? '?' });
-        help.classList.toggle('fe-nudge', !src);
+        const done = src && processedBy(a, node, control.value);
+        clear(help);
+        help.classList.toggle('fe-nudge', !src || Boolean(done));
+        if (done) {
+          // An earlier step (an AI translating each item) did the work, but repeating for the
+          // raw list would send the items without its result.
+          help.append(
+            t('fe.processed', { n: done.n }),
+            ' ',
+            h(
+              'button',
+              {
+                type: 'button',
+                class: 'btn btn-small',
+                onclick: () => {
+                  control.value = done.expr;
+                  control.dispatchEvent(new Event('change'));
+                },
+              },
+              t('fe.useProcessed', { n: done.n })
+            )
+          );
+        } else {
+          help.append(src ? L(f.help) : t('fe.nudge', { n: listSource(a, first?.expr)?.n ?? '?' }));
+        }
       };
       forEachHelp();
     }
@@ -2995,6 +3062,7 @@ function nodePanel(a, node) {
       : null,
     h('h3', { class: 'panel-section' }, t('panel.basic')),
     basic.map(fieldControl),
+    act?.type === 'core.rss' ? rssMemoryBlock(a, node) : null,
     dataBlock,
     h(
       'details',
@@ -3270,8 +3338,37 @@ function openDataPicker(a, node, field, opts = {}) {
     })
   );
   const howto = { id: 'howto', title: { ru: t('dpick.howto'), en: t('dpick.howto') }, icon: '?' };
-  const all = [...cats.filter((c) => c.entries.length), howto];
-  let current = all[0]?.id ?? 'howto';
+  // Favourites (★ on a card) are kept for every automation; shown first when there are some.
+  const favs = new Set(store.settings.favoriteTags ?? []);
+  const favCat = () => {
+    const seen = new Set();
+    const entries = cats
+      .flatMap((c) => c.entries)
+      .filter((e) => favs.has(e.fav) && !seen.has(e.fav) && seen.add(e.fav))
+      .map((e) => ({ ...e, group: 'fav' }));
+    return {
+      id: 'fav',
+      title: { ru: t('dpick.favorites'), en: t('dpick.favorites') },
+      icon: '★',
+      entries,
+    };
+  };
+  const toggleFav = (e) => {
+    if (favs.has(e.fav)) favs.delete(e.fav);
+    else favs.add(e.fav);
+    store.settings.favoriteTags = [...favs];
+    save();
+    rebuild();
+  };
+  let all = [];
+  const rebuild = () => {
+    const fav = favCat();
+    all = [...(fav.entries.length ? [fav] : []), ...cats.filter((c) => c.entries.length), howto];
+    if (!all.some((c) => c.id === current)) current = all[0]?.id ?? 'howto';
+    renderNav();
+    renderMain();
+  };
+  let current = favs.size ? 'fav' : (cats.find((c) => c.entries.length)?.id ?? 'howto');
   let query = '';
 
   const entryTitle = (e) => (e.i18nKey ? t(e.i18nKey) : L(e.title));
@@ -3301,6 +3398,27 @@ function openDataPicker(a, node, field, opts = {}) {
   };
 
   const card = (e) => {
+    if (e.group === 'emoji') return cardButton(e);
+    const on = favs.has(e.fav);
+    return h(
+      'div',
+      { class: 'tag-cell' },
+      cardButton(e),
+      h(
+        'button',
+        {
+          type: 'button',
+          class: ['tag-star', on && 'on'],
+          'aria-pressed': String(on),
+          title: t(on ? 'dpick.unfavorite' : 'dpick.favorite'),
+          'aria-label': t(on ? 'dpick.unfavorite' : 'dpick.favorite'),
+          onclick: () => toggleFav(e),
+        },
+        on ? '★' : '☆'
+      )
+    );
+  };
+  const cardButton = (e) => {
     const sample = sampleOf(e);
     const text = typeof sample === 'object' && sample !== null ? JSON.stringify(sample) : sample;
     const imageKey = Object.keys(e.extra ?? {})[0];
@@ -3368,6 +3486,7 @@ function openDataPicker(a, node, field, opts = {}) {
               current = c.id;
               renderNav();
               renderMain();
+              main.scrollTop = 0;
             },
           },
           catIcon(c),
@@ -3401,12 +3520,14 @@ function openDataPicker(a, node, field, opts = {}) {
       any = true;
       main.append(
         h('h3', { class: 'tag-main-title' }, catIcon(c), L(c.title)),
-        c.hint && !query ? h('p', { class: 'small muted tag-main-hint' }, L(c.hint)) : null
+        c.hint && !query
+          ? h('p', { class: ['small tag-main-hint', c.warn ? 'fe-nudge' : 'muted'] }, L(c.hint))
+          : null
       );
       const groups = [...new Set(entries.map((e) => e.group))];
       for (const g of groups) {
         const list = entries.filter((e) => e.group === g);
-        if (groups.length > 1 && GROUPS[g]) {
+        if (groups.length > 1 && GROUPS[g] && g !== 'fav') {
           main.append(h('div', { class: 'tag-group-title' }, L(GROUPS[g]), ` · ${list.length}`));
         }
         main.append(
@@ -3415,7 +3536,6 @@ function openDataPicker(a, node, field, opts = {}) {
       }
     }
     if (!any) main.append(h('p', { class: 'muted pick-empty' }, t('home.noResults')));
-    main.scrollTop = 0;
   };
 
   const search = h('input', {
@@ -3448,8 +3568,7 @@ function openDataPicker(a, node, field, opts = {}) {
     (cards[i + step] ?? (step < 0 ? search : cards[i]))?.focus();
   });
 
-  renderNav();
-  renderMain();
+  rebuild();
   openModal({
     title: t('dpick.title', { field: field._fieldLabel ?? '' }),
     wide: true,
@@ -3458,6 +3577,40 @@ function openDataPicker(a, node, field, opts = {}) {
     actions: [],
   });
   search.focus();
+}
+
+/** Asks for the words a link shows: “Read more”, “Source”… */
+function askLinkText(onOk) {
+  const input = h('input', {
+    class: 'input',
+    value: t('tok.linkDefault'),
+    'aria-label': t('tok.linkWords'),
+  });
+  const quick = [t('tok.linkDefault'), t('tok.linkMore'), t('tok.linkSource'), '🔗'].map((w) =>
+    h('button', { type: 'button', class: 'btn btn-small', onclick: () => (input.value = w) }, w)
+  );
+  const ok = () => {
+    const words = input.value.replace(/[[\]]/g, '').trim();
+    if (!words) return false;
+    onOk(words);
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && ok() !== false) closeModal();
+  });
+  openModal({
+    title: t('tok.asLink'),
+    body: [
+      h('p', { class: 'small muted' }, t('tok.asLinkHelp')),
+      h('label', { class: 'field-label' }, t('tok.linkWords')),
+      input,
+      h('div', { class: 'row-gap', style: { flexWrap: 'wrap' } }, quick),
+    ],
+    actions: [
+      { label: t('common.cancel') },
+      { label: t('tok.asLinkOk'), primary: true, onClick: ok },
+    ],
+  });
+  input.select();
 }
 
 /** Click on a chip: format it, replace it with other data, or remove it. */
@@ -3500,6 +3653,34 @@ function openTokenMenu(a, node, chip, field) {
         },
       },
       t('tok.replace')
+    ),
+    h(
+      'button',
+      {
+        type: 'button',
+        role: 'menuitem',
+        class: 'menu-item',
+        onclick: () => {
+          closePopover();
+          askLinkText((words) => {
+            // Already a link — `[old words](chip)`: only the words change.
+            const before = chip.previousSibling;
+            const after = chip.nextSibling;
+            const wrapped =
+              before?.nodeType === Node.TEXT_NODE &&
+              after?.nodeType === Node.TEXT_NODE &&
+              /\[[^\]\n]*\]\($/.test(before.textContent) &&
+              after.textContent.startsWith(')');
+            if (wrapped) {
+              before.textContent = before.textContent.replace(/\[[^\]\n]*\]\($/, `[${words}](`);
+              field.dispatchEvent(new Event('input'));
+            } else {
+              field.replaceWithTemplate(chip, `[${words}]({{ ${expr} }})`);
+            }
+          });
+        },
+      },
+      t('tok.asLink')
     ),
     h(
       'button',

@@ -46,6 +46,31 @@ function mainValue(output: unknown): unknown {
   return '';
 }
 
+/**
+ * An answer split into its first line and the rest — an AI step asked to “translate” or
+ * “rewrite” usually puts the new title first. A one-line answer is all body.
+ */
+export function splitResult(text: string): { resultTitle: string; resultBody: string } {
+  const lines = text.split('\n');
+  const i = lines.findIndex((l) => l.trim());
+  const rest =
+    i < 0
+      ? ''
+      : lines
+          .slice(i + 1)
+          .join('\n')
+          .trim();
+  const first = i < 0 ? '' : lines[i]!.trim();
+  if (!rest || first.length > 200) return { resultTitle: '', resultBody: text.trim() };
+  const title = first
+    .replace(/^#{1,6}\s+/, '')
+    .replace(/^\*\*(.+)\*\*$/, '$1')
+    .replace(/^__(.+)__$/, '$1')
+    .replace(/^(заголовок|title)\s*:\s*/i, '')
+    .trim();
+  return { resultTitle: title, resultBody: rest };
+}
+
 function asList(value: unknown): unknown[] {
   if (Array.isArray(value)) return value;
   if (typeof value === 'string' && value.trim().startsWith('[')) {
@@ -125,6 +150,7 @@ export function withForEach(
           items: items.slice(0, outputs.length).map((item, i) => ({
             ...(isObject(item) ? item : { value: item }),
             result: results[i],
+            ...splitResult(results[i] ?? ''),
           })),
           results: results.join('\n\n'),
           text: results.join('\n\n'),

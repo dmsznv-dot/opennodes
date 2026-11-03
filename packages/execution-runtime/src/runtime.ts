@@ -212,14 +212,21 @@ export class ExecutionRuntime {
    * this process and without recording it: nothing appears in run history. A delay
    * longer than the inline limit stops the test with status WAITING.
    */
-  testRun(definition: WorkflowDefinition, triggerPayload: unknown): Promise<WorkflowRunResult> {
-    return this.engine.executeWorkflow(definition, {
-      executionId: randomUUID(),
+  async testRun(
+    definition: WorkflowDefinition,
+    triggerPayload: unknown
+  ): Promise<WorkflowRunResult> {
+    const executionId = randomUUID();
+    const result = await this.engine.executeWorkflow(definition, {
+      executionId,
       workflowVersionId: 'draft',
       triggerType: 'test',
       triggerPayload,
       journal: new InMemoryExecutionJournal(),
     });
+    // RSS steps that remember tests: their items count as used only if the test succeeded.
+    await settleRssItems(this.options.db, executionId, result.execution.status === 'SUCCEEDED');
+    return result;
   }
 
   /** Queue job handler: claim, run (or resume) the run, re-queue it if it suspended. */
