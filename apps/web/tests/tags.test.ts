@@ -44,12 +44,12 @@ describe('data picker — ready-made blocks', () => {
     expect(item.entries.map((e: { title: { ru: string } }) => e.title.ru)).toEqual([
       'Заголовок от ИИ',
       'Текст от ИИ — целиком',
-      'Текст от ИИ — кратко',
+      'Текст от ИИ — первые предложения',
       'Картинка статьи',
       'Ссылка на статью',
       'Заголовок статьи',
       'Текст статьи — целиком',
-      'Текст статьи — кратко',
+      'Текст статьи — первые предложения',
       'Дата публикации статьи',
       'Ответ ИИ как есть (заголовок и текст вместе)',
     ]);
@@ -213,7 +213,8 @@ describe('data picker — ready-made blocks', () => {
         'image',
       ].sort()
     );
-    expect(out.items[0].summary.length).toBeLessThanOrEqual(280);
+    // One long sentence without a full stop: kept whole, never cut.
+    expect(out.items[0].summary).toBe(out.items[0].text);
     for (const o of ACTIONS['rss.read'].outputs) expect(out, o.key).toHaveProperty(o.key);
   });
 
@@ -266,5 +267,29 @@ describe('data picker — ready-made blocks', () => {
       resultTitle: '',
       resultBody: 'Одной строкой.',
     });
+  });
+});
+
+describe('add-step menu — names say what a step is', () => {
+  it('every step has a condition and a result in both languages', () => {
+    for (const [id, act] of Object.entries(ACTIONS as Record<string, any>)) {
+      for (const key of ['needs', 'gives']) {
+        expect(String(act[key]?.ru ?? '').trim(), `${id}.${key} RU`).not.toBe('');
+        expect(String(act[key]?.en ?? '').trim(), `${id}.${key} EN`).not.toBe('');
+      }
+    }
+  });
+
+  it('a start is named as an event, an action starts with a verb', () => {
+    for (const [id, act] of Object.entries(ACTIONS as Record<string, any>)) {
+      const ru = act.name.ru as string;
+      if (act.kind === 'trigger') {
+        expect(ru, id).toMatch(/^(Ручной запуск|По расписанию|Входящ)/);
+      } else if (act.kind === 'action') {
+        expect(ru, id).toMatch(
+          /^(Отправить|Получить|Обработать|Задать|Определить|Выполнить|Добавить|Сохранить|Создать)/
+        );
+      }
+    }
   });
 });

@@ -2336,10 +2336,12 @@ function openPicker(a, parentId, opts = {}) {
         .map(([id, act]) => ({
           id,
           act,
-          score: searchScore(
-            query,
-            `${bothLangs(act.name)} ${bothLangs(act.desc)} ${act.keywords ?? ''} ${bothLangs(SERVICES[act.service]?.name)}`
-          ),
+          // A word in the step's own name counts more than a synonym in its description.
+          score:
+            searchScore(
+              query,
+              `${bothLangs(act.name)} ${bothLangs(act.desc)} ${act.keywords ?? ''} ${bothLangs(SERVICES[act.service]?.name)}`
+            ) + (query.trim() ? 0.5 * searchScore(query, bothLangs(act.name)) : 0),
         }))
     );
     let total = 0;
@@ -2367,11 +2369,31 @@ function openPicker(a, parentId, opts = {}) {
               'span',
               { class: 'muted small' },
               act.planned ? `${t('picker.planned')} · ${L(act.desc)}` : L(act.desc)
-            )
+            ),
+            // What the step needs and what it gives — to choose without adding it first.
+            act.needs
+              ? h(
+                  'span',
+                  { class: 'picker-io small' },
+                  h('span', {}, h('b', {}, `${t('picker.needs')}: `), L(act.needs)),
+                  h('span', {}, h('b', {}, `${t('picker.gives')}: `), L(act.gives))
+                )
+              : null
           )
         )
       );
-      const head = h('h3', { class: 'picker-group' }, t(g.label));
+      const sub = {
+        trigger: 'kind.triggerSub',
+        action: 'kind.actionSub',
+        logic: 'kind.logicSub',
+        dev: 'cat.devSub',
+      }[g.id];
+      const head = h(
+        'h3',
+        { class: 'picker-group' },
+        t(g.label),
+        sub ? h('span', { class: 'picker-group-sub' }, ` — ${t(sub)}`) : null
+      );
       if (g.id === 'dev' && !query)
         list.append(h('details', { class: 'picker-dev' }, h('summary', {}, t('cat.dev')), rows));
       else list.append(head, ...rows);

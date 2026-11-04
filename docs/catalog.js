@@ -381,10 +381,12 @@ export const ACTIONS = {
     type: 'trigger.manual',
     service: 'manual',
     kind: 'trigger',
-    name: tr('Запуск вручную с тестовыми данными', 'Run manually with test data'),
+    needs: tr('без условий — нажать «Проверить»', 'none — press “Test”'),
+    gives: tr('тестовый текст для следующих шагов', 'sample text for the next steps'),
+    name: tr('Ручной запуск', 'Manual start'),
     desc: tr(
-      'Запускается кнопкой «Проверить». Ничего не ждёт извне.',
-      'Starts when you press “Test”. Waits for nothing external.'
+      'Кнопкой — для проверки или разовых задач.',
+      'With a button — to test or for one-off tasks.'
     ),
     keywords: 'вручную кнопка тест manual button test start',
     fields: [
@@ -419,10 +421,12 @@ export const ACTIONS = {
     type: 'trigger.cron',
     service: 'schedule',
     kind: 'trigger',
+    needs: tr('время и часовой пояс', 'time and time zone'),
+    gives: tr('время запуска', 'the run time'),
     name: tr('По расписанию', 'On a schedule'),
     desc: tr(
-      'Запускается регулярно: каждый час, день или неделю.',
-      'Runs regularly: every hour, day or week.'
+      'Каждый час, день, неделю или по своему графику.',
+      'Every hour, day, week or on your own timetable.'
     ),
     keywords:
       'расписание каждый день час неделя таймер cron schedule every daily hourly weekly timer',
@@ -492,8 +496,13 @@ export const ACTIONS = {
     type: 'trigger.telegram',
     service: 'telegram',
     kind: 'trigger',
-    name: tr('Новое сообщение в Telegram', 'New Telegram message'),
-    desc: tr('Когда боту пишут сообщение или команду.', 'When someone messages your bot.'),
+    needs: tr('подключённый бот', 'a connected bot'),
+    gives: tr('текст, имя и чат отправителя', 'the text, sender name and chat'),
+    name: tr('Входящее сообщение в Telegram-бот', 'Incoming message to a Telegram bot'),
+    desc: tr(
+      'Боту пишут в личку, в группу или командой (/start).',
+      'Someone writes to the bot in private, in a group or with a command (/start).'
+    ),
     keywords:
       'telegram телеграм сообщение получить новое входящее бот message receive incoming bot',
     fields: [
@@ -556,10 +565,18 @@ export const ACTIONS = {
     type: 'trigger.webhook',
     service: 'webhook',
     kind: 'trigger',
-    name: tr('Отправлена форма / входящий вебхук', 'Form submitted / incoming webhook'),
+    needs: tr(
+      'форма или сервис отправляет данные на адрес сценария',
+      'a form or service sends data to the automation’s address'
+    ),
+    gives: tr('поля, которые прислала форма', 'the fields the form sent'),
+    name: tr(
+      'Входящие данные с сайта или сервиса (вебхук)',
+      'Incoming data from a site or service (webhook)'
+    ),
     desc: tr(
-      'Когда сайт или сервис присылает данные на адрес этого сценария (адрес — в настройках шага).',
-      'When a site or service sends data to this automation’s address (shown in the step).'
+      'Форма, CRM, оплата и т. п. присылают данные на адрес сценария.',
+      'A form, CRM, payment service etc. send data to the automation’s address.'
     ),
     keywords: 'форма заявка вебхук сайт webhook form submit lead incoming',
     // The address is made by the server (/api/v1/webhooks/<id>) and shown on the step in the
@@ -592,11 +609,13 @@ export const ACTIONS = {
     type: 'ai.openai',
     service: 'ai',
     kind: 'action',
+    needs: tr('подключение ИИ', 'an AI connection'),
+    gives: tr('ответ модели', 'the model’s answer'),
     forEach: true,
-    name: tr('ИИ: ответить на текст', 'AI: answer a text'),
+    name: tr('Задать вопрос ИИ', 'Ask AI'),
     desc: tr(
-      'Языковая модель пишет ответ по вашей инструкции.',
-      'A language model writes an answer following your instructions.'
+      'Один запрос своими словами, без отдельных данных.',
+      'One request in your own words, without separate data.'
     ),
     keywords:
       'ai ии нейросеть gpt openai chatgpt ответ написать текст llm answer write generate summarize саммари кратко',
@@ -686,11 +705,13 @@ export const ACTIONS = {
     type: 'ai.classify',
     service: 'ai',
     kind: 'action',
+    needs: tr('подключение ИИ и список категорий', 'an AI connection and a list of categories'),
+    gives: tr('одна категория из списка', 'one category from the list'),
     forEach: true,
-    name: tr('ИИ: определить категорию', 'AI: classify text'),
+    name: tr('Определить категорию с помощью ИИ', 'Classify with AI'),
     desc: tr(
-      'Относит текст к одной из ваших категорий.',
-      'Puts a text into one of your categories.'
+      'Тема обращения, тип заявки, тональность — чтобы дальше пойти по разным веткам.',
+      'Topic, request type, tone — to take different branches next.'
     ),
     keywords: 'ai ии классификация категория тема сортировать classify category sort tag',
     fields: [
@@ -741,11 +762,16 @@ export const ACTIONS = {
     type: 'ai.process',
     service: 'ai',
     kind: 'action',
+    needs: tr('подключение ИИ', 'an AI connection'),
+    gives: tr(
+      'новый текст (и заголовок, если для каждой записи)',
+      'new text (and a title, per item)'
+    ),
     forEach: true,
-    name: tr('ИИ: обработать данные по инструкции', 'AI: process data by instruction'),
+    name: tr('Обработать текст с помощью ИИ', 'Process text with AI'),
     desc: tr(
-      'Данные из прошлых шагов + что с ними сделать: пересказать, перевести, оформить. Может прочитать статьи по ссылкам.',
-      'Data from earlier steps + what to do with it: summarize, translate, format. Can read the linked articles.'
+      'Перевести, пересказать, ответить, оформить — данные прошлых шагов и ваша инструкция; может прочитать статьи по ссылкам.',
+      'Translate, summarise, reply, format — data from earlier steps plus your instruction; can read linked articles.'
     ),
     keywords:
       'обработать данные инструкция промпт саммари пересказ перевод перевести оформить статья ссылка prompt summary translate process format article link',
@@ -846,11 +872,13 @@ export const ACTIONS = {
     type: 'ai.agent',
     service: 'ai',
     kind: 'action',
+    needs: tr('подключение ИИ и MCP-сервер', 'an AI connection and an MCP server'),
+    gives: tr('ответ агента и что он сделал', 'the agent’s answer and what it did'),
     external: true,
-    name: tr('ИИ-агент с инструментами (MCP)', 'AI agent with tools (MCP)'),
+    name: tr('Выполнить задачу ИИ-агентом в сервисах', 'Do a task with an AI agent in services'),
     desc: tr(
-      'Модель сама выполняет задачу через инструменты MCP-серверов: Google Документы, Notion, GitHub…',
-      'The model does the task itself with the tools of MCP servers: Google Docs, Notion, GitHub…'
+      'Модель сама работает с Google Документами, Notion, GitHub через MCP.',
+      'The model works with Google Docs, Notion, GitHub itself through MCP.'
     ),
     keywords:
       'агент mcp инструменты google документы docs notion github ai ии нейросеть agent tools автоматически',
@@ -944,11 +972,13 @@ export const ACTIONS = {
     type: 'ai.ollama',
     service: 'ollama',
     kind: 'action',
+    needs: tr('запущенная Ollama', 'Ollama running'),
+    gives: tr('ответ модели', 'the model’s answer'),
     forEach: true,
-    name: tr('Локальная модель: ответить на текст', 'Local model: answer a text'),
+    name: tr('Задать вопрос локальной модели (Ollama)', 'Ask a local model (Ollama)'),
     desc: tr(
-      'То же, что ИИ-ответ, но на вашем сервере через Ollama.',
-      'Like the AI answer, but on your own server via Ollama.'
+      'То же, что «Задать вопрос ИИ», но модель работает у вас.',
+      'Like “Ask AI”, but the model runs on your machine.'
     ),
     keywords: 'ollama локальная модель llama ai ии local model offline',
     fields: [
@@ -1007,10 +1037,15 @@ export const ACTIONS = {
     type: 'core.telegramBot',
     service: 'telegram',
     kind: 'action',
+    needs: tr('бот и чат или @канал', 'a bot and a chat or @channel'),
+    gives: tr('сообщение отправлено', 'the message is sent'),
     forEach: true,
     external: true,
-    name: tr('Отправить сообщение в Telegram', 'Send a Telegram message'),
-    desc: tr('Бот пишет в чат, группу или канал.', 'The bot posts to a chat, group or channel.'),
+    name: tr('Отправить сообщение от Telegram-бота', 'Send a message from a Telegram bot'),
+    desc: tr(
+      'Ответ человеку, уведомление или пост — в чат, группу или канал.',
+      'A reply, a notification or a post — to a chat, group or channel.'
+    ),
     keywords:
       'telegram телеграм отправить сообщение написать уведомить уведомление send message notify notification post',
     fields: [
@@ -1103,13 +1138,12 @@ export const ACTIONS = {
     type: 'telegram.sendFile',
     service: 'telegram',
     kind: 'action',
+    needs: tr('бот, чат и ссылка на файл', 'a bot, a chat and a file link'),
+    gives: tr('файл отправлен', 'the file is sent'),
     forEach: true,
     external: true,
-    name: tr('Отправить фото или файл в Telegram', 'Send a photo or file to Telegram'),
-    desc: tr(
-      'Картинка или документ по ссылке, с подписью.',
-      'A picture or document by link, with a caption.'
-    ),
+    name: tr('Отправить файл от Telegram-бота', 'Send a file from a Telegram bot'),
+    desc: tr('Документ, PDF или фото по ссылке.', 'A document, PDF or photo by link.'),
     keywords:
       'telegram файл документ картинка фото изображение pdf file document image photo picture',
     fields: [
@@ -1193,10 +1227,12 @@ export const ACTIONS = {
     type: 'core.smtp',
     service: 'email',
     kind: 'action',
+    needs: tr('подключённая почта и адрес получателя', 'a connected mailbox and a recipient'),
+    gives: tr('письмо отправлено', 'the email is sent'),
     forEach: true,
     external: true,
     name: tr('Отправить письмо', 'Send an email'),
-    desc: tr('Письмо через ваш SMTP-сервер.', 'An email through your SMTP server.'),
+    desc: tr('Через вашу почту (SMTP).', 'Through your mailbox (SMTP).'),
     keywords: 'email письмо почта отправить mail e-mail smtp send notify уведомление',
     fields: [
       {
@@ -1245,17 +1281,24 @@ export const ACTIONS = {
   'email.receive': {
     service: 'email',
     kind: 'trigger',
+    needs: tr('почтовый ящик', 'a mailbox'),
+    gives: tr('тема, отправитель и текст письма', 'subject, sender and body'),
     planned: true,
-    name: tr('Новое письмо (IMAP)', 'New email (IMAP)'),
-    desc: tr('Когда в ящик приходит письмо.', 'When an email arrives.'),
+    name: tr('Входящее письмо', 'Incoming email'),
+    desc: tr('Письмо пришло на почтовый ящик.', 'An email arrives in the mailbox.'),
     keywords: 'email письмо получить входящее почта imap receive incoming mail',
   },
   'rss.read': {
     type: 'core.rss',
     service: 'rss',
     kind: 'action',
-    name: tr('Получить новые записи RSS', 'Get new RSS items'),
-    desc: tr('Читает ленту новостей или блога.', 'Reads a news or blog feed.'),
+    needs: tr('адрес ленты или сайта', 'a feed or site address'),
+    gives: tr('записи: заголовок, текст, картинка, ссылка', 'items: title, text, picture, link'),
+    name: tr('Получить новые записи из RSS-ленты', 'Get new items from an RSS feed'),
+    desc: tr(
+      'Новые публикации сайта, блога или СМИ; каждая приходит один раз.',
+      'New posts of a site, blog or news outlet; each comes once.'
+    ),
     keywords: 'rss лента новости блог feed news blog atom',
     fields: [
       {
@@ -1439,10 +1482,12 @@ export const ACTIONS = {
     type: 'logic.condition',
     service: 'logic',
     kind: 'logic',
+    needs: tr('значение и условие', 'a value and a condition'),
+    gives: tr('дальше идут только подходящие данные', 'only matching data goes on'),
     name: tr('Продолжить, только если…', 'Continue only if…'),
     desc: tr(
-      'Останавливает сценарий, если условие не выполнено.',
-      'Stops the automation when the condition is not met.'
+      'Остановить сценарий, если условие не выполнено.',
+      'Stop the automation when the condition is not met.'
     ),
     keywords: 'условие фильтр если только when if filter condition only',
     fields: [
@@ -1505,8 +1550,10 @@ export const ACTIONS = {
     type: 'primitive.delay',
     service: 'logic',
     kind: 'logic',
-    name: tr('Подождать', 'Wait'),
-    desc: tr('Пауза перед следующим шагом.', 'A pause before the next step.'),
+    needs: tr('сколько ждать', 'how long to wait'),
+    gives: tr('следующий шаг позже', 'the next step later'),
+    name: tr('Подождать перед следующим шагом', 'Wait before the next step'),
+    desc: tr('Пауза на секунды, минуты или часы.', 'A pause of seconds, minutes or hours.'),
     keywords: 'подождать пауза задержка wait delay pause later',
     fields: [
       {
@@ -1544,11 +1591,13 @@ export const ACTIONS = {
     type: 'text.format',
     service: 'logic',
     kind: 'logic',
+    needs: tr('текст', 'a text'),
+    gives: tr('готовый текст', 'the cleaned text'),
     forEach: true,
-    name: tr('Текст: обработать', 'Text: process'),
+    name: tr('Очистить или сократить текст', 'Clean up or shorten text'),
     desc: tr(
-      'Убрать HTML, обрезать до лимита, заменить, вытащить ссылки, сменить регистр.',
-      'Strip HTML, cut to a limit, replace, pull out links, change case.'
+      'Убрать HTML, сократить по предложениям, заменить слова, вытащить ссылки.',
+      'Strip HTML, shorten by sentences, replace words, pull out links.'
     ),
     keywords:
       'текст обработать обрезать сократить лимит html убрать заменить ссылки регистр formatter format text truncate strip replace links case',
@@ -1651,11 +1700,13 @@ export const ACTIONS = {
     type: 'text.compose',
     service: 'logic',
     kind: 'logic',
+    needs: tr('шаблон текста', 'a text template'),
+    gives: tr('готовый текст', 'the finished text'),
     forEach: true,
-    name: tr('Собрать текст или отчёт', 'Compose a text or report'),
+    name: tr('Собрать текст из данных', 'Build a text from data'),
     desc: tr(
-      'Объединяет данные прошлых шагов в один текст.',
-      'Combines data from earlier steps into one text.'
+      'Уведомление, отчёт или письмо из данных прошлых шагов.',
+      'A notification, report or email from earlier steps’ data.'
     ),
     keywords: 'текст отчёт шаблон собрать объединить report compose template text format',
     fields: [
@@ -1686,10 +1737,12 @@ export const ACTIONS = {
     type: 'core.httpRequest',
     service: 'http',
     kind: 'action',
+    needs: tr('адрес API', 'an API address'),
+    gives: tr('код и ответ сервера', 'status and response'),
     forEach: true,
     external: true,
-    name: tr('HTTP-запрос к API', 'HTTP API request'),
-    desc: tr('Вызвать любой API. Защита от SSRF включена.', 'Call any API. SSRF protection is on.'),
+    name: tr('Отправить HTTP-запрос к API', 'Send an HTTP request to an API'),
+    desc: tr('Любой API; защита от SSRF включена.', 'Any API; SSRF protection on.'),
     keywords: 'http api запрос rest get post request call endpoint разработчик developer',
     fields: [
       {
@@ -1751,11 +1804,16 @@ export const ACTIONS = {
     type: 'core.outgoingWebhook',
     service: 'webhook',
     kind: 'action',
+    needs: tr('адрес вебхука', 'a webhook address'),
+    gives: tr('код ответа', 'status code'),
     forEach: true,
     external: true,
     dev: true,
-    name: tr('Отправить данные на вебхук', 'Send data to a webhook'),
-    desc: tr('POST с данными на внешний адрес.', 'POST data to an external URL.'),
+    name: tr('Отправить данные в другой сервис (вебхук)', 'Send data to another service (webhook)'),
+    desc: tr(
+      'Передать данные в CRM, таблицу или другой сервис.',
+      'Pass data to a CRM, sheet or another service.'
+    ),
     keywords: 'вебхук отправить webhook post notify outgoing',
     fields: [
       {
@@ -1788,9 +1846,11 @@ export const ACTIONS = {
     type: 'core.postgresSql',
     service: 'postgres',
     kind: 'action',
+    needs: tr('подключение к базе', 'a database connection'),
+    gives: tr('сколько строк затронуто', 'rows affected'),
     external: true,
-    name: tr('Выполнить SQL-запрос', 'Run an SQL query'),
-    desc: tr('Запись или чтение из PostgreSQL.', 'Write to or read from PostgreSQL.'),
+    name: tr('Выполнить SQL-запрос в PostgreSQL', 'Run an SQL query in PostgreSQL'),
+    desc: tr('Запись или чтение из базы данных.', 'Write to or read from the database.'),
     keywords: 'postgres postgresql sql база данных запрос database query insert select',
     fields: [
       {
@@ -1824,6 +1884,8 @@ export const ACTIONS = {
   'sheets.addRow': {
     service: 'google_sheets',
     kind: 'action',
+    needs: tr('Google-аккаунт и таблица', 'a Google account and a sheet'),
+    gives: tr('строка добавлена', 'the row is added'),
     planned: true,
     name: tr('Добавить строку в Google Таблицу', 'Add a row to Google Sheets'),
     desc: tr('Записать данные в новую строку.', 'Write data into a new row.'),
@@ -1832,6 +1894,8 @@ export const ACTIONS = {
   'drive.upload': {
     service: 'google_drive',
     kind: 'action',
+    needs: tr('Google-аккаунт', 'a Google account'),
+    gives: tr('файл сохранён', 'the file is saved'),
     planned: true,
     name: tr('Сохранить файл в Google Диск', 'Save a file to Google Drive'),
     desc: tr('Загрузить файл в папку.', 'Upload a file into a folder.'),
@@ -1840,14 +1904,18 @@ export const ACTIONS = {
   'calendar.createEvent': {
     service: 'google_calendar',
     kind: 'action',
+    needs: tr('Google-аккаунт', 'a Google account'),
+    gives: tr('событие создано', 'the event is created'),
     planned: true,
-    name: tr('Создать событие в календаре', 'Create a calendar event'),
-    desc: tr('Встреча или напоминание.', 'A meeting or reminder.'),
+    name: tr('Создать событие в Google Календаре', 'Create a Google Calendar event'),
+    desc: tr('Встреча или напоминание.', 'A meeting or a reminder.'),
     keywords: 'календарь событие встреча calendar event meeting',
   },
   'notion.createPage': {
     service: 'notion',
     kind: 'action',
+    needs: tr('Notion-аккаунт', 'a Notion account'),
+    gives: tr('страница создана', 'the page is created'),
     planned: true,
     name: tr('Создать страницу в Notion', 'Create a Notion page'),
     desc: tr('Запись в базу Notion.', 'An entry in a Notion database.'),
@@ -1857,10 +1925,12 @@ export const ACTIONS = {
     type: 'slack.sendMessage',
     service: 'slack',
     kind: 'action',
+    needs: tr('вебхук канала Slack', 'a Slack channel webhook'),
+    gives: tr('сообщение отправлено', 'the message is sent'),
     forEach: true,
     external: true,
-    name: tr('Отправить сообщение в Slack', 'Send a Slack message'),
-    desc: tr('Сообщение в канал через вебхук.', 'A message to a channel via a webhook.'),
+    name: tr('Отправить сообщение в канал Slack', 'Send a message to a Slack channel'),
+    desc: tr('Через вебхук канала.', 'Through the channel’s webhook.'),
     keywords: 'slack сообщение канал message channel notify',
     fields: [
       {
@@ -1893,13 +1963,12 @@ export const ACTIONS = {
     type: 'discord.sendMessage',
     service: 'discord',
     kind: 'action',
+    needs: tr('вебхук канала Discord', 'a Discord channel webhook'),
+    gives: tr('сообщение отправлено', 'the message is sent'),
     forEach: true,
     external: true,
-    name: tr('Отправить сообщение в Discord', 'Send a Discord message'),
-    desc: tr(
-      'Сообщение в канал сервера через вебхук.',
-      'A message to a server channel via a webhook.'
-    ),
+    name: tr('Отправить сообщение в канал Discord', 'Send a message to a Discord channel'),
+    desc: tr('Через вебхук канала.', 'Through the channel’s webhook.'),
     keywords: 'discord сообщение канал message channel notify',
     fields: [
       {

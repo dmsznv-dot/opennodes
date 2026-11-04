@@ -2435,3 +2435,22 @@ textarea.input {
 .token.token-bold .token-label {
   font-weight: 700;
 }
+
+/* Add-step menu: what a step needs and what it gives */
+.picker-io {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  margin-top: 2px;
+  color: var(--text-2);
+}
+.picker-io b {
+  font-weight: 600;
+  color: var(--text-3);
+}
+.picker-group-sub {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-3);
+}
