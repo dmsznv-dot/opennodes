@@ -56,7 +56,7 @@ const port = (direction: 'input' | 'output') => [
   { id: 'main', name: direction, type: 'any' as const, direction, required: false },
 ];
 
-async function runProcess(config: Record<string, unknown>) {
+async function runProcess(config: Record<string, unknown>, voice?: Record<string, unknown>) {
   const api = new LocalFlowApiServer({ databaseUrl: 'pglite://memory', ssrfAllowlist: [host] });
   apis.push(api);
   const s = await api.inject<{ workspaceId: string; token: string }>({
@@ -96,8 +96,25 @@ async function runProcess(config: Record<string, unknown>) {
           inputs: port('input'),
           outputs: port('output'),
         },
+        // A brand voice: a context step with no step before it, linked to the AI step.
+        ...(voice
+          ? [
+              {
+                id: 'v',
+                type: 'context.voice',
+                data: { label: 'v', config: voice },
+                inputs: port('input'),
+                outputs: port('output'),
+              },
+            ]
+          : []),
       ],
-      edges: [{ id: 'e', source: 't', sourceHandle: 'main', target: 'p', targetHandle: 'main' }],
+      edges: [
+        { id: 'e', source: 't', sourceHandle: 'main', target: 'p', targetHandle: 'main' },
+        ...(voice
+          ? [{ id: 'ev', source: 'v', sourceHandle: 'main', target: 'p', targetHandle: 'main' }]
+          : []),
+      ],
     },
   });
   const res = await api.inject<{ execution: { status: string }; steps: any[] }>({
@@ -162,5 +179,53 @@ describe('@localflow/api — AI: process data by instruction', () => {
     const res = await runProcess({ input: 'x' });
     expect(res.execution.status).toBe('FAILED');
     expect(res.step.errorMessage).toMatch(/write what to do/);
+  });
+});
+
+describe('@localflow/api — brand voice (context step)', () => {
+  const VOICE = {
+    name: 'Канал о дизайне',
+    language: 'русский',
+    tone: 'экспертный, без пафоса',
+    avoid: 'канцелярит',
+    examples: 'Первый пример.\n---\nВторой пример.',
+    emoji: 'none',
+    presetId: 'vp_1',
+    presetVersion: 3,
+  };
+
+  it('puts the voice into the system message after the platform rules, and reports which voice', async () => {
+    const res = await runProcess(
+      { input: '{{ $trigger.list }}', instruction: 'Перескажи', voice: '{{ $nodes.v.output }}' },
+      VOICE
+    );
+    expect(res.execution.status).toBe('SUCCEEDED');
+    // The voice step itself calls nothing: one model request, from the AI step.
+    expect(modelRequests).toHaveLength(1);
+    const system: string = modelRequests[0].messages[0].content;
+    const rules = system.indexOf('You process data for an automation.');
+    const conflict = system.indexOf('If the instruction and the voice disagree');
+    const voice = system.indexOf('Brand voice “Канал о дизайне”:');
+    expect(rules).toBe(0);
+    expect(conflict).toBeGreaterThan(rules);
+    expect(voice).toBeGreaterThan(conflict);
+    expect(system).toContain('- Language of the answer: русский');
+    expect(system).toContain('- Never use: канцелярит');
+    expect(system).toContain('- Emoji: no emoji');
+    expect(system).toContain('---\nПервый пример.\n---\nВторой пример.\n---');
+    // The voice never goes into the task message.
+    expect(modelRequests[0].messages[1].content).not.toContain('Brand voice');
+    expect(res.step.outputPayload.voice).toEqual({ name: 'Канал о дизайне', version: 3 });
+    const v = res.steps.find((st) => st.nodeId === 'v');
+    expect(v.outputPayload.voice).toBe(system.slice(voice));
+  });
+
+  it('without a voice the AI step sends the same system message as before', async () => {
+    const res = await runProcess({ input: '{{ $trigger.list }}', instruction: 'Перескажи' });
+    expect(res.execution.status).toBe('SUCCEEDED');
+    const system: string = modelRequests[0].messages[0].content;
+    expect(system).not.toContain('Brand voice');
+    expect(system).not.toContain('If the instruction and the voice disagree');
+    expect(res.step.outputPayload.voice).toBeUndefined();
   });
 });

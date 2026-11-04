@@ -208,6 +208,76 @@ export function feedSummary(raw) {
   };
 }
 
+// ── Context: a brand voice (the same text the server builds: execution-runtime context.ts) ──
+
+const VOICE_EMOJI = {
+  none: 'no emoji',
+  few: 'one or two emoji at most',
+  ok: 'emoji are fine where they help',
+};
+
+/** A brand voice as rules for the model — exactly what the AI step sends. */
+export function voiceText(c = {}) {
+  const v = (x) => String(x ?? '').trim();
+  const line = (label, value) => (v(value) ? `- ${label}: ${v(value)}` : '');
+  const examples = v(c.examples)
+    .split(/\n\s*---+\s*\n|\n{3,}/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+  const rules = [
+    line('Language of the answer', c.language),
+    line('Audience', c.audience),
+    line('Character', c.tone),
+    line('Write like this', c.writeLike),
+    line('Never use', c.avoid),
+    line('Length', c.length),
+    line('Terms to use', c.terms),
+    line('Call to action', c.cta),
+    c.emoji && VOICE_EMOJI[c.emoji] ? `- Emoji: ${VOICE_EMOJI[c.emoji]}` : '',
+  ].filter(Boolean);
+  return [
+    `Brand voice “${v(c.name) || 'Brand voice'}”:`,
+    ...rules,
+    ...(examples.length
+      ? ['Examples of texts written in this voice:', ...examples.map((e) => `---\n${e}`), '---']
+      : []),
+  ].join('\n');
+}
+
+export const PLATFORM_RULES =
+  'You process data for an automation. Follow the instruction exactly and reply with the result only — no preface, no questions. The instruction decides the language and the form of the answer, not the data. Everything you need is in the data and the page texts below.';
+
+/** The AI step's user message — the same text as on the server (without page texts). */
+export function userPrompt(instruction, data, articles = '', perItem = false) {
+  return (
+    `Instruction:\n${instruction}\n\nData:\n${data || '(empty)'}` +
+    (articles ? `\n\nText of the linked pages:${articles}` : '') +
+    `\n\n---\nNow do exactly this with the data above: ${instruction}\n` +
+    (perItem
+      ? 'Reply in exactly this form, nothing else:\nTITLE: <a short title, written as the instruction says — same language as the text>\nTEXT: <the text>'
+      : 'Reply with the result only.')
+  );
+}
+
+/** Which language an instruction asks for, if it names one (“на английском”, “in Russian”). */
+export function askedLanguage(text) {
+  const s = String(text ?? '').toLowerCase();
+  const langs = [
+    ['ru', /русск|russian/],
+    ['en', /английск|english/],
+    ['de', /немецк|german/],
+    ['fr', /французск|french/],
+    ['es', /испанск|spanish/],
+  ];
+  return langs.find(([, re]) => re.test(s))?.[0] ?? null;
+}
+
+/** The AI step's system message — the same order as on the server. */
+export function systemPrompt(voice) {
+  if (!String(voice ?? '').trim()) return PLATFORM_RULES;
+  return `${PLATFORM_RULES}\n\nWrite in the brand voice below. If the instruction and the voice disagree (language, length, form), follow the instruction.\n\n${String(voice).trim()}`;
+}
+
 export const SERVICES = {
   manual: { name: tr('Тестовый запуск', 'Test run'), icon: '▶', color: '#64748b', auth: false },
   schedule: { name: tr('Расписание', 'Schedule'), icon: '⏱', color: '#0ea5e9', auth: false },
@@ -276,6 +346,7 @@ export const SERVICES = {
       ]
     ),
   },
+  voice: { name: tr('Голос бренда', 'Brand voice'), icon: 'BV', color: '#a855f7', auth: false },
   rss: { name: tr('RSS-лента', 'RSS feed'), icon: 'RSS', color: '#f97316', auth: false },
   webhook: {
     name: tr('Вебхук / форма', 'Webhook / form'),
@@ -806,6 +877,17 @@ export const ACTIONS = {
         help: tr(
           'Например: «Перескажи по-русски в 2–3 предложениях». Если шаг выполняется для каждой записи, ИИ сам вернёт заголовок и текст — в следующем шаге они будут в «Готовых постах».',
           'E.g. “Summarise in 2–3 sentences”. Run for each item, the AI returns a title and a text — the next step has them in “Ready-made posts”.'
+        ),
+      },
+      {
+        key: 'voice',
+        type: 'voice',
+        required: false,
+        basic: true,
+        label: tr('Голос бренда', 'Brand voice'),
+        help: tr(
+          'Стиль из шага «Голос бренда», подключённого к этому шагу стрелкой. Инструкция важнее голоса, если они расходятся.',
+          'The style from a “Brand voice” step linked to this one. The instruction wins if they disagree.'
         ),
       },
       {
@@ -1478,6 +1560,140 @@ export const ACTIONS = {
       ),
     }),
   },
+  'context.voice': {
+    type: 'context.voice',
+    service: 'voice',
+    kind: 'context',
+    needs: tr('правила и примеры текстов', 'rules and sample texts'),
+    gives: tr(
+      'стиль для шагов ИИ, к которым подключён',
+      'a style for the AI steps it is linked to'
+    ),
+    name: tr('Голос бренда', 'Brand voice'),
+    desc: tr(
+      'Как писать: язык, аудитория, характер, запреты и примеры. Подключите стрелкой к шагам ИИ — один голос для постов, писем и ответов.',
+      'How to write: language, audience, character, things to avoid and examples. Link it to AI steps — one voice for posts, emails and replies.'
+    ),
+    keywords:
+      'голос бренда стиль тон tone of voice brand voice стиль текста правила примеры контекст',
+    fields: [
+      {
+        key: 'name',
+        type: 'text',
+        required: true,
+        basic: true,
+        label: tr('Название голоса', 'Voice name'),
+        placeholder: tr('Например: Канал о дизайне', 'E.g.: Design channel'),
+      },
+      {
+        key: 'language',
+        type: 'text',
+        required: false,
+        basic: true,
+        label: tr('Язык ответа', 'Language of the answer'),
+        placeholder: tr('русский', 'English'),
+      },
+      {
+        key: 'audience',
+        type: 'text',
+        required: false,
+        basic: true,
+        label: tr('Для кого пишем', 'Who we write for'),
+        placeholder: tr('дизайнеры и арт-директора', 'designers and art directors'),
+      },
+      {
+        key: 'tone',
+        type: 'text',
+        required: false,
+        basic: true,
+        label: tr('Характер', 'Character'),
+        placeholder: tr('экспертный, дружелюбный, без пафоса', 'expert, friendly, no pathos'),
+      },
+      {
+        key: 'writeLike',
+        type: 'textarea',
+        required: false,
+        basic: true,
+        label: tr('Пиши так', 'Write like this'),
+        placeholder: tr(
+          'Коротко, по делу, простыми словами. Сначала главное.',
+          'Short and to the point, plain words. The main thing first.'
+        ),
+      },
+      {
+        key: 'avoid',
+        type: 'textarea',
+        required: false,
+        basic: true,
+        label: tr('Не используй', 'Never use'),
+        placeholder: tr(
+          'канцелярит, «уникальный», восклицательные знаки',
+          'jargon, “unique”, exclamation marks'
+        ),
+      },
+      {
+        key: 'examples',
+        type: 'textarea',
+        required: false,
+        basic: true,
+        label: tr('Примеры удачных текстов', 'Examples of good texts'),
+        help: tr(
+          'Вставьте 1–5 текстов в нужном стиле; разделяйте их строкой «---».',
+          'Paste 1–5 texts in this style; separate them with a “---” line.'
+        ),
+      },
+      {
+        key: 'length',
+        type: 'text',
+        required: false,
+        basic: false,
+        label: tr('Длина текста', 'Text length'),
+        placeholder: tr('2–3 предложения', '2–3 sentences'),
+      },
+      {
+        key: 'terms',
+        type: 'text',
+        required: false,
+        basic: false,
+        label: tr('Термины', 'Terms'),
+        placeholder: tr('айдентика, а не «логотип»', '“identity”, not “logo”'),
+      },
+      {
+        key: 'cta',
+        type: 'text',
+        required: false,
+        basic: false,
+        label: tr('Призыв к действию', 'Call to action'),
+        placeholder: tr('без призывов', 'none'),
+      },
+      {
+        key: 'emoji',
+        type: 'select',
+        required: false,
+        basic: false,
+        label: tr('Эмодзи', 'Emoji'),
+        options: [
+          { value: 'none', label: tr('без эмодзи', 'none') },
+          { value: 'few', label: tr('один-два', 'one or two') },
+          { value: 'ok', label: tr('можно', 'allowed') },
+        ],
+      },
+    ],
+    outputs: [
+      {
+        key: 'voice',
+        label: tr('Правила голоса (текст для ИИ)', 'Voice rules (text for the AI)'),
+        example: tr('Brand voice “Канал о дизайне”: …', 'Brand voice “Design channel”: …'),
+      },
+    ],
+    simulate: (c) => ({
+      output: { voice: voiceText(c), name: c.name ?? '', version: c.presetVersion ?? null },
+      summary: tr(
+        `Голос «${c.name ?? ''}» готов для шагов ИИ. Внешних запросов нет.`,
+        `Voice “${c.name ?? ''}” is ready for AI steps. No external calls.`
+      ),
+    }),
+  },
   'logic.filter': {
     type: 'logic.condition',
     service: 'logic',
@@ -2010,6 +2226,7 @@ export const ACTIONS = {
 export const PICKER_GROUPS = [
   { id: 'trigger', label: 'kind.trigger', match: (a) => a.kind === 'trigger' },
   { id: 'action', label: 'kind.action', match: (a) => a.kind === 'action' && !isDevAction(a) },
+  { id: 'context', label: 'kind.context', match: (a) => a.kind === 'context' },
   { id: 'logic', label: 'kind.logic', match: (a) => a.kind === 'logic' },
   { id: 'dev', label: 'cat.dev', match: (a) => a.kind === 'action' && isDevAction(a) },
 ];

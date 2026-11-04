@@ -37,6 +37,7 @@ import {
 } from './store.js';
 import { TriggerScheduler, type TriggerSchedulerOptions } from './triggers.js';
 import { pruneHistory } from './retention.js';
+import { buildContextExecutors } from './context.js';
 import { FOR_EACH_TYPES, withForEach } from './for-each.js';
 
 export interface RuntimeLogger {
@@ -130,6 +131,7 @@ export class ExecutionRuntime {
     const nodeExecutors = {
       ...connectors,
       ...buildLogicExecutors(),
+      ...buildContextExecutors(),
       ...buildDelayExecutors({
         journal: this.journal,
         inlineMaxMs: options.inlineDelayMaxMs ?? 5_000,

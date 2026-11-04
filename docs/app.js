@@ -31,6 +31,7 @@ import {
   GROUPS,
 } from './tags.js';
 import { markdownNodes } from './markdown.js';
+import { savePreset, applyPreset, presetStatus } from './presets.js';
 import {
   ACTIONS,
   SERVICES,
@@ -41,6 +42,10 @@ import {
   SYNONYMS,
   isDevAction,
   postFields,
+  voiceText,
+  systemPrompt,
+  userPrompt,
+  askedLanguage,
 } from './catalog.js';
 import {
   validateDag,
@@ -83,6 +88,7 @@ function defaultStore() {
     settings: { lang: null, theme: 'system', devMode: false },
     onboarding: { status: 'new', step: 1, goal: null, automationId: null, hidden: false },
     hints: {},
+    voicePresets: [],
   };
 }
 
@@ -97,6 +103,7 @@ function loadStore() {
           settings: { ...defaultStore().settings, ...data.settings },
           onboarding: data.onboarding ?? defaultStore().onboarding,
           hints: data.hints ?? {},
+          voicePresets: Array.isArray(data.voicePresets) ? data.voicePresets : [],
         };
       if (data?.version === 2)
         return {
@@ -1763,8 +1770,10 @@ function canvasView(a) {
     for (const e of a.edges) {
       const p = edgePath(a, cardH, e);
       if (!p) continue;
+      // A context step (a brand voice) gives settings, not data: a dashed line, no “insert”.
+      const context = ACTIONS[a.nodes.find((n) => n.id === e.source)?.action]?.kind === 'context';
       edgeGroup.append(
-        svg('path', { d: p.d, class: 'edge' }),
+        svg('path', { d: p.d, class: context ? 'edge edge-context' : 'edge' }),
         svg('path', {
           d: p.d,
           class: 'edge-hit',
@@ -1772,6 +1781,7 @@ function canvasView(a) {
           onclick: (ev) => openEdgeMenu(a, e, ev),
         })
       );
+      if (context) continue;
       edgePluses.append(
         h(
           'button',
@@ -1825,7 +1835,12 @@ function canvasView(a) {
       'button',
       {
         type: 'button',
-        class: ['node-card', ui.panelNodeId === n.id && 'selected', `ns-${state}`],
+        class: [
+          'node-card',
+          ui.panelNodeId === n.id && 'selected',
+          `ns-${state}`,
+          act?.kind === 'context' && 'node-context',
+        ],
         style: { width: `${CARD_W}px`, height: `${cardH}px` },
         'data-node-id': n.id,
         'aria-label': `${t('step.n', { n: nums.get(n.id) })}: ${nodeTitle(n)} — ${t(`step.${state}`)}`,
@@ -2004,14 +2019,36 @@ function connectSteps(a, source, target) {
   }
   if (a.edges.some((e) => e.source === source && e.target === target)) return;
   const edges = [...a.edges, { id: uid('e'), source, target }];
-  if (!validateDag(a.nodes, edges).valid) {
-    toast(t('cv.cycle'), 'error');
+  const check = validateDag(a.nodes, edges);
+  if (!check.valid) {
+    toast(
+      check.code === 'ERR_CYCLIC_DEPENDENCY_DETECTED' ? t('cv.cycle') : t(check.messageKey),
+      'error'
+    );
     return;
   }
   checkpoint(a);
   a.edges = edges;
+  linkVoice(a, source, target);
   touch(a);
   render();
+}
+
+/** “Brand voice” steps before this one, for the AI step's voice choice. */
+function voiceChoices(a, node) {
+  const up = ancestorsOf(a, node.id);
+  return a.nodes.filter((n) => up.has(n.id) && ACTIONS[n.action]?.kind === 'context');
+}
+
+const voiceExpr = (id) => `{{ $nodes.${id}.output }}`;
+
+/** A voice drawn to an AI step that has none yet becomes that step's voice. */
+function linkVoice(a, source, target) {
+  const from = a.nodes.find((n) => n.id === source);
+  const to = a.nodes.find((n) => n.id === target);
+  if (ACTIONS[from?.action]?.kind !== 'context') return;
+  if (!ACTIONS[to?.action]?.fields?.some((f) => f.type === 'voice') || to.config?.voice) return;
+  to.config = { ...to.config, voice: voiceExpr(source) };
 }
 
 function openEdgeMenu(a, edge, ev) {
@@ -2385,6 +2422,7 @@ function openPicker(a, parentId, opts = {}) {
       const sub = {
         trigger: 'kind.triggerSub',
         action: 'kind.actionSub',
+        context: 'kind.contextSub',
         logic: 'kind.logicSub',
         dev: 'cat.devSub',
       }[g.id];
@@ -2603,6 +2641,135 @@ function rssMemoryBlock(a, node) {
   );
 }
 
+/** The voice library: load a saved voice, save this one (a new version), update to the latest. */
+function voicePresetBlock(a, node, saveNode) {
+  const list = store.voicePresets ?? [];
+  const status = presetStatus(list, node.config);
+  const apply = (preset) => {
+    checkpoint(a);
+    node.config = applyPreset(node.config, preset);
+    ui.panelDirty = false;
+    touch(a);
+    render();
+  };
+  const select = h(
+    'select',
+    { class: 'input', 'aria-label': t('vp.choose') },
+    h('option', { value: '' }, list.length ? t('vp.choose') : t('vp.empty')),
+    list.map((p) =>
+      h(
+        'option',
+        { value: p.id, selected: p.id === node.config?.presetId },
+        `${p.name} · v${p.versions.at(-1).version}`
+      )
+    )
+  );
+  const load = h(
+    'button',
+    {
+      type: 'button',
+      class: 'btn btn-small',
+      disabled: !list.length,
+      onclick: () => {
+        const preset = list.find((p) => p.id === select.value);
+        if (!preset) return;
+        if (ui.panelDirty && !confirm(t('vp.loadConfirm'))) return;
+        apply(preset);
+      },
+    },
+    t('vp.load')
+  );
+  const saveBtn = h(
+    'button',
+    {
+      type: 'button',
+      class: 'btn btn-small',
+      onclick: () => {
+        if (!saveNode()) return;
+        const res = savePreset(store.voicePresets ?? [], node.config, {
+          id: node.config?.presetId ?? null,
+        });
+        store.voicePresets = res.list;
+        node.config = { ...node.config, ...res.link };
+        touch(a);
+        toast(t('vp.saved', { name: res.preset.name, v: res.link.presetVersion }));
+        render();
+      },
+    },
+    status.preset ? t('vp.saveVersion') : t('vp.save')
+  );
+  const line = status.preset
+    ? h(
+        'p',
+        { class: 'small muted' },
+        t('vp.linked', { name: status.preset.name, v: node.config.presetVersion }),
+        status.edited ? ` ${t('vp.edited')}` : '',
+        status.newer
+          ? h(
+              'span',
+              { class: 'fe-nudge' },
+              ` ${t('vp.newer', { v: status.latest })} `,
+              h(
+                'button',
+                {
+                  type: 'button',
+                  class: 'btn btn-small',
+                  onclick: () => {
+                    if (status.edited && !confirm(t('vp.loadConfirm'))) return;
+                    apply(status.preset);
+                  },
+                },
+                t('vp.update')
+              )
+            )
+          : null
+      )
+    : h('p', { class: 'small muted' }, t('vp.help'));
+  return h(
+    'div',
+    { class: 'field voice-presets' },
+    h('div', { class: 'field-label' }, t('vp.title')),
+    line,
+    h('div', { class: 'row-gap', style: { flexWrap: 'wrap' } }, select, load, saveBtn)
+  );
+}
+
+/** “What the model gets”: the AI step's system and user messages, built as the server does. */
+function modelPromptBlock(a, node, controls) {
+  const warn = h('p', { class: 'small fe-nudge', hidden: true });
+  const sys = h('pre', { class: 'prompt-preview' });
+  const user = h('pre', { class: 'prompt-preview' });
+  const update = () => {
+    const voiceVal = controls.get('voice')?.value ?? node.config?.voice ?? '';
+    const voiceNode = a.nodes.find((n) => voiceExpr(n.id) === voiceVal);
+    const voice = voiceNode ? voiceText(voiceNode.config ?? {}) : '';
+    const instruction = previewTemplate(a, controls.get('instruction')?.value ?? '').trim();
+    const data = previewTemplate(a, controls.get('input')?.value ?? '').trim();
+    sys.textContent = systemPrompt(voice);
+    user.textContent = clipText(
+      userPrompt(instruction || '…', data, '', Boolean(ui.panelForEach?.())),
+      2000
+    );
+    const want = askedLanguage(instruction);
+    const has = askedLanguage(voiceNode?.config?.language);
+    warn.hidden = !(want && has && want !== has);
+    warn.textContent = t('voice.conflict');
+  };
+  const holder = h('span', { hidden: true });
+  holder._updatePreview = update;
+  controls.set('__modelPrompt', holder);
+  return h(
+    'details',
+    { class: 'panel-details model-prompt' },
+    h('summary', {}, t('voice.preview')),
+    warn,
+    h('div', { class: 'field-label' }, t('voice.system')),
+    sys,
+    h('div', { class: 'field-label' }, t('voice.user')),
+    user
+  );
+}
+
 /** A step's fields, plus “for each item” on steps that can repeat and have a list before them. */
 function stepFields(a, node, act) {
   const base = act?.fields ?? [];
@@ -2701,6 +2868,29 @@ function nodePanel(a, node) {
         f.options.map((o) =>
           h('option', { value: o.value, selected: String(val ?? '') === o.value }, L(o.label))
         )
+      );
+    } else if (f.type === 'voice') {
+      const choices = voiceChoices(a, node);
+      const known = !val || choices.some((n) => voiceExpr(n.id) === val);
+      control = h(
+        'select',
+        {
+          id,
+          class: 'input',
+          onchange: () => {
+            markDirty();
+            refreshPreviews();
+          },
+        },
+        h('option', { value: '' }, choices.length ? t('voice.none') : t('voice.noneLinked')),
+        choices.map((n) =>
+          h(
+            'option',
+            { value: voiceExpr(n.id), selected: val === voiceExpr(n.id) },
+            n.config?.name || nodeTitle(n)
+          )
+        ),
+        known ? null : h('option', { value: val, selected: true }, t('tok.deleted'))
       );
     } else if (f.type === 'connections') {
       // Several connections of one service, e.g. the MCP servers an agent may use.
@@ -3027,6 +3217,10 @@ function nodePanel(a, node) {
       resultBox.replaceChildren(h('div', { class: 'alert error' }, t('common.saveError')));
       return false;
     }
+    // A brand voice remembers which library preset and version it was copied from.
+    if (act?.kind === 'context')
+      for (const k of ['presetId', 'presetVersion'])
+        if (node.config?.[k] !== undefined) config[k] = node.config[k];
     checkpoint(a);
     node.config = config;
     node.label = labelInput.value.trim();
@@ -3101,6 +3295,8 @@ function nodePanel(a, node) {
     basic.length ? h('h3', { class: 'panel-section' }, t('panel.basic')) : null,
     basic.map(fieldControl),
     act?.type === 'core.rss' ? rssMemoryBlock(a, node) : null,
+    act?.type === 'ai.process' ? modelPromptBlock(a, node, controls) : null,
+    act?.type === 'context.voice' ? voicePresetBlock(a, node, saveNode) : null,
     dataBlock,
     h(
       'details',

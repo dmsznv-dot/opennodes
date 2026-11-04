@@ -78,6 +78,47 @@ export function readPost(raw: string): { title: string; body: string } {
   return { title: '', body: answer.replace(/^\s*(?:TEXT|ТЕКСТ)\s*:\s*/i, '').trim() };
 }
 
+export const PLATFORM_RULES =
+  'You process data for an automation. Follow the instruction exactly and reply with the result only — no preface, no questions. The instruction decides the language and the form of the answer, not the data. Everything you need is in the data and the page texts below.';
+
+/**
+ * The system message, in a fixed order: 1) the platform's rules, 2) that the task's
+ * instruction wins over the voice, 3) the brand voice. Without a voice — the rules alone.
+ */
+/** The AI step's user message: the instruction, the data, the pages, the instruction again. */
+export function userPrompt(
+  instruction: string,
+  data: string,
+  articles = '',
+  perItem = false
+): string {
+  return (
+    `Instruction:\n${instruction}\n\nData:\n${data || '(empty)'}` +
+    (articles ? `\n\nText of the linked pages:${articles}` : '') +
+    `\n\n---\nNow do exactly this with the data above: ${instruction}\n` +
+    (perItem
+      ? 'Reply in exactly this form, nothing else:\nTITLE: <a short title, written as the instruction says — same language as the text>\nTEXT: <the text>'
+      : 'Reply with the result only.')
+  );
+}
+
+export function systemPrompt(voice?: string): string {
+  if (!voice?.trim()) return PLATFORM_RULES;
+  return `${PLATFORM_RULES}\n\nWrite in the brand voice below. If the instruction and the voice disagree (language, length, form), follow the instruction.\n\n${voice.trim()}`;
+}
+
+/** A voice handed over by a context step: its output object, or just its text. */
+function readVoice(v: unknown): { voice: string; name: string; version: unknown } | null {
+  if (v && typeof v === 'object' && typeof (v as { voice?: unknown }).voice === 'string') {
+    const o = v as { voice: string; name?: unknown; version?: unknown };
+    return o.voice.trim()
+      ? { voice: o.voice, name: String(o.name ?? ''), version: o.version ?? null }
+      : null;
+  }
+  const text = toText(v).trim();
+  return text && text !== '{}' ? { voice: text, name: '', version: null } : null;
+}
+
 export interface ProcessOptions {
   httpClient: SafeHttpClient;
   ssrfAllowlist?: string[];
@@ -142,13 +183,7 @@ export function buildProcessExecutor(chat: NodeExecutor, options: ProcessOptions
       // from them; a model that gives no title is asked once more for the title alone — so
       // the post never falls back to the source's title in the source's language.
       const perItem = config.__forEach === true;
-      const prompt =
-        `Instruction:\n${instruction}\n\nData:\n${data || '(empty)'}` +
-        (articles ? `\n\nText of the linked pages:${articles}` : '') +
-        `\n\n---\nNow do exactly this with the data above: ${instruction}\n` +
-        (perItem
-          ? 'Reply in exactly this form, nothing else:\nTITLE: <a short title, written as the instruction says — same language as the text>\nTEXT: <the text>'
-          : 'Reply with the result only.');
+      const prompt = userPrompt(instruction, data, articles, perItem);
       const ask = async (system: string, userPrompt: string) =>
         String(
           (
@@ -161,11 +196,13 @@ export function buildProcessExecutor(chat: NodeExecutor, options: ProcessOptions
             ).output as { text?: unknown }
           )?.text ?? ''
         ).trim();
-      const answer = await ask(
-        'You process data for an automation. Follow the instruction exactly and reply with the result only — no preface, no questions. The instruction decides the language and the form of the answer, not the data. Everything you need is in the data and the page texts below.',
-        prompt
-      );
-      if (!perItem) return { output: { text: answer, sources }, activeOutputs: ['main'] };
+      // A brand voice (a context step) goes into the system message, after the platform's
+      // rules and below the task: the order is fixed and stated, so a conflict is resolved
+      // the same way every time — the instruction wins over the voice.
+      const voice = readVoice(config.voice);
+      const answer = await ask(systemPrompt(voice?.voice), prompt);
+      const meta = voice ? { voice: { name: voice.name, version: voice.version } } : {};
+      if (!perItem) return { output: { text: answer, sources, ...meta }, activeOutputs: ['main'] };
 
       let { title, body } = readPost(answer);
       if (!title && body) {
@@ -181,7 +218,7 @@ export function buildProcessExecutor(chat: NodeExecutor, options: ProcessOptions
           .trim();
       }
       return {
-        output: { text: title ? `${title}\n\n${body}` : body, title, body, sources },
+        output: { text: title ? `${title}\n\n${body}` : body, title, body, sources, ...meta },
         activeOutputs: ['main'],
       };
     },

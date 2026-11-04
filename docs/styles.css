@@ -1040,6 +1040,14 @@ textarea.input {
 .edge-dashed {
   stroke-dasharray: 4 4;
 }
+/* A context step (brand voice) gives the AI settings, not data. */
+.edge-context {
+  stroke: #a855f7;
+  stroke-dasharray: 6 4;
+}
+.node-card.node-context {
+  border-style: dashed;
+}
 .node-card {
   position: absolute;
   display: flex;
@@ -2453,4 +2461,16 @@ textarea.input {
   text-transform: none;
   letter-spacing: 0;
   color: var(--text-3);
+}
+
+.prompt-preview {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow: auto;
+  font-size: 12px;
+  padding: var(--space-2);
+  border-radius: 6px;
+  background: var(--surface-2, rgba(127, 127, 127, 0.08));
+  margin: 0 0 var(--space-3);
 }

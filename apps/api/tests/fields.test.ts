@@ -28,6 +28,7 @@ const EFFECT_ONLY: Record<string, string> = {
   'text.format.find': 'replaced away: "MK_replaceWith" stands in its place',
   'ai.process.titleLine': 'per item only: the AI is asked for a title line (audit.test)',
   'rss.read.pageImages': 'off: items without a picture are not looked up (audit.test)',
+  'context.voice.emoji': 'becomes a sentence ("- Emoji: no emoji") in the voice text (voice.test)',
 };
 /** A choice other than the default that makes the rest of the fields count. */
 const OVERRIDES: Record<string, Record<string, unknown>> = {
