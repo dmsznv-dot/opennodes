@@ -3,6 +3,7 @@ import { feedText } from '@localflow/connectors-core';
 import type { SafeHttpClient } from '@localflow/shared';
 import type { NodeExecutor } from '@localflow/workflow-engine';
 import { toText } from './text.js';
+import { fillPrompt, readPrompt } from './context.js';
 
 const ARTICLE_CHARS = 6_000; // per page, so a few articles fit any model's context
 const MAX_LINKS = 10;
@@ -133,10 +134,17 @@ export function buildProcessExecutor(chat: NodeExecutor, options: ProcessOptions
   return {
     async execute(node, config, step) {
       const data = toText(config.input).trim();
-      const instruction = toText(config.instruction).trim();
+      // A Prompt Template (a context step) is the instruction; the step's own instruction,
+      // if any, is added after it.
+      const template = readPrompt(config.prompt);
+      const own = toText(config.instruction).trim();
+      const filled = template
+        ? fillPrompt(template, (step.expressionScope ?? {}) as Record<string, unknown>)
+        : '';
+      const instruction = [filled, own].filter(Boolean).join('\n\n');
       if (!instruction) {
         throw new ActionExecutionError(
-          'Process data: write what to do in “Instruction”.',
+          'Process data: write what to do in “Instruction” or link a Prompt Template.',
           'process',
           'ai.process'
         );
@@ -201,7 +209,10 @@ export function buildProcessExecutor(chat: NodeExecutor, options: ProcessOptions
       // the same way every time — the instruction wins over the voice.
       const voice = readVoice(config.voice);
       const answer = await ask(systemPrompt(voice?.voice), prompt);
-      const meta = voice ? { voice: { name: voice.name, version: voice.version } } : {};
+      const meta = {
+        ...(voice ? { voice: { name: voice.name, version: voice.version } } : {}),
+        ...(template ? { prompt: { name: template.name, version: template.version } } : {}),
+      };
       if (!perItem) return { output: { text: answer, sources, ...meta }, activeOutputs: ['main'] };
 
       let { title, body } = readPost(answer);

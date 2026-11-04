@@ -113,3 +113,66 @@ describe('brand voice presets — versions', () => {
     expect(presetStatus([], { ...VOICE, presetId: 'gone' }).preset).toBe(null);
   });
 });
+
+describe('prompt template — a context step the AI step fills in', () => {
+  it('is a context step with data from each item, and the AI step can take a template', async () => {
+    const { ACTIONS: A } = await import('../../../docs/catalog.js');
+    const act = A['context.prompt'];
+    expect(act.kind).toBe('context');
+    expect(act.itemVars).toBe(true);
+    // Not a list processor: steps after it never repeat “for each item of the template”.
+    expect(act.forEach).toBeFalsy();
+    expect(act.fields.find((f) => f.key === 'template')).toMatchObject({
+      acceptsData: true,
+      required: true,
+    });
+    const ai = A['ai.process'].fields;
+    expect(ai.find((f) => f.key === 'prompt')).toMatchObject({ type: 'prompt', required: false });
+    expect(ai.find((f) => f.key === 'instruction')).toMatchObject({ requiredUnless: 'prompt' });
+  });
+
+  it('“What to do” is needed only when no template is linked', async () => {
+    const { nodeIssues } = await import('../../../docs/engine.js');
+    const a = {
+      nodes: [
+        { id: 'trigger', action: 'manual.run', config: {} },
+        { id: 'ai', action: 'ai.process', config: { input: 'x' } },
+      ],
+      edges: [{ id: 'e', source: 'trigger', target: 'ai' }],
+    };
+    const fieldsMissing = (cfg) =>
+      nodeIssues(
+        { ...a, nodes: [a.nodes[0], { ...a.nodes[1], config: cfg }] },
+        { ...a.nodes[1], config: cfg },
+        []
+      )
+        .map((i) => i.field)
+        .filter(Boolean);
+    expect(fieldsMissing({ input: 'x' })).toContain('instruction');
+    expect(fieldsMissing({ input: 'x', prompt: '{{ $nodes.tpl.output }}' })).not.toContain(
+      'instruction'
+    );
+  });
+
+  it('template presets keep only the template’s own fields and get versions', () => {
+    const keys = ['name', 'template', 'description'];
+    const one = savePreset(
+      [],
+      { name: 'Пересказ', template: 'A {{ $item.title }}', forEach: 'x' },
+      { newId: 'pt_a', keys }
+    );
+    expect(one.preset.versions[0].config).toEqual({
+      name: 'Пересказ',
+      template: 'A {{ $item.title }}',
+    });
+    const two = savePreset(one.list, { name: 'Пересказ', template: 'B' }, { id: 'pt_a', keys });
+    expect(two.link.presetVersion).toBe(2);
+    const step = applyPreset(
+      { template: 'A', forEach: 'x', presetId: 'pt_a', presetVersion: 1 },
+      two.preset,
+      keys
+    );
+    expect(step).toMatchObject({ template: 'B', forEach: 'x', presetVersion: 2 });
+    expect(presetStatus(two.list, step, keys)).toMatchObject({ newer: false, edited: false });
+  });
+});

@@ -317,7 +317,8 @@ export function nodeIssues(a, node, connections) {
       v = (Array.isArray(v) ? v : []).filter((id) => connections.some((c) => c.id === id));
       if (!v.length) v = undefined;
     }
-    if (f.required && (v === undefined || v === null || v === ''))
+    const required = f.required && !(f.requiredUnless && node.config?.[f.requiredUnless]);
+    if (required && (v === undefined || v === null || v === ''))
       issues.push({ key: 'err.field', params: { label: L(f.label) }, field: f.key });
   }
   for (const token of danglingRefs(a, node))

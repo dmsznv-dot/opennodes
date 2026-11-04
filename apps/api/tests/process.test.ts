@@ -56,7 +56,11 @@ const port = (direction: 'input' | 'output') => [
   { id: 'main', name: direction, type: 'any' as const, direction, required: false },
 ];
 
-async function runProcess(config: Record<string, unknown>, voice?: Record<string, unknown>) {
+async function runProcess(
+  config: Record<string, unknown>,
+  voice?: Record<string, unknown>,
+  extra: { prompt?: Record<string, unknown>; payload?: Record<string, unknown> } = {}
+) {
   const api = new LocalFlowApiServer({ databaseUrl: 'pglite://memory', ssrfAllowlist: [host] });
   apis.push(api);
   const s = await api.inject<{ workspaceId: string; token: string }>({
@@ -108,11 +112,29 @@ async function runProcess(config: Record<string, unknown>, voice?: Record<string
               },
             ]
           : []),
+        // A Prompt Template: also a context step, linked to the AI step.
+        ...(extra.prompt
+          ? [
+              {
+                id: 'tpl',
+                type: 'context.prompt',
+                data: { label: 'tpl', config: extra.prompt },
+                inputs: port('input'),
+                outputs: port('output'),
+              },
+            ]
+          : []),
       ],
       edges: [
         { id: 'e', source: 't', sourceHandle: 'main', target: 'p', targetHandle: 'main' },
         ...(voice
           ? [{ id: 'ev', source: 'v', sourceHandle: 'main', target: 'p', targetHandle: 'main' }]
+          : []),
+        ...(extra.prompt
+          ? [
+              { id: 'et', source: 't', sourceHandle: 'main', target: 'tpl', targetHandle: 'main' },
+              { id: 'ep', source: 'tpl', sourceHandle: 'main', target: 'p', targetHandle: 'main' },
+            ]
           : []),
       ],
     },
@@ -121,7 +143,7 @@ async function runProcess(config: Record<string, unknown>, voice?: Record<string
     method: 'POST',
     url: `/api/v1/workflows/${wf.body.id}/test-run`,
     headers,
-    body: { payload: { list: `Фото как объект — http://${host}/articles/one` } },
+    body: { payload: extra.payload ?? { list: `Фото как объект — http://${host}/articles/one` } },
   });
   return { ...res.body, step: res.body.steps.find((st) => st.nodeId === 'p') };
 }
@@ -227,5 +249,77 @@ describe('@localflow/api — brand voice (context step)', () => {
     expect(system).not.toContain('Brand voice');
     expect(system).not.toContain('If the instruction and the voice disagree');
     expect(res.step.outputPayload.voice).toBeUndefined();
+  });
+});
+
+describe('@localflow/api — Prompt Template (context step)', () => {
+  it('fills the template with data and adds the step’s own instruction after it', async () => {
+    const res = await runProcess(
+      {
+        input: '{{ $trigger.list }}',
+        instruction: 'Без эмодзи.',
+        prompt: '{{ $nodes.tpl.output }}',
+      },
+      undefined,
+      {
+        prompt: {
+          name: 'Пересказ',
+          template: 'Перескажи «{{ $trigger.title }}» коротко.',
+          presetVersion: 2,
+        },
+        payload: { list: 'текст', title: 'Статья' },
+      }
+    );
+    expect(res.execution.status).toBe('SUCCEEDED');
+    const prompt: string = modelRequests[0].messages[1].content;
+    expect(prompt).toContain('Instruction:\nПерескажи «Статья» коротко.\n\nБез эмодзи.');
+    expect(res.step.outputPayload.prompt).toEqual({ name: 'Пересказ', version: 2 });
+    const tpl = res.steps.find((st) => st.nodeId === 'tpl');
+    // The template step passes the text on unfilled; it calls nothing itself.
+    expect(tpl.outputPayload.template).toBe('Перескажи «{{ $trigger.title }}» коротко.');
+    expect(modelRequests).toHaveLength(1);
+  });
+
+  it('fills the template for every item when the AI step goes item by item', async () => {
+    const res = await runProcess(
+      {
+        input: '{{ $item.text }}',
+        prompt: '{{ $nodes.tpl.output }}',
+        forEach: '{{ $trigger.items }}',
+      },
+      undefined,
+      {
+        prompt: { name: 'По записи', template: 'Заголовок: {{ $item.title }}. Перескажи.' },
+        payload: {
+          items: [
+            { title: 'Первая', text: 'a' },
+            { title: 'Вторая', text: 'b' },
+          ],
+        },
+      }
+    );
+    expect(res.execution.status).toBe('SUCCEEDED');
+    const asked = modelRequests
+      .map((r) => r.messages[1].content as string)
+      .filter((p) => p.startsWith('Instruction:'));
+    expect(asked[0]).toContain('Заголовок: Первая. Перескажи.');
+    expect(asked.some((p) => p.includes('Заголовок: Вторая. Перескажи.'))).toBe(true);
+  });
+
+  it('a variable with no data is an error that names it, not an empty instruction', async () => {
+    const res = await runProcess({ input: 'x', prompt: '{{ $nodes.tpl.output }}' }, undefined, {
+      prompt: { name: 'По записи', template: 'Перескажи {{ $item.title }}' },
+    });
+    expect(res.execution.status).toBe('FAILED');
+    expect(res.step.errorMessage).toMatch(
+      /Prompt Template “По записи”: no data for \{\{ \$item\.title \}\}.*for each item/
+    );
+    expect(modelRequests).toHaveLength(0);
+  });
+
+  it('without a template and without an instruction the AI step asks for one', async () => {
+    const res = await runProcess({ input: 'x' });
+    expect(res.execution.status).toBe('FAILED');
+    expect(res.step.errorMessage).toMatch(/Instruction.*Prompt Template/);
   });
 });

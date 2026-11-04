@@ -31,7 +31,7 @@ import {
   GROUPS,
 } from './tags.js';
 import { markdownNodes } from './markdown.js';
-import { savePreset, applyPreset, presetStatus } from './presets.js';
+import { savePreset, applyPreset, presetStatus, PRESET_KINDS } from './presets.js';
 import {
   ACTIONS,
   SERVICES,
@@ -89,6 +89,7 @@ function defaultStore() {
     onboarding: { status: 'new', step: 1, goal: null, automationId: null, hidden: false },
     hints: {},
     voicePresets: [],
+    promptPresets: [],
   };
 }
 
@@ -104,6 +105,7 @@ function loadStore() {
           onboarding: data.onboarding ?? defaultStore().onboarding,
           hints: data.hints ?? {},
           voicePresets: Array.isArray(data.voicePresets) ? data.voicePresets : [],
+          promptPresets: Array.isArray(data.promptPresets) ? data.promptPresets : [],
         };
       if (data?.version === 2)
         return {
@@ -2029,26 +2031,36 @@ function connectSteps(a, source, target) {
   }
   checkpoint(a);
   a.edges = edges;
-  linkVoice(a, source, target);
+  linkContext(a, source, target);
   touch(a);
   render();
 }
 
-/** “Brand voice” steps before this one, for the AI step's voice choice. */
-function voiceChoices(a, node) {
+/** Which context step an AI step's field takes: its “voice” or its “prompt”. */
+const CONTEXT_FIELD = { voice: 'context.voice', prompt: 'context.prompt' };
+
+/** Context steps of one kind before this one, for the AI step's choice. */
+function contextChoices(a, node, type) {
   const up = ancestorsOf(a, node.id);
-  return a.nodes.filter((n) => up.has(n.id) && ACTIONS[n.action]?.kind === 'context');
+  return a.nodes.filter((n) => up.has(n.id) && n.action === type);
 }
 
 const voiceExpr = (id) => `{{ $nodes.${id}.output }}`;
 
-/** A voice drawn to an AI step that has none yet becomes that step's voice. */
-function linkVoice(a, source, target) {
+/**
+ * A context step drawn to an AI step that has none of its kind yet becomes that step's
+ * voice or template. A template whose data is per item makes the AI step go per item too.
+ */
+function linkContext(a, source, target) {
   const from = a.nodes.find((n) => n.id === source);
   const to = a.nodes.find((n) => n.id === target);
-  if (ACTIONS[from?.action]?.kind !== 'context') return;
-  if (!ACTIONS[to?.action]?.fields?.some((f) => f.type === 'voice') || to.config?.voice) return;
-  to.config = { ...to.config, voice: voiceExpr(source) };
+  const fieldKey = Object.keys(CONTEXT_FIELD).find((k) => CONTEXT_FIELD[k] === from?.action);
+  const toAct = ACTIONS[to?.action];
+  if (!fieldKey || !toAct?.fields?.some((f) => f.key === fieldKey && f.type === fieldKey)) return;
+  if (to.config?.[fieldKey]) return;
+  to.config = { ...to.config, [fieldKey]: voiceExpr(source) };
+  if (fieldKey === 'prompt' && from.config?.forEach && toAct.forEach && !to.config.forEach)
+    to.config.forEach = from.config.forEach;
 }
 
 function openEdgeMenu(a, edge, ev) {
@@ -2642,12 +2654,14 @@ function rssMemoryBlock(a, node) {
 }
 
 /** The voice library: load a saved voice, save this one (a new version), update to the latest. */
-function voicePresetBlock(a, node, saveNode) {
-  const list = store.voicePresets ?? [];
-  const status = presetStatus(list, node.config);
+function presetBlock(a, node, saveNode) {
+  const kind = PRESET_KINDS[node.action];
+  const prefix = node.action === 'context.prompt' ? 'pt' : 'vp';
+  const list = store[kind.store] ?? [];
+  const status = presetStatus(list, node.config, kind.keys);
   const apply = (preset) => {
     checkpoint(a);
-    node.config = applyPreset(node.config, preset);
+    node.config = applyPreset(node.config, preset, kind.keys);
     ui.panelDirty = false;
     touch(a);
     render();
@@ -2655,7 +2669,7 @@ function voicePresetBlock(a, node, saveNode) {
   const select = h(
     'select',
     { class: 'input', 'aria-label': t('vp.choose') },
-    h('option', { value: '' }, list.length ? t('vp.choose') : t('vp.empty')),
+    h('option', { value: '' }, list.length ? t('vp.choose') : t(`${prefix}.empty`)),
     list.map((p) =>
       h(
         'option',
@@ -2686,10 +2700,11 @@ function voicePresetBlock(a, node, saveNode) {
       class: 'btn btn-small',
       onclick: () => {
         if (!saveNode()) return;
-        const res = savePreset(store.voicePresets ?? [], node.config, {
+        const res = savePreset(store[kind.store] ?? [], node.config, {
           id: node.config?.presetId ?? null,
+          keys: kind.keys,
         });
-        store.voicePresets = res.list;
+        store[kind.store] = res.list;
         node.config = { ...node.config, ...res.link };
         touch(a);
         toast(t('vp.saved', { name: res.preset.name, v: res.link.presetVersion }));
@@ -2724,11 +2739,11 @@ function voicePresetBlock(a, node, saveNode) {
             )
           : null
       )
-    : h('p', { class: 'small muted' }, t('vp.help'));
+    : h('p', { class: 'small muted' }, t(`${prefix}.help`));
   return h(
     'div',
     { class: 'field voice-presets' },
-    h('div', { class: 'field-label' }, t('vp.title')),
+    h('div', { class: 'field-label' }, t(`${prefix}.title`)),
     line,
     h('div', { class: 'row-gap', style: { flexWrap: 'wrap' } }, select, load, saveBtn)
   );
@@ -2743,7 +2758,14 @@ function modelPromptBlock(a, node, controls) {
     const voiceVal = controls.get('voice')?.value ?? node.config?.voice ?? '';
     const voiceNode = a.nodes.find((n) => voiceExpr(n.id) === voiceVal);
     const voice = voiceNode ? voiceText(voiceNode.config ?? {}) : '';
-    const instruction = previewTemplate(a, controls.get('instruction')?.value ?? '').trim();
+    const promptVal = controls.get('prompt')?.value ?? node.config?.prompt ?? '';
+    const promptNode = a.nodes.find((n) => voiceExpr(n.id) === promptVal);
+    const instruction = [
+      promptNode ? previewTemplate(a, promptNode.config?.template ?? '').trim() : '',
+      previewTemplate(a, controls.get('instruction')?.value ?? '').trim(),
+    ]
+      .filter(Boolean)
+      .join('\n\n');
     const data = previewTemplate(a, controls.get('input')?.value ?? '').trim();
     sys.textContent = systemPrompt(voice);
     user.textContent = clipText(
@@ -2773,6 +2795,25 @@ function modelPromptBlock(a, node, controls) {
 /** A step's fields, plus “for each item” on steps that can repeat and have a list before them. */
 function stepFields(a, node, act) {
   const base = act?.fields ?? [];
+  // A template's data may be per item: it says which list, the AI step fills it per item.
+  if (act?.itemVars) {
+    if (!listChoices(a, node).length && !node.config?.forEach) return base;
+    return [
+      {
+        key: 'forEach',
+        type: 'forEach',
+        required: false,
+        noOptionalMark: true,
+        basic: true,
+        label: t('pt.feLabel'),
+        help: t('pt.feHelp'),
+        onceKey: 'pt.feOnce',
+        eachKey: 'pt.feEach',
+        noNudge: true,
+      },
+      ...base,
+    ];
+  }
   if (!act?.forEach || (!listChoices(a, node).length && !node.config?.forEach)) return base;
   return [
     {
@@ -2850,12 +2891,12 @@ function nodePanel(a, node) {
             forEachHelp();
           },
         },
-        h('option', { value: '' }, t('fe.once')),
+        h('option', { value: '' }, t(f.onceKey ?? 'fe.once')),
         choices.map((c) =>
           h(
             'option',
             { value: c.expr, selected: current === c.expr },
-            t('fe.each', { list: L(c.label) })
+            t(f.eachKey ?? 'fe.each', { list: L(c.label) })
           )
         ),
         known ? null : h('option', { value: val, selected: true }, t('tok.deleted'))
@@ -2869,8 +2910,8 @@ function nodePanel(a, node) {
           h('option', { value: o.value, selected: String(val ?? '') === o.value }, L(o.label))
         )
       );
-    } else if (f.type === 'voice') {
-      const choices = voiceChoices(a, node);
+    } else if (f.type === 'voice' || f.type === 'prompt') {
+      const choices = contextChoices(a, node, CONTEXT_FIELD[f.type]);
       const known = !val || choices.some((n) => voiceExpr(n.id) === val);
       control = h(
         'select',
@@ -2882,7 +2923,11 @@ function nodePanel(a, node) {
             refreshPreviews();
           },
         },
-        h('option', { value: '' }, choices.length ? t('voice.none') : t('voice.noneLinked')),
+        h(
+          'option',
+          { value: '' },
+          choices.length ? t(`${f.type}.none`) : t(`${f.type}.noneLinked`)
+        ),
         choices.map((n) =>
           h(
             'option',
@@ -3077,7 +3122,7 @@ function nodePanel(a, node) {
     if (f.type === 'boolean')
       return h('div', { class: 'field field-inline', 'data-field': f.key }, control, label, err);
     const help = f.help ? h('div', { class: 'small muted' }, L(f.help)) : null;
-    if (f.type === 'forEach') {
+    if (f.type === 'forEach' && !f.noNudge) {
       forEachHelp = () => {
         const src = listSource(a, control.value);
         const first = listChoices(a, node)[0];
@@ -3205,7 +3250,9 @@ function nodePanel(a, node) {
     const config = {};
     for (const f of fields) {
       if (!(f.key in raw)) continue;
-      const res = parseFieldInput(f, raw[f.key]);
+      // “What to do” is not needed when a Prompt Template gives the instruction.
+      const field = f.requiredUnless && raw[f.requiredUnless] ? { ...f, required: false } : f;
+      const res = parseFieldInput(field, raw[f.key]);
       if (!res.ok) {
         errorEls.get(f.key).textContent = fieldErrorText(res.code, { reason: res.reason ?? '' });
         ok = false;
@@ -3296,7 +3343,7 @@ function nodePanel(a, node) {
     basic.map(fieldControl),
     act?.type === 'core.rss' ? rssMemoryBlock(a, node) : null,
     act?.type === 'ai.process' ? modelPromptBlock(a, node, controls) : null,
-    act?.type === 'context.voice' ? voicePresetBlock(a, node, saveNode) : null,
+    PRESET_KINDS[act?.type] ? presetBlock(a, node, saveNode) : null,
     dataBlock,
     h(
       'details',

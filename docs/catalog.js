@@ -346,6 +346,12 @@ export const SERVICES = {
       ]
     ),
   },
+  prompt: {
+    name: tr('Шаблон инструкции', 'Prompt template'),
+    icon: 'PT',
+    color: '#7c3aed',
+    auth: false,
+  },
   voice: { name: tr('Голос бренда', 'Brand voice'), icon: 'BV', color: '#a855f7', auth: false },
   rss: { name: tr('RSS-лента', 'RSS feed'), icon: 'RSS', color: '#f97316', auth: false },
   webhook: {
@@ -867,6 +873,7 @@ export const ACTIONS = {
         key: 'instruction',
         type: 'textarea',
         required: true,
+        requiredUnless: 'prompt',
         basic: true,
         acceptsData: true,
         label: tr('Что сделать', 'Instruction'),
@@ -877,6 +884,17 @@ export const ACTIONS = {
         help: tr(
           'Например: «Перескажи по-русски в 2–3 предложениях». Если шаг выполняется для каждой записи, ИИ сам вернёт заголовок и текст — в следующем шаге они будут в «Готовых постах».',
           'E.g. “Summarise in 2–3 sentences”. Run for each item, the AI returns a title and a text — the next step has them in “Ready-made posts”.'
+        ),
+      },
+      {
+        key: 'prompt',
+        type: 'prompt',
+        required: false,
+        basic: true,
+        label: tr('Шаблон инструкции', 'Prompt template'),
+        help: tr(
+          'Инструкция из шага «Шаблон инструкции», подключённого стрелкой. Текст в поле «Что сделать» добавится после неё.',
+          'The instruction from a linked “Prompt template” step. Text in “What to do” is added after it.'
         ),
       },
       {
@@ -945,8 +963,8 @@ export const ACTIONS = {
         sources: [],
       },
       summary: tr(
-        `ИИ выполнил бы «${clip(c.instruction, 60)}»${c.readLinks ? ', прочитав статьи по ссылкам' : ''}. В демо модель не вызывается.`,
-        `AI would do “${clip(c.instruction, 60)}”${c.readLinks ? ', reading the linked articles' : ''}. The model is not called in the demo.`
+        `ИИ выполнил бы «${clip(c.instruction || c.prompt?.name, 60)}»${c.readLinks ? ', прочитав статьи по ссылкам' : ''}. В демо модель не вызывается.`,
+        `AI would do “${clip(c.instruction || c.prompt?.name, 60)}”${c.readLinks ? ', reading the linked articles' : ''}. The model is not called in the demo.`
       ),
     }),
   },
@@ -1691,6 +1709,78 @@ export const ACTIONS = {
       summary: tr(
         `Голос «${c.name ?? ''}» готов для шагов ИИ. Внешних запросов нет.`,
         `Voice “${c.name ?? ''}” is ready for AI steps. No external calls.`
+      ),
+    }),
+  },
+  'context.prompt': {
+    type: 'context.prompt',
+    service: 'prompt',
+    kind: 'context',
+    // Its variables may come from each item of a list: filled in the AI step, per item.
+    itemVars: true,
+    needs: tr(
+      'текст инструкции с данными прошлых шагов',
+      'an instruction with data from earlier steps'
+    ),
+    gives: tr(
+      'инструкцию для шагов ИИ, к которым подключён',
+      'an instruction for the AI steps it is linked to'
+    ),
+    name: tr('Шаблон инструкции', 'Prompt template'),
+    desc: tr(
+      'Инструкция для ИИ с данными прошлых шагов. Сохраните её в библиотеку и используйте в других сценариях; версии не меняют работающий сценарий.',
+      'An instruction for the AI with data from earlier steps. Save it to the library and reuse it; new versions never change a working scenario.'
+    ),
+    keywords: 'шаблон инструкции промпт prompt template инструкция для ии переменные контекст',
+    fields: [
+      {
+        key: 'name',
+        type: 'text',
+        required: true,
+        basic: true,
+        label: tr('Название шаблона', 'Template name'),
+        placeholder: tr('Например: Пост из статьи', 'E.g.: Post from an article'),
+      },
+      {
+        key: 'template',
+        type: 'textarea',
+        required: true,
+        basic: true,
+        acceptsData: true,
+        label: tr('Инструкция', 'Instruction'),
+        placeholder: tr(
+          'Перескажи статью «{заголовок}» в 2–3 предложениях для канала о дизайне.',
+          'Retell the article “{title}” in 2–3 sentences for a design channel.'
+        ),
+        help: tr(
+          'Данные вставляются кнопкой «+ Данные»; в шаге ИИ они заполнятся для каждой записи.',
+          'Insert data with “+ Data”; the AI step fills it in for every item.'
+        ),
+      },
+      {
+        key: 'description',
+        type: 'text',
+        required: false,
+        basic: false,
+        label: tr('Описание', 'Description'),
+        placeholder: tr('Для чего этот шаблон', 'What this template is for'),
+      },
+    ],
+    outputs: [
+      {
+        key: 'template',
+        label: tr(
+          'Инструкция (до подстановки данных)',
+          'The instruction (before data is filled in)'
+        ),
+        example: tr('Перескажи статью…', 'Retell the article…'),
+      },
+    ],
+    simulate: (c) => ({
+      output: { template: c.template ?? '', name: c.name ?? '', version: c.presetVersion ?? null },
+      summary: tr(
+        `Шаблон «${c.name ?? ''}» готов; данные подставит шаг ИИ. Внешних запросов нет.`,
+        `Template “${c.name ?? ''}” is ready; the AI step fills in the data. No external calls.`
       ),
     }),
   },
