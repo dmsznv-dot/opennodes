@@ -1,0 +1,112 @@
+name: macOS release
+on:
+  push:
+    tags: ['v*']
+    branches: ['release/v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Stable version committed in desktop package.json and Info.plist (without v)
+        required: true
+        type: string
+      publish:
+        description: Create and publish a GitHub Release after both Mac builds pass
+        default: false
+        type: boolean
+permissions:
+  contents: read
+concurrency:
+  group: macos-release-${{ github.ref }}-${{ inputs.version }}
+  cancel-in-progress: false
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      publish: ${{ steps.version.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - id: version
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync, appendFileSync } from 'node:fs';
+          const version = JSON.parse(readFileSync('apps/desktop/package.json', 'utf8')).version;
+          if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) throw new Error('A stable semantic version is required.');
+          const requested = process.env.EVENT === 'push' ? process.env.TAG.replace(/^release\//, '') : `v${process.env.INPUT_VERSION}`;
+          if (requested !== `v${version}`) throw new Error('Release tag/input must match the committed desktop version.');
+          const plist = readFileSync('apps/desktop/native/Info.plist', 'utf8');
+          if (!plist.includes(`<key>CFBundleShortVersionString</key><string>${version}</string>`)) throw new Error('Info.plist version mismatch.');
+          appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\npublish=${process.env.EVENT === 'push' || process.env.INPUT_PUBLISH === 'true'}\n`);
+          JS
+  build:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            architecture: arm64
+          - runner: macos-15-intel
+            architecture: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Verify native architecture
+        env:
+          EXPECTED_ARCH: ${{ matrix.architecture }}
+        run: node -e "if(process.arch!==process.env.EXPECTED_ARCH)throw Error('Unexpected runner architecture')"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm --filter @localflow/desktop test
+      - name: Download the bundled Node version's license
+        run: |
+          NODE_VERSION="$(node -p process.version)"
+          curl --fail --location --proto '=https' --tlsv1.2 "https://raw.githubusercontent.com/nodejs/node/${NODE_VERSION}/LICENSE" --output "$RUNNER_TEMP/NODE_LICENSE"
+          echo "NODE_LICENSE_FILE=$RUNNER_TEMP/NODE_LICENSE" >> "$GITHUB_ENV"
+      - run: pnpm build:macos
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenNodes-macOS-${{ matrix.architecture }}
+          path: build/macos/OpenNodes-macOS-${{ matrix.architecture }}.zip
+          if-no-files-found: error
+  publish:
+    needs: [prepare, build]
+    if: needs.prepare.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: OpenNodes-macOS-*
+          path: release-assets
+          merge-multiple: true
+      - name: Publish both verified archives together
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          test -s release-assets/OpenNodes-macOS-arm64.zip
+          test -s release-assets/OpenNodes-macOS-x64.zip
+          if gh release view "v$VERSION" --json isDraft --jq '.isDraft' > "$RUNNER_TEMP/release-draft"; then
+            test "$(cat "$RUNNER_TEMP/release-draft")" = true
+          else
+            gh release create "v$VERSION" --target "$GITHUB_SHA" --title "OpenNodes $VERSION" --generate-notes --draft
+          fi
+          gh release upload "v$VERSION" release-assets/OpenNodes-macOS-arm64.zip release-assets/OpenNodes-macOS-x64.zip
+          gh release edit "v$VERSION" --draft=false --latest

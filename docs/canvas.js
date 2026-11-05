@@ -148,6 +148,7 @@ export function attachCanvas(viewport, world, opts) {
     gesture = {
       kind,
       id: handle?.dataset.outHandle ?? card?.dataset.nodeId,
+      sourceHandle: handle?.dataset.portId ?? 'main',
       startX: e.clientX,
       startY: e.clientY,
       lastX: e.clientX,
@@ -175,6 +176,7 @@ export function attachCanvas(viewport, world, opts) {
       viewport.setPointerCapture?.(gesture.pointerId);
       if (gesture.kind === 'pan' || gesture.kind === 'empty') viewport.classList.add('panning');
       if (gesture.kind === 'node') opts.onNodeDragStart?.(gesture.id);
+      if (gesture.kind === 'connect') opts.onConnectStart?.(gesture.id, gesture.sourceHandle);
     }
     gesture.lastX = e.clientX;
     gesture.lastY = e.clientY;
@@ -198,11 +200,13 @@ export function attachCanvas(viewport, world, opts) {
     if (g.kind === 'node' && g.moved) opts.onNodeDragEnd?.(g.id);
     if (g.kind === 'connect') {
       opts.connectPreview?.(null, null);
-      if (g.moved) {
-        const target = document.elementFromPoint(e.clientX, e.clientY)?.closest?.('[data-node-id]')
-          ?.dataset.nodeId;
-        opts.onConnect?.(g.id, target ?? null);
+      if (g.moved && e.type === 'pointerup') {
+        const hit = document.elementFromPoint(e.clientX, e.clientY);
+        const input = hit?.closest?.('[data-in-handle]');
+        const target = input?.dataset.inHandle ?? hit?.closest?.('[data-node-id]')?.dataset.nodeId;
+        opts.onConnect?.(g.id, target ?? null, g.sourceHandle, input?.dataset.portId ?? null);
       }
+      opts.onConnectEnd?.();
     }
     if (g.kind === 'empty' && !g.moved && e.type === 'pointerup') {
       opts.onEmptyClick?.(toWorld(e.clientX, e.clientY), { x: e.clientX, y: e.clientY });

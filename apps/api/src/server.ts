@@ -108,6 +108,74 @@ const DraftGraphSchema = z.object({
   edges: z.array(WorkflowEdgeSchema).default([]),
 });
 
+/** Strict allowlists keep connection credentials and step bookkeeping out of presets. */
+const PresetNameSchema = z.string().trim().min(1).max(255);
+const VoiceConfigSchema = z
+  .object({
+    name: z.string().max(255).optional(),
+    language: z.string().max(16384).optional(),
+    audience: z.string().max(16384).optional(),
+    tone: z.string().max(16384).optional(),
+    writeLike: z.string().max(16384).optional(),
+    avoid: z.string().max(16384).optional(),
+    examples: z.string().max(16384).optional(),
+    length: z.string().max(16384).optional(),
+    terms: z.string().max(16384).optional(),
+    cta: z.string().max(16384).optional(),
+    emoji: z.string().max(16384).optional(),
+  })
+  .strict();
+const PromptConfigSchema = z
+  .object({
+    name: z.string().max(255).optional(),
+    template: z.string().max(65536).optional(),
+    description: z.string().max(16384).optional(),
+  })
+  .strict();
+const presetListSchema = (config: z.AnyZodObject) =>
+  z
+    .array(
+      z
+        .object({
+          id: z
+            .string()
+            .min(1)
+            .max(128)
+            .regex(/^[a-zA-Z0-9_-]+$/),
+          name: PresetNameSchema,
+          versions: z
+            .array(
+              z
+                .object({
+                  version: z.number().int().min(1).max(100),
+                  config,
+                  savedAt: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+                })
+                .strict()
+            )
+            .min(1)
+            .max(100)
+            .refine(
+              (versions) => versions.every((v, index) => v.version === index + 1),
+              'Preset versions must be consecutive and start at 1.'
+            ),
+        })
+        .strict()
+    )
+    .max(100)
+    .refine(
+      (presets) => new Set(presets.map((p) => p.id)).size === presets.length,
+      'Preset IDs must be unique within each library.'
+    );
+const PresetLibraryWriteSchema = z
+  .object({
+    expectedRevision: z.number().int().min(0).max(2147483646),
+    voicePresets: presetListSchema(VoiceConfigSchema),
+    promptPresets: presetListSchema(PromptConfigSchema),
+  })
+  .strict();
+const MAX_PRESET_LIBRARY_BYTES = 1024 * 1024;
+
 /** Runs that can still be stopped; finished runs keep their final status. */
 const CANCELLABLE_STATUSES = new Set(['QUEUED', 'RUNNING', 'WAITING']);
 
@@ -530,6 +598,36 @@ export class LocalFlowApiServer {
       }
       if (req.method === 'GET' && pathname === '/api/v1/catalog') {
         return respond(200, rt.execution.catalog());
+      }
+
+      // Workspace presets use the same read/edit roles as workflow context steps.
+      const presetsMatch = pathname.match(/^\/api\/v1\/workspaces\/([^/]+)\/presets$/);
+      if (presetsMatch && (req.method === 'GET' || req.method === 'PUT')) {
+        const workspaceId = presetsMatch[1]!;
+        await this.requireWorkspacePermission(
+          rt,
+          workspaceId,
+          auth.userId,
+          req.method === 'GET' ? PERMISSIONS.WORKFLOW_VIEW : PERMISSIONS.WORKFLOW_EDIT
+        );
+        if (req.method === 'GET') return respond(200, await rt.repo.getPresetLibrary(workspaceId));
+        const serialized = JSON.stringify(req.body);
+        if (!serialized || Buffer.byteLength(serialized, 'utf8') > MAX_PRESET_LIBRARY_BYTES) {
+          return respond(400, {
+            code: 'ERR_VALIDATION',
+            message: 'Preset library exceeds the 1 MiB size limit.',
+          });
+        }
+        const parsed = PresetLibraryWriteSchema.safeParse(req.body);
+        if (!parsed.success) {
+          // Do not echo rejected values, which can contain accidentally pasted secrets.
+          return respond(400, {
+            code: 'ERR_VALIDATION',
+            message:
+              'Invalid preset library. Check allowed fields, sizes and consecutive version history.',
+          });
+        }
+        return respond(200, await rt.repo.putPresetLibrary(workspaceId, parsed.data));
       }
 
       // 4c. Run history of a workspace (optionally one workflow), with steps

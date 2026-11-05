@@ -34,11 +34,11 @@
 
 ## Public demo (GitHub Pages)
 
-The demo in `docs/` follows a **simple-first** flow: *pick a task → connect a service → fill 2–5 clear fields → test → turn on*.
+The demo in `docs/` follows a **simple-first** flow: _pick a task → connect a service → fill 2–5 clear fields → test → turn on_.
 
 - **Home, Templates, Connections, History** — the graph editor is the second, advanced way in.
-- **Readable steps**: actions instead of primitives ("Send a Telegram message"), status chips (*Needs setup / Ready / Error / Disabled*), data from earlier steps inserted as readable chips (`{Step 1: Message text}`) instead of raw `{{ $nodes… }}` expressions.
-- **Honest simulation**: “Test” runs in the browser, says what *would* be sent, and fails with a clear reason when a step is not set up. Activation asks for confirmation and lists external actions.
+- **Readable steps**: actions instead of primitives ("Send a Telegram message"), status chips (_Needs setup / Ready / Error / Disabled_), data from earlier steps inserted as readable chips (`{Step 1: Message text}`) instead of raw `{{ $nodes… }}` expressions.
+- **Honest simulation**: “Test” runs in the browser, says what _would_ be sent, and fails with a clear reason when a step is not set up. Activation asks for confirmation and lists external actions.
 - **RU / EN** switch available everywhere (including the first-run screen), light/dark/system theme, mobile layout with an overlay settings panel.
 - **First-run tour** (4 steps, skip/resume/restart) built around a safe template with no external actions.
 - **Developer mode** (profile menu) reveals node types/IDs, raw config JSON, graph checksum and manual connections with cycle validation.
@@ -47,7 +47,7 @@ Open it locally with any static server, e.g. `python3 -m http.server --directory
 
 The **same editor is the real web app**: served by the OpenNodes web server (`apps/web`), it
 switches to live mode (`/config.js`) — sign-in, data on the server, real tests and runs. See
-*Run on this computer* below.
+_Run on this computer_ below.
 
 ---
 
@@ -81,7 +81,7 @@ opennodes/
 
 ## Quick Start
 
-### macOS desktop alpha
+### macOS desktop alpha · 0.3.0
 
 The desktop app uses native AppKit menus, a window and a menu-bar item. The editor
 runs inside WKWebView with the real local engine and embedded database. Packaged
@@ -102,6 +102,20 @@ use **OpenNodes → Quit** to stop them. Data and the encryption key live in
 `~/Library/Application Support/OpenNodes`, separately from the app. Stop the app
 before backing up that entire directory. The existing `pnpm backup` command backs
 up the CLI installation's `.data`, not the desktop directory.
+
+The **Update** button, immediately before the language switch, checks stable GitHub
+Releases for this Mac's architecture. It downloads and verifies the archive, saves
+pending edits again, replaces the app and restarts it. Data stays in Application
+Support. Future versions are published by pushing a matching `vX.Y.Z` tag or
+`release/vX.Y.Z` branch; the
+release workflow builds and verifies both Apple Silicon and Intel archives before
+publishing either. Install 0.3.0 once to receive later versions in the app.
+
+Nodes now expose typed, colored ports. Hover or focus a port to see its meaning;
+starting a connection softly highlights compatible inputs. Named connections bind
+the selected source output to the exact target field. Voice and prompt preset
+libraries live in the workspace database, with version history and conflict-safe
+browser import.
 
 This is an **ad-hoc signed, unnotarized alpha**, not an App Store release.
 The UI is the existing editor, not a full SwiftUI rewrite. See
@@ -132,6 +146,7 @@ Open http://localhost:3000. The first visit asks you to create the owner account
 environment.
 
 What the web app adds to the demo editor, in live mode:
+
 - **Sign-in and first-run setup**; drafts are saved to the server as you edit. The browser
   session is an `HttpOnly` cookie (page scripts never see the token) and every change carries a
   CSRF token (double submit). API clients use `Authorization: Bearer <token>` from
@@ -186,9 +201,10 @@ a worker executes it. Poll `GET /executions/:id` or the event stream for the res
 - **`EXECUTION_MODE=embedded`** (default, no Redis): the API runs an in-process queue and worker — the same code, for local runs and tests.
 
 Guarantees, in both modes:
+
 - **Delays are real.** Up to `INLINE_DELAY_MAX_MS` (5 s) the worker just waits; longer delays pause the run (`WAITING`), free the worker and resume on time — also after a restart.
 - **A run is executed once.** Workers atomically claim a run in the database, so a job delivered twice (retry, recovery) does nothing the second time. Runs are never blindly retried, because steps may have side effects.
-- **…but a step's effect outside is not exactly-once.** If a worker dies *while* a step is sending something (a message, an email, an HTTP call), recovery runs that step again, because the engine cannot know whether the other side got it. Make such steps safe to repeat where it matters (an idempotency key in an HTTP call, RSS steps remember what they posted).
+- **…but a step's effect outside is not exactly-once.** If a worker dies _while_ a step is sending something (a message, an email, an HTTP call), recovery runs that step again, because the engine cannot know whether the other side got it. Make such steps safe to repeat where it matters (an idempotency key in an HTTP call, RSS steps remember what they posted).
 - **Crash recovery.** A running run heartbeats; if its worker dies, the run is re-queued and resumes after the last finished step, on the same branch.
 - **Cancel works across processes.** `POST /executions/:id/cancel` stops a queued or waiting run, and a running one between steps.
 
@@ -227,25 +243,25 @@ article, and the bot publishes **one post per article** — picture, bold title,
   (`posts`, `postsShort`, `postsWithLinks`, `digest`, `titleLinks`, `numbered`, `bullets`, `titles`,
   `texts`, `links`, `images`); the first item (`firstTitle`, `firstSummary`, `firstText`, `link`,
   `image`, `firstDate`); `count`. CDATA and HTML entities are decoded.
-- **For each item.** Sending, AI and text steps can run once per item of a list (*How to run the
-  step → For each item*): `{{ $item.title }}`, `{{ $item.link }}`, `{{ $item.image }}`… are that
+- **For each item.** Sending, AI and text steps can run once per item of a list (_How to run the
+  step → For each item_): `{{ $item.title }}`, `{{ $item.link }}`, `{{ $item.image }}`… are that
   item's fields. The output keeps every result: `items` (each with its `result`, so the next step can
   go on per item — AI per article, then a post per article), `results`, `count`. At most
   `forEachLimit` items per run (default 10, max 50); messenger posts are spaced out (Telegram 1.5 s).
 - **Formatting.** In “Auto” (default) everyday Markdown — `**bold**`, `*italic*`, `[link](url)`,
-  `# heading`, `- list`, `> quote`, code — in the text *and in data from AI steps* becomes Telegram
+  `# heading`, `- list`, `> quote`, code — in the text _and in data from AI steps_ becomes Telegram
   formatting (sent as HTML, so stray `*`, `<` or `&` in data never break a post). “None” sends the
   characters as typed; HTML stays for experts. Slack gets its own markup, Discord reads Markdown as
   is, a plain email with Markdown is sent formatted.
 - **Picture + text = one post:** up to 1024 characters it is a photo with a caption; longer, the
   picture is shown above the text (large link preview) — never a separate message.
-  *Send a photo or file* sends a picture or document by link.
+  _Send a photo or file_ sends a picture or document by link.
 - **Data picker.** “+ Data” (or `{`) opens a window with categories: ready-made posts (title + text,
-  + link, + picture, styled, short — 60+ per list), the current item, each earlier step's data and
-  blocks made of it, date and time, formatting and emoji, and “How it works”. Cards show a live
-  preview; a field for a post shows how the post will look.
+  - link, + picture, styled, short — 60+ per list), the current item, each earlier step's data and
+    blocks made of it, date and time, formatting and emoji, and “How it works”. Cards show a live
+    preview; a field for a post shows how the post will look.
 - The bot must be an **admin of the channel** allowed to post; use `@channel` or the `-100…` id.
-- **AI: process data by instruction** takes *data* (e.g. the RSS list) and *what to do with it*. With
+- **AI: process data by instruction** takes _data_ (e.g. the RSS list) and _what to do with it_. With
   "Open the links and read the articles" the server fetches the linked pages (SSRF-safe, up to 10),
   keeps the article text without menus and scripts, and gives it to the model — a model cannot open
   links itself. `sources` in the output shows which pages were read; failed ones are noted, not fatal.
@@ -274,7 +290,7 @@ OpenNodes does not run models itself. It calls a model server you run, over the
 OpenAI-compatible API, so any model you downloaded can be a step in a workflow.
 
 1. Start a server with the model you want:
-   - **LM Studio:** download a model from Hugging Face in the app → *Developer → Start server* (`http://localhost:1234/v1`).
+   - **LM Studio:** download a model from Hugging Face in the app → _Developer → Start server_ (`http://localhost:1234/v1`).
    - **Ollama:** `ollama pull hf.co/<user>/<repo>:Q4_K_M` (any GGUF on Hugging Face), then use `http://localhost:11434/v1`.
    - **llama.cpp:** `llama-server -hf <user>/<repo>:Q4_K_M --port 8080` (`http://localhost:8080/v1`).
    - Also works: Jan, vLLM, LocalAI.

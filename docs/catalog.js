@@ -416,6 +416,12 @@ export const SERVICES = {
     auth: false,
   },
   voice: { name: tr('Голос бренда', 'Brand voice'), icon: 'BV', color: '#a855f7', auth: false },
+  model: {
+    name: tr('Настройки модели', 'Model settings'),
+    icon: 'MD',
+    color: '#0d9488',
+    auth: false,
+  },
   rss: { name: tr('RSS-лента', 'RSS feed'), icon: 'RSS', color: '#f97316', auth: false },
   webhook: {
     name: tr('Вебхук / форма', 'Webhook / form'),
@@ -1639,6 +1645,66 @@ export const ACTIONS = {
         `Из ${clip(c.feedUrl, 50)} получили бы до ${c.maxItems} записей (пример: 3)`,
         `Would fetch up to ${c.maxItems} items from ${clip(c.feedUrl, 50)} (example: 3)`
       ),
+    }),
+  },
+  'context.model': {
+    type: 'context.model',
+    service: 'model',
+    kind: 'context',
+    contextField: 'model',
+    noInputs: true,
+    name: tr('Настройки модели', 'Model settings'),
+    desc: tr(
+      'Модель и параметры генерации для шагов ИИ.',
+      'Model and generation settings for AI steps.'
+    ),
+    needs: tr('название модели', 'a model name'),
+    gives: tr('настройки для подключённых шагов ИИ', 'settings for connected AI steps'),
+    keywords: 'модель параметры температура model settings temperature tokens',
+    fields: [
+      {
+        key: 'name',
+        type: 'text',
+        required: false,
+        basic: true,
+        label: tr('Название настроек', 'Settings name'),
+      },
+      {
+        key: 'model',
+        type: 'text',
+        required: true,
+        basic: true,
+        label: tr('Модель', 'Model'),
+        placeholder: 'gpt-4o-mini',
+      },
+      {
+        key: 'temperature',
+        type: 'number',
+        required: false,
+        basic: true,
+        label: tr('Температура', 'Temperature'),
+      },
+      {
+        key: 'maxTokens',
+        type: 'number',
+        required: false,
+        basic: false,
+        label: tr('Лимит токенов ответа', 'Max output tokens'),
+      },
+    ],
+    outputs: [
+      { key: 'model', label: tr('Настройки модели', 'Model settings'), example: 'gpt-4o-mini' },
+    ],
+    simulate: (c) => ({
+      output: {
+        model: c.model,
+        name: c.name ?? '',
+        version: c.presetVersion ?? null,
+        ...(c.temperature !== undefined &&
+          c.temperature !== '' && { temperature: Number(c.temperature) }),
+        ...(c.maxTokens !== undefined && c.maxTokens !== '' && { maxTokens: Number(c.maxTokens) }),
+      },
+      summary: tr(`Модель «${c.model ?? ''}» готова.`, `Model “${c.model ?? ''}” is ready.`),
     }),
   },
   'context.voice': {

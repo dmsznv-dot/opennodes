@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
+import { LocalFlowError } from '@localflow/shared';
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import {
   credentials,
@@ -9,6 +11,8 @@ import {
   workflowVersions,
   workflows,
   workspaces,
+  workspacePresetLibraries,
+  type Preset,
   type DatabaseInstance,
 } from '@localflow/db';
 import { AlreadyBootstrappedError, type EncryptedData, type Role } from '@localflow/auth';
@@ -70,6 +74,12 @@ export interface StoredCredential {
   maskedHint: string | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface StoredPresetLibrary {
+  revision: number;
+  voicePresets: Preset[];
+  promptPresets: Preset[];
 }
 
 type Db = any; // Drizzle's pg and PGlite clients share this query surface
@@ -184,6 +194,78 @@ export class ApiRepository {
         target: [memberships.userId, memberships.workspaceId],
         set: { role, updatedAt: new Date() },
       });
+  }
+
+  // ── Workspace preset libraries ───────────────────────────────────────
+
+  public async getPresetLibrary(workspaceId: string): Promise<StoredPresetLibrary> {
+    const [row] = await this.db
+      .select()
+      .from(workspacePresetLibraries)
+      .where(eq(workspacePresetLibraries.workspaceId, workspaceId))
+      .limit(1);
+    return row
+      ? { revision: row.revision, voicePresets: row.voicePresets, promptPresets: row.promptPresets }
+      : { revision: 0, voicePresets: [], promptPresets: [] };
+  }
+
+  /**
+   * Lock before examining history so CAS and immutability are checked against the
+   * same committed snapshot. The insert also serializes simultaneous first saves.
+   */
+  public async putPresetLibrary(
+    workspaceId: string,
+    input: Omit<StoredPresetLibrary, 'revision'> & { expectedRevision: number }
+  ): Promise<StoredPresetLibrary> {
+    return this.db.transaction(async (tx: Db) => {
+      await tx.insert(workspacePresetLibraries).values({ workspaceId }).onConflictDoNothing();
+      const [current] = await tx
+        .select()
+        .from(workspacePresetLibraries)
+        .where(eq(workspacePresetLibraries.workspaceId, workspaceId))
+        .for('update');
+      if (current.revision !== input.expectedRevision) {
+        throw new LocalFlowError(
+          'The preset library changed elsewhere. Reload it before saving again.',
+          'ERR_PRESET_REVISION_CONFLICT',
+          409,
+          { revision: current.revision }
+        );
+      }
+      for (const kind of ['voicePresets', 'promptPresets'] as const) {
+        const nextById = new Map(input[kind].map((preset) => [preset.id, preset]));
+        for (const previous of current[kind] as Preset[]) {
+          const next = nextById.get(previous.id);
+          if (
+            !next ||
+            previous.versions.some(
+              (version, index) => !isDeepStrictEqual(version, next.versions[index])
+            )
+          ) {
+            throw new LocalFlowError(
+              'Saved preset versions cannot be changed or removed. Append a new version instead.',
+              'ERR_PRESET_HISTORY_IMMUTABLE',
+              409
+            );
+          }
+        }
+      }
+      const result = {
+        revision: current.revision + 1,
+        voicePresets: input.voicePresets,
+        promptPresets: input.promptPresets,
+      };
+      await tx
+        .update(workspacePresetLibraries)
+        .set({ ...result, updatedAt: new Date() })
+        .where(
+          and(
+            eq(workspacePresetLibraries.workspaceId, workspaceId),
+            eq(workspacePresetLibraries.revision, input.expectedRevision)
+          )
+        );
+      return result;
+    });
   }
 
   // ── Credentials ──────────────────────────────────────────────────────

@@ -11,13 +11,17 @@ const output = join(root, 'build', 'macos');
 const app = join(output, 'OpenNodes.app');
 const contents = join(app, 'Contents');
 const resources = join(contents, 'Resources');
+const version = JSON.parse(await readFile(join(root, 'apps/desktop/package.json'), 'utf8')).version;
+if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) throw new Error('Desktop version must be a stable semantic version.');
+const plist = await readFile(join(root, 'apps/desktop/native/Info.plist'), 'utf8');
+if (!plist.includes(`<key>CFBundleShortVersionString</key><string>${version}</string>`)) throw new Error('Desktop package and Info.plist versions must match.');
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { cwd: root, stdio: 'inherit', ...options });
   if (result.error || result.status !== 0) throw result.error ?? new Error(`${command} exited ${result.status}`);
 }
 
 // Bundle only reproducible build products; never copy .data, keys or the workspace.
-run('pnpm', ['build']);
+run(process.execPath, [join(root, 'node_modules/turbo/bin/turbo'), 'run', 'build']);
 await rm(app, { recursive: true, force: true });
 await mkdir(join(contents, 'MacOS'), { recursive: true });
 await mkdir(resources, { recursive: true });
@@ -28,7 +32,7 @@ await cp(join(root, 'docs'), join(resources, 'editor'), {
 });
 await cp(process.execPath, join(resources, 'node'));
 await cp(join(root, 'apps/desktop/native/Info.plist'), join(contents, 'Info.plist'));
-await writeFile(join(resources, 'BUILD.txt'), `OpenNodes macOS alpha 0.2.0\nNode ${process.version}\nArchitecture: ${process.arch}\nProduction packages: ${packages}\n`);
+await writeFile(join(resources, 'BUILD.txt'), `OpenNodes macOS alpha ${version}\nNode ${process.version}\nArchitecture: ${process.arch}\nProduction packages: ${packages}\n`);
 
 const iconset = join(output, 'AppIcon.iconset');
 await mkdir(iconset, { recursive: true });
@@ -56,8 +60,15 @@ header.writeUInt32BE(8 + chunks.reduce((size, chunk) => size + chunk.length, 0),
 await writeFile(join(resources, 'AppIcon.icns'), Buffer.concat([header, ...chunks]));
 run('swiftc', ['-swift-version', '5', '-O', '-module-cache-path', join(output, 'ModuleCache'),
   '-target', `${process.arch === 'arm64' ? 'arm64' : 'x86_64'}-apple-macosx13.0`,
-  '-framework', 'AppKit', '-framework', 'WebKit',
+  '-framework', 'AppKit', '-framework', 'WebKit', '-framework', 'Security',
+  join(root, 'apps/desktop/native/UpdateSupport.swift'), join(root, 'apps/desktop/native/Updater.swift'),
   join(root, 'apps/desktop/native/main.swift'), '-o', join(contents, 'MacOS/OpenNodes')]);
+
+run('swiftc', ['-swift-version', '5', '-O', '-module-cache-path', join(output, 'ModuleCache'),
+  '-target', `${process.arch === 'arm64' ? 'arm64' : 'x86_64'}-apple-macosx13.0`,
+  '-framework', 'AppKit', '-framework', 'Security',
+  join(root, 'apps/desktop/native/UpdateSupport.swift'), join(root, 'apps/desktop/native/update-helper.swift'),
+  '-o', join(resources, 'OpenNodesUpdateHelper')]);
 
 // Node is redistributed with its full upstream license; dependency licenses stay in
 // their packages. A release build must never quietly omit the runtime's license.
@@ -78,5 +89,6 @@ run('codesign', ['--force', '--deep', '--sign', '-', app]);
 run('codesign', ['--verify', '--deep', '--strict', app]);
 const zip = join(output, `OpenNodes-macOS-${process.arch}.zip`);
 await rm(zip, { force: true });
-run('ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', app, zip]);
+run('ditto', ['-c', '-k', '--norsrc', '--noextattr', '--keepParent', app, zip]);
+run(process.execPath, [join(root, 'scripts/validate-macos-update.mjs'), zip, app, version]);
 console.log(`\nBuilt ${app}\nArchive: ${zip}`);

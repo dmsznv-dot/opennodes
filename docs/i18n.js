@@ -1,3 +1,4 @@
+import { MESSAGES } from './messages-v3.js';
 /**
  * OpenNodes demo — central RU/EN dictionary.
  * UI chrome uses message keys below; catalog content (services, actions, templates)
@@ -1121,8 +1122,7 @@ const LIVE = {
     'common.error': 'Ошибка',
     'auth.loginTitle': 'Вход в OpenNodes',
     'auth.setupTitle': 'Первый запуск',
-    'auth.setupText':
-      'Создайте аккаунт для управления этой установкой OpenNodes.',
+    'auth.setupText': 'Создайте аккаунт для управления этой установкой OpenNodes.',
     'auth.email': 'Почта',
     'auth.password': 'Пароль',
     'auth.passwordHint': 'Не короче 8 символов.',
@@ -1225,8 +1225,7 @@ const LIVE = {
     'common.error': 'Error',
     'auth.loginTitle': 'Sign in to OpenNodes',
     'auth.setupTitle': 'First start',
-    'auth.setupText':
-      'Create an account to manage this OpenNodes installation.',
+    'auth.setupText': 'Create an account to manage this OpenNodes installation.',
     'auth.email': 'Email',
     'auth.password': 'Password',
     'auth.passwordHint': 'At least 8 characters.',
@@ -1329,7 +1328,8 @@ export function getLocale() {
 
 export function t(key, params = {}) {
   const live = liveMode ? (LIVE[locale][key] ?? LIVE.en[key]) : undefined;
-  const template = live ?? DICT[locale][key] ?? DICT.en[key] ?? key;
+  const template =
+    MESSAGES[locale]?.[key] ?? MESSAGES.en[key] ?? live ?? DICT[locale][key] ?? DICT.en[key] ?? key;
   return template.replace(/\{(\w+)\}/g, (m, name) => (name in params ? String(params[name]) : m));
 }
 

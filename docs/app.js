@@ -22,6 +22,15 @@ import * as live from './live.js';
 import { tokenField, parseExpr, buildExpr } from './tokens.js';
 import { attachCanvas, isTyping } from './canvas.js';
 import {
+  portsFor,
+  resolvedHandles,
+  connectionProblem,
+  categoryOf,
+  portPosition,
+  boundField,
+} from './ports.js';
+import { createDesktopUpdates } from './desktop-updates.js';
+import {
   tagCategories,
   listChoices,
   listSource,
@@ -106,6 +115,7 @@ function defaultStore() {
     hints: {},
     voicePresets: [],
     promptPresets: [],
+    presetWorkspaceId: null,
   };
 }
 
@@ -120,6 +130,7 @@ function loadStore() {
           settings: { ...defaultStore().settings, ...data.settings },
           onboarding: data.onboarding ?? defaultStore().onboarding,
           hints: data.hints ?? {},
+          presetWorkspaceId: data.presetWorkspaceId ?? null,
           voicePresets: Array.isArray(data.voicePresets) ? data.voicePresets : [],
           promptPresets: Array.isArray(data.promptPresets) ? data.promptPresets : [],
         };
@@ -176,6 +187,25 @@ const ui = {
 // ── Bootstrapping ─────────────────────────────────────────────────────────────
 
 const $ = (id) => document.getElementById(id);
+const desktopUpdates = createDesktopUpdates({
+  openModal,
+  flush: async () => {
+    if (ui.panelDirty && ui.savePanel && !ui.savePanel()) throw new Error('Unsaved step');
+    if (live.isLive && live.session.workspace) await live.flushSync(store, showApiError);
+  },
+});
+window.addEventListener('opennodes:presets', () => {
+  for (const el of document.querySelectorAll('[data-preset-sync]')) {
+    el.textContent = t(`preset.${live.presetState.status}`);
+    el.classList.toggle('sync-error', live.presetState.status === 'error');
+  }
+  if (live.presetState.status === 'saved') {
+    try {
+      const { automations, connections, runs, ...prefs } = store;
+      localStorage.setItem(STORE_KEY, JSON.stringify(prefs));
+    } catch {}
+  }
+});
 
 function applySettings() {
   setLocale(store.settings.lang ?? detectLocale(navigator.languages ?? [navigator.language]));
@@ -329,7 +359,7 @@ function renderHeader() {
         )
       )
     ),
-    h('div', { class: 'header-right' }, langSwitch(), profileButton())
+    h('div', { class: 'header-right' }, desktopUpdates.button(), langSwitch(), profileButton())
   );
 }
 
@@ -1822,13 +1852,14 @@ function saveView(id, view) {
 }
 
 function edgePath(a, cardH, e) {
-  const s = a.nodes.find((n) => n.id === e.source)?.position;
-  const d = a.nodes.find((n) => n.id === e.target)?.position;
-  if (!s || !d) return null;
-  const x1 = s.x + CARD_W / 2;
-  const y1 = s.y + cardH;
-  const x2 = d.x + CARD_W / 2;
-  const y2 = d.y;
+  const source = a.nodes.find((n) => n.id === e.source);
+  const target = a.nodes.find((n) => n.id === e.target);
+  if (!source || !target) return null;
+  const handles = resolvedHandles(a, e);
+  const from = portPosition(source, 'output', handles.sourceHandle, CARD_W, cardH);
+  const to = portPosition(target, 'input', handles.targetHandle, CARD_W, cardH);
+  const { x: x1, y: y1 } = from;
+  const { x: x2, y: y2 } = to;
   const bend = Math.max(40, Math.abs(y2 - y1) / 2);
   return {
     d: `M ${x1} ${y1} C ${x1} ${y1 + bend}, ${x2} ${y2 - bend}, ${x2} ${y2}`,
@@ -1861,20 +1892,15 @@ function canvasView(a) {
       // A context step (a brand voice) gives settings, not data: a dashed line, no “insert”.
       const fromAct = ACTIONS[a.nodes.find((n) => n.id === e.source)?.action];
       const context = fromAct?.kind === 'context';
-      // Said in words too, not only by colour: “voice”, “template”.
-      if (context)
-        edgeGroup.append(
-          svg(
-            'text',
-            { x: p.mid.x, y: p.mid.y - 6, class: 'edge-label', 'text-anchor': 'middle' },
-            t(`cv.ctxLabel.${fromAct.contextField}`)
-          )
-        );
       const selected = ui.selectedEdgeId === e.id;
       const flowing = ui.runView?.automationId === a.id && ui.runView.flowing?.includes(e.id);
       edgeGroup.append(
         svg('path', {
           d: p.d,
+          'data-port-type':
+            portsFor(a.nodes.find((n) => n.id === e.source)).outputs.find(
+              (out) => out.id === resolvedHandles(a, e).sourceHandle
+            )?.type ?? 'json',
           class: [
             'edge',
             context && 'edge-context',
@@ -1895,7 +1921,7 @@ function canvasView(a) {
           },
         })
       );
-      if (context) continue;
+      if (context || !isFlowEdge(a, e)) continue;
       edgePluses.append(
         h(
           'button',
@@ -1933,8 +1959,11 @@ function canvasView(a) {
     if (!els) return;
     els.card.style.left = `${n.position.x}px`;
     els.card.style.top = `${n.position.y}px`;
-    els.handle.style.left = `${n.position.x + CARD_W / 2 - 7}px`;
-    els.handle.style.top = `${n.position.y + cardH - 7}px`;
+    for (const { element, direction, port } of els.ports) {
+      const pt = portPosition(n, direction, port.id, CARD_W, cardH);
+      element.style.left = `${pt.x - 14}px`;
+      element.style.top = `${pt.y - 14}px`;
+    }
     if (els.plus) {
       els.plus.style.left = `${n.position.x + CARD_W / 2 - 16}px`;
       els.plus.style.top = `${n.position.y + cardH + 20}px`;
@@ -1942,6 +1971,23 @@ function canvasView(a) {
   };
 
   const world = h('div', { class: 'canvas-world' }, edgeLayer, edgePluses);
+  const clearConnections = () => {
+    ui.portConnection = null;
+    for (const el of world.querySelectorAll('.node-port'))
+      el.classList.remove('port-compatible', 'port-incompatible', 'port-source');
+  };
+  const showConnections = (source, handle) => {
+    clearConnections();
+    ui.portConnection = { source, handle };
+    for (const el of world.querySelectorAll('[data-in-handle]')) {
+      const good = !connectionProblem(a, source, handle, el.dataset.inHandle, el.dataset.portId);
+      el.classList.add(good ? 'port-compatible' : 'port-incompatible');
+    }
+    for (const el of world.querySelectorAll('[data-out-handle]'))
+      if (el.dataset.outHandle === source && el.dataset.portId === handle)
+        el.classList.add('port-source');
+  };
+
   for (const n of a.nodes) {
     const act = ACTIONS[n.action];
     const state = nodeState(a, n, store.connections);
@@ -1951,6 +1997,7 @@ function canvasView(a) {
         type: 'button',
         class: [
           'node-card',
+          `category-${categoryOf(n)}`,
           ui.panelNodeId === n.id && 'selected',
           `ns-${state}`,
           act?.kind === 'context' && 'node-context',
@@ -1992,12 +2039,36 @@ function canvasView(a) {
       })(),
       store.settings.devMode ? h('span', { class: 'node-dev' }, `${act?.type} · ${n.id}`) : null
     );
-    const handle = h('div', {
-      class: 'out-handle',
-      'data-out-handle': n.id,
-      title: t('cv.dragToConnect'),
-      'data-hint': 'connect',
-    });
+    const declared = portsFor(n);
+    const ports = ['input', 'output'].flatMap((direction) =>
+      declared[direction === 'input' ? 'inputs' : 'outputs'].map((port) => {
+        const text = `${t(`port.${direction}`)} · ${L(port.name)}`;
+        const element = h(
+          'button',
+          {
+            type: 'button',
+            class: 'node-port',
+            [`data-${direction === 'input' ? 'in' : 'out'}-handle`]: n.id,
+            'data-port-id': port.id,
+            'data-port-type': port.type,
+            'data-tooltip': text,
+            'aria-label': text,
+            onclick: () => {
+              if (direction === 'output') {
+                showConnections(n.id, port.id);
+                toast(t('port.connecting'));
+              } else if (ui.portConnection) {
+                const { source, handle } = ui.portConnection;
+                clearConnections();
+                connectSteps(a, source, n.id, handle, port.id);
+              }
+            },
+          },
+          h('span', { class: 'port-dot', 'aria-hidden': 'true' })
+        );
+        return { element, direction, port };
+      })
+    );
     const plus = leaves.includes(n)
       ? h(
           'button',
@@ -2011,8 +2082,8 @@ function canvasView(a) {
           '＋'
         )
       : null;
-    cardEls.set(n.id, { card, handle, plus });
-    world.append(...[card, handle, plus].filter(Boolean));
+    cardEls.set(n.id, { card, ports, plus });
+    world.append(...[card, ...ports.map((p) => p.element), plus].filter(Boolean));
     place(n);
   }
   drawEdges();
@@ -2100,6 +2171,9 @@ function canvasView(a) {
   );
 
   const viewport = h('div', { class: 'canvas', tabindex: '-1' }, world, toolbar);
+  viewport.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') clearConnections();
+  });
   viewport.addEventListener('canvas:view', (e) => {
     zoomLabel.textContent = `${Math.round(e.detail.z * 100)}%`;
   });
@@ -2149,35 +2223,105 @@ function canvasView(a) {
       connectPreview: (from, to) => {
         preview.setAttribute('d', from && to ? `M ${from.x} ${from.y} L ${to.x} ${to.y}` : '');
       },
-      onConnect: (source, target) => connectSteps(a, source, target),
+      onConnectStart: showConnections,
+      onConnectEnd: clearConnections,
+      onConnect: (source, target, sourceHandle, targetHandle) =>
+        connectSteps(a, source, target, sourceHandle, targetHandle),
     });
   };
   return viewport;
 }
 
 /** A connection drawn from one step's dot to another step. */
-function connectSteps(a, source, target) {
-  if (!target || target === source) return;
-  const problem = linkProblem(a, source, target);
-  if (problem) {
-    toast(t(problem.key, problem.params), 'error');
-    return;
-  }
-  if (a.edges.some((e) => e.source === source && e.target === target)) return;
-  const edges = [...a.edges, { id: uid('e'), source, target }];
-  const check = validateDag(a.nodes, edges);
-  if (!check.valid) {
-    toast(
-      check.code === 'ERR_CYCLIC_DEPENDENCY_DETECTED' ? t('cv.cycle') : t(check.messageKey),
-      'error'
+function connectSteps(a, source, target, sourceHandle = 'main', targetHandle = null) {
+  if (!target) return;
+  if (ui.panelDirty && ui.savePanel && !ui.savePanel()) return;
+  if (!targetHandle) {
+    const candidates = portsFor(a.nodes.find((n) => n.id === target)).inputs.filter(
+      (p) => !connectionProblem(a, source, sourceHandle, target, p.id)
     );
+    if (candidates.length !== 1) {
+      toast(t('port.choose'));
+      return;
+    }
+    targetHandle = candidates[0].id;
+  }
+  const problem = connectionProblem(a, source, sourceHandle, target, targetHandle);
+  if (problem) {
+    toast(t(problem), 'error');
     return;
   }
   checkpoint(a);
-  a.edges = edges;
-  linkContext(a, source, target);
+  a.edges.push({ id: uid('e'), source, target, sourceHandle, targetHandle });
+  const to = a.nodes.find((n) => n.id === target);
+  const input = portsFor(to).inputs.find((p) => p.id === targetHandle);
+  if (input?.binding)
+    to.config = { ...to.config, [input.binding]: boundField(a, to, input.binding).expression };
+  else linkContext(a, source, target);
   touch(a);
   render();
+}
+
+function isFlowEdge(a, edge) {
+  const handles = resolvedHandles(a, edge);
+  return (
+    handles.sourceHandle === 'main' &&
+    handles.targetHandle === 'main' &&
+    ACTIONS[a.nodes.find((n) => n.id === edge.source)?.action]?.kind !== 'context'
+  );
+}
+
+function unlinkEdge(a, id) {
+  const edge = a.edges.find((e) => e.id === id);
+  if (!edge) return;
+  const target = a.nodes.find((n) => n.id === edge.target);
+  const handle = resolvedHandles(a, edge).targetHandle;
+  const input = portsFor(target).inputs.find((p) => p.id === handle);
+  const bound = input?.binding && boundField(a, target, input.binding);
+  if (bound && target.config?.[input.binding] === bound.expression)
+    delete target.config[input.binding];
+  a.edges = a.edges.filter((e) => e.id !== id);
+}
+
+function connectedInputs(a, node) {
+  const links = portsFor(node)
+    .inputs.filter((p) => p.binding)
+    .map((p) => boundField(a, node, p.binding))
+    .filter(Boolean);
+  if (!links.length) return null;
+  return h(
+    'section',
+    { class: 'connected-inputs' },
+    h('h3', {}, t('port.linked')),
+    links.map(({ source, input, output }) =>
+      h(
+        'div',
+        { class: 'connected-input-row' },
+        h('span', { class: 'bound-field-dot', 'data-port-type': input.type }),
+        h('span', {}, `${L(input.name)} ← ${nodeTitle(source)} · ${L(output.name)}`),
+        h(
+          'button',
+          {
+            type: 'button',
+            class: 'icon-btn',
+            'aria-label': `${t('port.disconnect')}: ${L(input.name)}`,
+            title: t('port.disconnect'),
+            onclick: () => {
+              if (ui.panelDirty && ui.savePanel && !ui.savePanel()) return;
+              checkpoint(a);
+              const edge = a.edges.find(
+                (e) => e.target === node.id && resolvedHandles(a, e).targetHandle === input.id
+              );
+              if (edge) unlinkEdge(a, edge.id);
+              touch(a);
+              render();
+            },
+          },
+          '×'
+        )
+      )
+    )
+  );
 }
 
 /** Which context step an AI step's field takes: its “voice” or its “prompt”. */
@@ -2279,8 +2423,9 @@ function deleteSelectedEdge(a) {
   const id = ui.selectedEdgeId;
   ui.selectedEdgeId = null;
   if (!id || !a.edges.some((e) => e.id === id)) return false;
+  if (ui.panelDirty && ui.savePanel && !ui.savePanel()) return false;
   checkpoint(a);
-  a.edges = a.edges.filter((e) => e.id !== id);
+  unlinkEdge(a, id);
   touch(a);
   render();
   return true;
@@ -2299,6 +2444,7 @@ function openEdgeMenu(a, edge, ev) {
         type: 'button',
         role: 'menuitem',
         class: 'menu-item',
+        disabled: !isFlowEdge(a, edge),
         onclick: () => {
           closePopover();
           const s = a.nodes.find((n) => n.id === edge.source)?.position;
@@ -2319,8 +2465,9 @@ function openEdgeMenu(a, edge, ev) {
         class: 'menu-item danger',
         onclick: () => {
           closePopover();
+          if (ui.panelDirty && ui.savePanel && !ui.savePanel()) return;
           checkpoint(a);
-          a.edges = a.edges.filter((e) => e.id !== edge.id);
+          unlinkEdge(a, edge.id);
           touch(a);
           render();
         },
@@ -2871,7 +3018,7 @@ function addStep(a, parentId, actionId, opts = {}) {
   };
   const ok = (source, target) => !linkProblem(a, source, target);
   const e = opts.insertEdge;
-  if (e && ok(e.source, id) && ok(id, e.target)) {
+  if (e && isFlowEdge(a, e) && ok(e.source, id) && ok(id, e.target)) {
     // Between two steps: source → new → target, in one undoable change.
     a.edges = a.edges.filter((x) => x.id !== e.id);
     link(e.source, id);
@@ -3096,6 +3243,13 @@ function presetBlock(a, node, saveNode) {
     'div',
     { class: 'field voice-presets' },
     h('div', { class: 'field-label' }, t(`${prefix}.title`)),
+    live.isLive
+      ? h(
+          'p',
+          { class: 'small muted preset-sync-status', role: 'status', 'data-preset-sync': '' },
+          t(`preset.${live.presetState.status}`)
+        )
+      : null,
     line,
     h('div', { class: 'row-gap', style: { flexWrap: 'wrap' } }, select, load, saveBtn),
     status.preset ? versionHistory(a, node, status.preset, kind, apply) : null
@@ -3564,9 +3718,18 @@ function nodePanel(a, node) {
 
   const fieldControl = (f) => {
     const id = `f_${node.id}_${f.key}`;
-    const val = node.config?.[f.key];
+    const bound = boundField(a, node, f.key);
+    const val = bound?.expression ?? node.config?.[f.key];
     let control;
-    if (f.type === 'boolean') {
+    if (bound) {
+      control = h(
+        'div',
+        { id, class: 'input bound-field', role: 'note' },
+        h('span', { class: 'bound-field-dot', 'data-port-type': bound.input.type }),
+        `${nodeTitle(bound.source)} · ${L(bound.output.name)}`
+      );
+      Object.defineProperty(control, 'value', { get: () => val });
+    } else if (f.type === 'boolean') {
       control = h('input', {
         id,
         type: 'checkbox',
@@ -3806,7 +3969,7 @@ function nodePanel(a, node) {
         : h('span', { class: 'muted small' }, ` (${t('panel.optional')})`)
     );
     const labelRow =
-      f.acceptsData && hasUpstream
+      f.acceptsData && hasUpstream && !bound
         ? h(
             'div',
             { class: 'field-label-row' },
@@ -3826,14 +3989,16 @@ function nodePanel(a, node) {
         : label;
     if (f.type === 'boolean')
       return h('div', { class: 'field field-inline', 'data-field': f.key }, control, label, err);
-    const help = f.help
-      ? h(
-          'div',
-          { class: 'small muted' },
-          L(f.help),
-          control._extraHelp ? h('div', { class: 'fe-nudge' }, control._extraHelp) : null
-        )
-      : null;
+    const help = bound
+      ? h('div', { class: 'small muted' }, t('port.bound'))
+      : f.help
+        ? h(
+            'div',
+            { class: 'small muted' },
+            L(f.help),
+            control._extraHelp ? h('div', { class: 'fe-nudge' }, control._extraHelp) : null
+          )
+        : null;
     if (f.type === 'forEach' && !f.noNudge) {
       forEachHelp = () => {
         const src = listSource(a, control.value);
@@ -4017,6 +4182,10 @@ function nodePanel(a, node) {
     if (act?.kind === 'context')
       for (const k of ['presetId', 'presetVersion'])
         if (node.config?.[k] !== undefined) config[k] = node.config[k];
+    for (const port of portsFor(node).inputs) {
+      const bound = port.binding && boundField(a, node, port.binding);
+      if (bound) config[port.binding] = bound.expression;
+    }
     checkpoint(a);
     node.config = config;
     node.label = labelInput.value.trim();
@@ -4028,6 +4197,7 @@ function nodePanel(a, node) {
     return true;
   };
 
+  ui.savePanel = saveNode;
   const panel = h(
     'aside',
     { class: 'panel', tabindex: '-1', 'aria-label': nodeTitle(node) },
@@ -4088,6 +4258,7 @@ function nodePanel(a, node) {
           h('div', { class: 'small muted' }, t('ed.webhookFields'))
         )
       : null,
+    connectedInputs(a, node),
     warningsBlock(a, node),
     basic.length ? h('h3', { class: 'panel-section' }, t('panel.basic')) : null,
     basic.map(fieldControl),
@@ -4926,10 +5097,11 @@ function insertAtCursor(el, text) {
 
 function deleteStep(a, id) {
   checkpoint(a);
-  const parents = parentsOf(a, id);
-  const children = a.edges.filter((e) => e.source === id).map((e) => e.target);
+  const parents = a.edges.filter((e) => e.target === id && isFlowEdge(a, e)).map((e) => e.source);
+  const children = a.edges.filter((e) => e.source === id && isFlowEdge(a, e)).map((e) => e.target);
+  for (const edge of [...a.edges])
+    if (edge.source === id || edge.target === id) unlinkEdge(a, edge.id);
   a.nodes = a.nodes.filter((n) => n.id !== id);
-  a.edges = a.edges.filter((e) => e.source !== id && e.target !== id);
   // Keep the chain intact: reconnect the removed step's parents to its children.
   for (const p of parents)
     for (const c of children)
@@ -5641,7 +5813,7 @@ function renderAuth() {
       h('img', { src: './logo-mark.svg', alt: '', class: 'brand-logo' }),
       h('span', { class: 'brand-title' }, 'OpenNodes')
     ),
-    h('div', { class: 'header-right' }, langSwitch())
+    h('div', { class: 'header-right' }, desktopUpdates.button(), langSwitch())
   );
   $('demoBanner').hidden = true;
   const view = clear($('view'));

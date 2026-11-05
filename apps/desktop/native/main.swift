@@ -21,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     private var deadline: DispatchWorkItem?
     private var quitting = false
     private var repliedToQuit = false
+    private lazy var updater = DesktopUpdater(dataURL: dataURL)
     private let dataURL: URL = {
         // Used by development/QA so launching a test build never touches a real install.
         if let argument = CommandLine.arguments.first(where: { $0.hasPrefix("--data-dir=") }) {
@@ -55,6 +56,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()
+        let desktopInfo = ["version": updater.currentVersion, "platform": "macos"]
+        let infoJSON = String(data: try! JSONSerialization.data(withJSONObject: desktopInfo), encoding: .utf8)!
+        config.userContentController.addUserScript(WKUserScript(source: "window.OPENNODES_DESKTOP=\(infoJSON);", injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        config.userContentController.add(updater, name: "openNodesUpdates")
+        updater.acceptsMessage = { [weak self] message in
+            guard let self = self, message.frameInfo.isMainFrame,
+                  message.frameInfo.securityOrigin.protocol == "http",
+                  message.frameInfo.securityOrigin.host == "127.0.0.1",
+                  message.frameInfo.securityOrigin.port == self.origin?.port,
+                  let url = message.frameInfo.request.url, self.sameOrigin(url),
+                  let current = self.webView.url, self.sameOrigin(current) else { return false }
+            return true
+        }
+        updater.onState = { [weak self] state in
+            guard let self = self, let url = self.webView?.url, self.sameOrigin(url),
+                  let data = try? JSONSerialization.data(withJSONObject: state), let json = String(data: data, encoding: .utf8) else { return }
+            self.webView.evaluateJavaScript("window.OPENNODES_UPDATE=\(json);window.dispatchEvent(new CustomEvent('opennodes:update',{detail:window.OPENNODES_UPDATE}));", completionHandler: nil)
+        }
+        updater.onInstall = { NSApp.terminate(nil) }
         webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = self
         webView.uiDelegate = self
@@ -104,6 +124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         let bar = NSMenu()
         let application = NSMenu()
         application.addItem(item(text("Об OpenNodes", "About OpenNodes"), #selector(about)))
+        application.addItem(item(text("Проверить обновления…", "Check for Updates…"), #selector(checkForUpdates)))
         application.addItem(.separator())
         application.addItem(item(text("Открыть папку данных…", "Open data folder…"), #selector(openData)))
         application.addItem(item(text("Открыть журнал…", "Open log…"), #selector(openLog)))
@@ -254,6 +275,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        updater.cancelPendingOnQuit()
         guard let child = child, child.isRunning else { return .terminateNow }
         if quitting { return .terminateLater }
         quitting = true
@@ -271,6 +293,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showWindow(); return true }
     @objc private func showWindow() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
     @objc private func quit() { NSApp.terminate(nil) }
+    @objc private func checkForUpdates() {
+        showWindow()
+        if let url = webView.url, sameOrigin(url) {
+            webView.evaluateJavaScript("window.dispatchEvent(new CustomEvent('opennodes:show-updates'));", completionHandler: nil)
+        }
+        updater.check()
+    }
     @objc private func retry() { if child == nil { startRuntime() } }
     @objc private func reload() { if origin != nil { webView.reload() } else { retry() } }
     @objc private func openData() { NSWorkspace.shared.open(dataURL) }
@@ -278,7 +307,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     @objc private func openBrowser() { if let url = origin { NSWorkspace.shared.open(url) } }
     @objc private func about() {
         NSApp.orderFrontStandardAboutPanel(options: [
-            .applicationName: "OpenNodes", .applicationVersion: "0.2.0 · macOS alpha",
+            .applicationName: "OpenNodes", .applicationVersion: "\(updater.currentVersion) · macOS alpha",
             .credits: NSAttributedString(string: text("Локальные автоматизации. Данные хранятся на этом компьютере.\nЗакрытие окна сохраняет работу сценариев. Выход останавливает движок.", "Local automations. Data stays on this computer.\nClosing the window keeps automations running. Quit stops the engine."))
         ])
     }
@@ -303,6 +332,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         progress.stopAnimation(nil)
         webView.isHidden = false
         window.makeFirstResponder(webView)
+        updater.completeLaunch()
+        updater.publish()
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { showFailure() }
