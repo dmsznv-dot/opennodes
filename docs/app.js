@@ -656,7 +656,14 @@ function templateServices(tpl) {
 }
 
 function requiredConnections(tpl) {
-  return templateServices(tpl).filter((s) => SERVICES[s].auth && !SERVICES[s].planned);
+  const fieldServices = tpl.nodes.flatMap((n) =>
+    (ACTIONS[n.action]?.fields ?? [])
+      .filter((field) => field.type === 'connections')
+      .map((field) => field.service)
+  );
+  return [...new Set([...templateServices(tpl), ...fieldServices])].filter(
+    (s) => SERVICES[s]?.auth && !SERVICES[s]?.planned
+  );
 }
 
 function statusPill(a) {

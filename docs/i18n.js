@@ -84,6 +84,7 @@ const DICT = {
     'cat.sheets': 'Таблицы',
     'cat.ai': 'ИИ-помощник',
     'cat.reports': 'Отчёты',
+    'cat.personal': 'Личное',
     'cat.custom': 'Свой сценарий',
     'cat.dev': 'Для разработчиков',
 
@@ -620,6 +621,7 @@ const DICT = {
     'cat.sheets': 'Spreadsheets',
     'cat.ai': 'AI assistant',
     'cat.reports': 'Reports',
+    'cat.personal': 'Personal',
     'cat.custom': 'Custom',
     'cat.dev': 'For developers',
 
