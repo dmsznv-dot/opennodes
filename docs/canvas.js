@@ -201,12 +201,11 @@ export function attachCanvas(viewport, world, opts) {
     if (g.kind === 'connect') {
       opts.connectPreview?.(null, null);
       if (g.moved && e.type === 'pointerup') {
-        const hit = document.elementFromPoint(e.clientX, e.clientY);
-        const input = hit?.closest?.('[data-in-handle]');
-        const target = input?.dataset.inHandle ?? hit?.closest?.('[data-node-id]')?.dataset.nodeId;
+        const element = document.elementFromPoint(e.clientX, e.clientY);
+        const input = element?.closest?.('[data-in-handle]');
+        const target = input?.dataset.inHandle ?? element?.closest?.('[data-node-id]')?.dataset.nodeId;
         opts.onConnect?.(g.id, target ?? null, g.sourceHandle, input?.dataset.portId ?? null);
-      }
-      opts.onConnectEnd?.();
+      } else if (e.type === 'pointercancel') opts.onConnectCancel?.();
     }
     if (g.kind === 'empty' && !g.moved && e.type === 'pointerup') {
       opts.onEmptyClick?.(toWorld(e.clientX, e.clientY), { x: e.clientX, y: e.clientY });

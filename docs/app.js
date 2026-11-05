@@ -21,14 +21,7 @@ import {
 import * as live from './live.js';
 import { tokenField, parseExpr, buildExpr } from './tokens.js';
 import { attachCanvas, isTyping } from './canvas.js';
-import {
-  portsFor,
-  resolvedHandles,
-  connectionProblem,
-  categoryOf,
-  portPosition,
-  boundField,
-} from './ports.js';
+import { portsFor, canvasPortsFor, resolvedHandles, connectionProblem, categoryOf, portPosition, boundField } from './ports.js';
 import { createDesktopUpdates } from './desktop-updates.js';
 import {
   tagCategories,
@@ -55,7 +48,6 @@ import {
   SERVICE_ORDER,
   TEMPLATES,
   TEMPLATE_CATEGORIES,
-  PICKER_GROUPS,
   SYNONYMS,
   isDevAction,
   postFields,
@@ -1861,17 +1853,13 @@ function saveView(id, view) {
 function edgePath(a, cardH, e) {
   const source = a.nodes.find((n) => n.id === e.source);
   const target = a.nodes.find((n) => n.id === e.target);
-  if (!source || !target) return null;
+  if (!source?.position || !target?.position) return null;
   const handles = resolvedHandles(a, e);
-  const from = portPosition(source, 'output', handles.sourceHandle, CARD_W, cardH);
-  const to = portPosition(target, 'input', handles.targetHandle, CARD_W, cardH);
-  const { x: x1, y: y1 } = from;
-  const { x: x2, y: y2 } = to;
-  const bend = Math.max(40, Math.abs(y2 - y1) / 2);
-  return {
-    d: `M ${x1} ${y1} C ${x1} ${y1 + bend}, ${x2} ${y2 - bend}, ${x2} ${y2}`,
-    mid: { x: (x1 + x2) / 2, y: (y1 + y2) / 2 },
-  };
+  const from = portPosition(source, 'output', handles.sourceHandle, CARD_W, cardH, a);
+  const to = portPosition(target, 'input', handles.targetHandle, CARD_W, cardH, a);
+  const bend = Math.max(40, Math.abs(to.y - from.y) / 2);
+  return { d: `M ${from.x} ${from.y} C ${from.x} ${from.y + bend}, ${to.x} ${to.y - bend}, ${to.x} ${to.y}`,
+    mid: { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 } };
 }
 
 function canvasView(a) {
@@ -1904,10 +1892,7 @@ function canvasView(a) {
       edgeGroup.append(
         svg('path', {
           d: p.d,
-          'data-port-type':
-            portsFor(a.nodes.find((n) => n.id === e.source)).outputs.find(
-              (out) => out.id === resolvedHandles(a, e).sourceHandle
-            )?.type ?? 'json',
+          'data-port-type': portsFor(a.nodes.find((n) => n.id === e.source)).outputs.find((p) => p.id === resolvedHandles(a, e).sourceHandle)?.type ?? 'json',
           class: [
             'edge',
             context && 'edge-context',
@@ -1966,33 +1951,35 @@ function canvasView(a) {
     if (!els) return;
     els.card.style.left = `${n.position.x}px`;
     els.card.style.top = `${n.position.y}px`;
-    for (const { element, direction, port } of els.ports) {
-      const pt = portPosition(n, direction, port.id, CARD_W, cardH);
-      element.style.left = `${pt.x - 14}px`;
-      element.style.top = `${pt.y - 14}px`;
+    for (const { element, port } of els.ports) {
+      const p = portPosition(n, port.direction, port.id, CARD_W, cardH, a);
+      element.style.left = `${p.x - 14}px`; element.style.top = `${p.y - 14}px`;
     }
     if (els.plus) {
       els.plus.style.left = `${n.position.x + CARD_W / 2 - 16}px`;
       els.plus.style.top = `${n.position.y + cardH + 20}px`;
+    }
+    if (els.rename) {
+      els.rename.style.left = `${n.position.x + CARD_W - 36}px`;
+      els.rename.style.top = `${n.position.y + 46}px`;
     }
   };
 
   const world = h('div', { class: 'canvas-world' }, edgeLayer, edgePluses);
   const clearConnections = () => {
     ui.portConnection = null;
-    for (const el of world.querySelectorAll('.node-port'))
-      el.classList.remove('port-compatible', 'port-incompatible', 'port-source');
+    world.classList.remove('is-connecting');
+    world.querySelectorAll('.node-port').forEach((el) => { el.classList.remove('port-compatible', 'port-source'); });
   };
-  const showConnections = (source, handle) => {
-    clearConnections();
-    ui.portConnection = { source, handle };
-    for (const el of world.querySelectorAll('[data-in-handle]')) {
-      const good = !connectionProblem(a, source, handle, el.dataset.inHandle, el.dataset.portId);
-      el.classList.add(good ? 'port-compatible' : 'port-incompatible');
-    }
-    for (const el of world.querySelectorAll('[data-out-handle]'))
-      if (el.dataset.outHandle === source && el.dataset.portId === handle)
-        el.classList.add('port-source');
+  const highlightConnections = () => {
+    const selected = ui.portConnection;
+    if (!selected) return clearConnections();
+    world.classList.add('is-connecting');
+    world.querySelectorAll('.node-port').forEach((el) => {
+      const input = el.classList.contains('port-input');
+      el.classList.toggle('port-compatible', input && !connectionProblem(a, selected.source, selected.sourceHandle, el.dataset.portNode, el.dataset.portId));
+      el.classList.toggle('port-source', !input && selected.source === el.dataset.portNode && selected.sourceHandle === el.dataset.portId);
+    });
   };
 
   for (const n of a.nodes) {
@@ -2046,36 +2033,28 @@ function canvasView(a) {
       })(),
       store.settings.devMode ? h('span', { class: 'node-dev' }, `${act?.type} · ${n.id}`) : null
     );
-    const declared = portsFor(n);
-    const ports = ['input', 'output'].flatMap((direction) =>
-      declared[direction === 'input' ? 'inputs' : 'outputs'].map((port) => {
-        const text = `${t(`port.${direction}`)} · ${L(port.name)}`;
-        const element = h(
-          'button',
-          {
-            type: 'button',
-            class: 'node-port',
-            [`data-${direction === 'input' ? 'in' : 'out'}-handle`]: n.id,
-            'data-port-id': port.id,
-            'data-port-type': port.type,
-            'data-tooltip': text,
-            'aria-label': text,
-            onclick: () => {
-              if (direction === 'output') {
-                showConnections(n.id, port.id);
-                toast(t('port.connecting'));
-              } else if (ui.portConnection) {
-                const { source, handle } = ui.portConnection;
-                clearConnections();
-                connectSteps(a, source, n.id, handle, port.id);
-              }
-            },
-          },
-          h('span', { class: 'port-dot', 'aria-hidden': 'true' })
-        );
-        return { element, direction, port };
-      })
-    );
+    const definition = canvasPortsFor(n, a);
+    const ports = [...definition.inputs, ...definition.outputs].map((port) => {
+      const output = port.direction === 'output';
+      const text = `${t(output ? 'port.output' : 'port.input')}: ${L(port.name)}`;
+      const element = h('button', {
+        type: 'button', class: `node-port port-${port.direction}`,
+        'data-port-type': port.type, 'data-port-node': n.id, 'data-port-id': port.id,
+        ...(output ? { 'data-out-handle': n.id } : { 'data-in-handle': n.id }),
+        'aria-label': text, 'data-tooltip': text,
+        onclick: (event) => {
+          event.stopPropagation();
+          if (output) {
+            if (ui.portConnection?.source === n.id && ui.portConnection?.sourceHandle === port.id) clearConnections();
+            else { ui.portConnection = { source: n.id, sourceHandle: port.id }; highlightConnections(); }
+          } else if (ui.portConnection) {
+            const selected = ui.portConnection; clearConnections();
+            connectSteps(a, selected.source, n.id, selected.sourceHandle, port.id);
+          }
+        },
+      }, h('span', { class: 'port-dot', 'aria-hidden': 'true' }));
+      return { element, port };
+    });
     const plus = leaves.includes(n)
       ? h(
           'button',
@@ -2089,8 +2068,21 @@ function canvasView(a) {
           '＋'
         )
       : null;
-    cardEls.set(n.id, { card, ports, plus });
-    world.append(...[card, ...ports.map((p) => p.element), plus].filter(Boolean));
+    const rename = h('button', {
+      type: 'button',
+      class: 'node-rename',
+      'aria-label': t('step.renameButton', { name: nodeTitle(n) }),
+      title: t('step.renameButton', { name: nodeTitle(n) }),
+      onclick: (event) => {
+        event.stopPropagation();
+        renameStep(a, n);
+      },
+    }, svg('svg', { viewBox: '0 0 16 16', 'aria-hidden': 'true' },
+      svg('path', { d: 'M11.8 2.2a1.4 1.4 0 0 1 2 2L6 12l-3.2.8.8-3.2 8.2-7.4Z', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.3', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }),
+      svg('path', { d: 'm9.8 4.1 2.1 2.1', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.3' })
+    ));
+    cardEls.set(n.id, { card, ports, plus, rename });
+    world.append(...[card, ...ports.map((p) => p.element), plus, rename].filter(Boolean));
     place(n);
   }
   drawEdges();
@@ -2178,9 +2170,7 @@ function canvasView(a) {
   );
 
   const viewport = h('div', { class: 'canvas', tabindex: '-1' }, world, toolbar);
-  viewport.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') clearConnections();
-  });
+  viewport.addEventListener('keydown', (e) => { if (e.key === 'Escape') { clearConnections(); preview.setAttribute('d', ''); } });
   viewport.addEventListener('canvas:view', (e) => {
     zoomLabel.textContent = `${Math.round(e.detail.z * 100)}%`;
   });
@@ -2227,13 +2217,12 @@ function canvasView(a) {
         // After the click that ends the drag, which the old canvas still has to swallow.
         setTimeout(render);
       },
+      onConnectStart: (source, sourceHandle) => { ui.portConnection = { source, sourceHandle }; highlightConnections(); },
       connectPreview: (from, to) => {
         preview.setAttribute('d', from && to ? `M ${from.x} ${from.y} L ${to.x} ${to.y}` : '');
       },
-      onConnectStart: showConnections,
-      onConnectEnd: clearConnections,
-      onConnect: (source, target, sourceHandle, targetHandle) =>
-        connectSteps(a, source, target, sourceHandle, targetHandle),
+      onConnect: (source, target, sourceHandle, targetHandle) => { clearConnections(); connectSteps(a, source, target, sourceHandle, targetHandle); },
+      onConnectCancel: clearConnections,
     });
   };
   return viewport;
@@ -2241,93 +2230,142 @@ function canvasView(a) {
 
 /** A connection drawn from one step's dot to another step. */
 function connectSteps(a, source, target, sourceHandle = 'main', targetHandle = null) {
-  if (!target) return;
-  if (ui.panelDirty && ui.savePanel && !ui.savePanel()) return;
+  if (!target || target === source) return;
   if (!targetHandle) {
-    const candidates = portsFor(a.nodes.find((n) => n.id === target)).inputs.filter(
-      (p) => !connectionProblem(a, source, sourceHandle, target, p.id)
-    );
-    if (candidates.length !== 1) {
-      toast(t('port.choose'));
-      return;
-    }
-    targetHandle = candidates[0].id;
+    const choices = portsFor(a.nodes.find((n) => n.id === target)).inputs
+      .filter((p) => !connectionProblem(a, source, sourceHandle, target, p.id));
+    if (choices.length === 1) targetHandle = choices[0].id;
+    else if (sourceHandle === 'main' && choices.some((p) => p.id === 'main')) targetHandle = 'main';
+    else { toast(t('port.choose')); return; }
   }
   const problem = connectionProblem(a, source, sourceHandle, target, targetHandle);
-  if (problem) {
-    toast(t(problem), 'error');
-    return;
-  }
+  if (problem) { toast(t(problem), 'error'); return; }
+  const edge = { id: uid('e'), source, target, sourceHandle, targetHandle };
+  const check = validateDag(a.nodes, [...a.edges, edge]);
+  if (!check.valid) { toast(t('cv.cycle'), 'error'); return; }
   checkpoint(a);
-  a.edges.push({ id: uid('e'), source, target, sourceHandle, targetHandle });
+  a.edges.push(edge);
+  const from = a.nodes.find((n) => n.id === source);
   const to = a.nodes.find((n) => n.id === target);
   const input = portsFor(to).inputs.find((p) => p.id === targetHandle);
-  if (input?.binding)
-    to.config = { ...to.config, [input.binding]: boundField(a, to, input.binding).expression };
-  else linkContext(a, source, target);
-  touch(a);
-  render();
+  const out = portsFor(from).outputs.find((p) => p.id === sourceHandle);
+  if (input?.binding) {
+    to.config = { ...to.config, [input.binding]: `{{ $nodes.${source}.output${out?.valuePath ? '.' + out.valuePath : ''} }}` };
+    if (input.binding === 'prompt') {
+      to.config = { ...to.config };
+      delete to.config.instruction;
+      if (from.config?.forEach && ACTIONS[to.action]?.forEach && !to.config.forEach)
+        to.config.forEach = from.config.forEach;
+    }
+  } else {
+    linkContext(a, source, target);
+    autoConfigureAiInput(a, source, target, sourceHandle);
+  }
+  autoConfigureRssAi(a, source, target);
+  touch(a); render();
 }
 
-function isFlowEdge(a, edge) {
-  const handles = resolvedHandles(a, edge);
-  return (
-    handles.sourceHandle === 'main' &&
-    handles.targetHandle === 'main' &&
-    ACTIONS[a.nodes.find((n) => n.id === edge.source)?.action]?.kind !== 'context'
+const rssItemsExpr = (id) => `{{ $nodes.${id}.output.items }}`;
+const rssItemDataExpr = '{{ $item.title }}\n{{ $item.text }}\n{{ $item.link }}';
+
+function isRssAggregateExpression(id, expression) {
+  const value = String(expression ?? '').trim();
+  return [
+    `{{ $nodes.${id}.output }}`,
+    ...['items', 'posts', 'texts', 'links', 'images', 'titles', 'bullets', 'digest', 'numbered', 'titleLinks']
+      .map((field) => `{{ $nodes.${id}.output.${field} }}`),
+  ].includes(value);
+}
+
+function autoConfigureAiInput(a, sourceId, targetId, sourceHandle = 'main') {
+  const source = a.nodes.find((n) => n.id === sourceId);
+  const target = a.nodes.find((n) => n.id === targetId);
+  if (
+    !source || target?.action !== 'ai.process' || ACTIONS[source.action]?.kind === 'context' ||
+    ACTIONS[source.action]?.type === 'core.rss' || String(target.config?.input ?? '').trim()
+  ) return;
+  const output = portsFor(source).outputs.find((port) => port.id === sourceHandle);
+  if (!output) return;
+  target.config = {
+    ...target.config,
+    input: `{{ $nodes.${source.id}.output${output.valuePath ? `.${output.valuePath}` : ''} }}`,
+  };
+}
+
+function rssByAggregateExpression(a, expression) {
+  return a.nodes.find((n) => ACTIONS[n.action]?.type === 'core.rss' && isRssAggregateExpression(n.id, expression));
+}
+
+function normalizeRssAiEdges(a, rssId, aiId) {
+  let mainEdge = false;
+  a.edges = a.edges.filter((edge) => {
+    if (edge.source !== rssId || edge.target !== aiId) return true;
+    if (mainEdge) return false;
+    mainEdge = true;
+    edge.sourceHandle = 'main';
+    edge.targetHandle = 'main';
+    return true;
+  });
+}
+
+function rssSourceAppliesToAi(a, source, node, config = node.config) {
+  const loop = String(config?.forEach ?? '').trim();
+  if (loop && !loop.includes(`$nodes.${source.id}.output.items`)) return false;
+  return Boolean(loop) || a.edges.some((edge) => edge.source === source.id && edge.target === node.id);
+}
+
+function rssSourceConnectedToAi(a, node) {
+  const edge = a.edges.find((item) =>
+    item.target === node.id && ACTIONS[a.nodes.find((source) => source.id === item.source)?.action]?.type === 'core.rss'
   );
+  return edge ? a.nodes.find((source) => source.id === edge.source) : null;
 }
 
-function unlinkEdge(a, id) {
-  const edge = a.edges.find((e) => e.id === id);
-  if (!edge) return;
-  const target = a.nodes.find((n) => n.id === edge.target);
-  const handle = resolvedHandles(a, edge).targetHandle;
-  const input = portsFor(target).inputs.find((p) => p.id === handle);
-  const bound = input?.binding && boundField(a, target, input.binding);
-  if (bound && target.config?.[input.binding] === bound.expression)
-    delete target.config[input.binding];
-  a.edges = a.edges.filter((e) => e.id !== id);
+function hasLegacyRssAiEdge(a, source, node) {
+  const edges = a.edges.filter((edge) => edge.source === source.id && edge.target === node.id);
+  return edges.length > 1 || edges.some((edge) => {
+    const handles = resolvedHandles(a, edge);
+    return handles.sourceHandle !== 'main' || handles.targetHandle !== 'main';
+  });
 }
 
-function connectedInputs(a, node) {
-  const links = portsFor(node)
-    .inputs.filter((p) => p.binding)
-    .map((p) => boundField(a, node, p.binding))
-    .filter(Boolean);
-  if (!links.length) return null;
-  return h(
-    'section',
-    { class: 'connected-inputs' },
-    h('h3', {}, t('port.linked')),
-    links.map(({ source, input, output }) =>
-      h(
-        'div',
-        { class: 'connected-input-row' },
-        h('span', { class: 'bound-field-dot', 'data-port-type': input.type }),
-        h('span', {}, `${L(input.name)} ← ${nodeTitle(source)} · ${L(output.name)}`),
-        h(
-          'button',
-          {
-            type: 'button',
-            class: 'icon-btn',
-            'aria-label': `${t('port.disconnect')}: ${L(input.name)}`,
-            title: t('port.disconnect'),
-            onclick: () => {
-              if (ui.panelDirty && ui.savePanel && !ui.savePanel()) return;
-              checkpoint(a);
-              const edge = a.edges.find(
-                (e) => e.target === node.id && resolvedHandles(a, e).targetHandle === input.id
-              );
-              if (edge) unlinkEdge(a, edge.id);
-              touch(a);
-              render();
-            },
-          },
-          '×'
-        )
-      )
-    )
+/** Turn an RSS → AI link into one article per AI request, with its own URL. */
+function autoConfigureRssAi(a, sourceId, targetId) {
+  const source = a.nodes.find((n) => n.id === sourceId);
+  const target = a.nodes.find((n) => n.id === targetId);
+  if (ACTIONS[source?.action]?.type !== 'core.rss' || target?.action !== 'ai.process') return;
+  const currentInput = String(target.config?.input ?? '').trim();
+  const ownAggregate = isRssAggregateExpression(source.id, currentInput);
+  const currentLoop = String(target.config?.forEach ?? '').trim();
+  const loopMatchesSource = !currentLoop || currentLoop.includes(`$nodes.${source.id}.output`);
+  if (!loopMatchesSource || (currentInput && !ownAggregate && !currentInput.includes('$item.'))) return;
+  target.config = {
+    ...target.config,
+    forEach: rssItemsExpr(source.id),
+    input: !currentInput || ownAggregate ? rssItemDataExpr : target.config.input,
+    readLinks: true,
+    maxLinks: 1,
+  };
+  normalizeRssAiEdges(a, source.id, target.id);
+}
+
+function normalizeRssAiSelection(a, node, config) {
+  if (node.action !== 'ai.process') return config;
+  const source = rssByAggregateExpression(a, config.input);
+  if (!source || !rssSourceAppliesToAi(a, source, node, config)) return config;
+  return {
+    ...config,
+    forEach: rssItemsExpr(source.id),
+    input: rssItemDataExpr,
+    readLinks: true,
+    maxLinks: 1,
+  };
+}
+
+function isRssAiPerItem(a, node, config = node?.config) {
+  if (node?.action !== 'ai.process' || !String(config?.input ?? '').includes('$item.')) return false;
+  return a.nodes.some((n) =>
+    ACTIONS[n.action]?.type === 'core.rss' && String(config?.forEach ?? '').includes(`$nodes.${n.id}.output.items`)
   );
 }
 
@@ -2358,6 +2396,7 @@ function linkContext(a, source, target) {
     return;
   }
   to.config = { ...to.config, [fieldKey]: voiceExpr(source) };
+  if (fieldKey === 'prompt') delete to.config.instruction;
   if (fieldKey === 'prompt' && from.config?.forEach && toAct.forEach && !to.config.forEach)
     to.config.forEach = from.config.forEach;
 }
@@ -2425,12 +2464,44 @@ function openNodeMenu(a, id, client) {
   ]);
 }
 
+function unlinkEdge(a, id) {
+  const edge = a.edges.find((e) => e.id === id);
+  if (!edge) return;
+  const source = a.nodes.find((n) => n.id === edge.source);
+  const target = a.nodes.find((n) => n.id === edge.target);
+  const handles = resolvedHandles(a, edge);
+  const input = portsFor(target).inputs.find((p) => p.id === handles.targetHandle);
+  const output = portsFor(source).outputs.find((p) => p.id === handles.sourceHandle);
+  if (input?.binding && target?.config) {
+    const expr = `{{ $nodes.${edge.source}.output${output?.valuePath ? '.' + output.valuePath : ''} }}`;
+    if (target.config[input.binding] === expr) delete target.config[input.binding];
+  }
+  a.edges = a.edges.filter((e) => e.id !== id);
+}
+
+function isFlowEdge(a, edge) {
+  const handles = resolvedHandles(a, edge);
+  return handles.sourceHandle === 'main' && handles.targetHandle === 'main'
+    && ACTIONS[a.nodes.find((n) => n.id === edge.source)?.action]?.kind !== 'context';
+}
+
+function connectedInputs(a, node) {
+  const links = a.edges.filter((e) => e.target === node.id).map((e) => ({ edge: e,
+    input: canvasPortsFor(node, a).inputs.find((p) => p.id === resolvedHandles(a, e).targetHandle),
+    source: a.nodes.find((n) => n.id === e.source) })).filter((x) => x.input?.binding);
+  if (!links.length) return null;
+  return h('div', { class: 'connected-inputs' }, h('strong', { class: 'small' }, t('port.linked')),
+    links.map(({ edge, input, source }) => h('div', { class: 'connected-input-row', 'data-port-type': input.type },
+      h('span', { class: 'port-dot', 'aria-hidden': 'true' }),
+      h('span', {}, `${L(input.name)} · ${nodeTitle(source)}`),
+      h('button', { type: 'button', class: 'icon-btn', title: t('port.disconnect'), 'aria-label': `${t('port.disconnect')}: ${L(input.name)}`, onclick: () => { checkpoint(a); unlinkEdge(a, edge.id); touch(a); render(); } }, '×'))));
+}
+
 /** Removes the chosen link (Delete / Backspace on the board). */
 function deleteSelectedEdge(a) {
   const id = ui.selectedEdgeId;
   ui.selectedEdgeId = null;
   if (!id || !a.edges.some((e) => e.id === id)) return false;
-  if (ui.panelDirty && ui.savePanel && !ui.savePanel()) return false;
   checkpoint(a);
   unlinkEdge(a, id);
   touch(a);
@@ -2472,7 +2543,6 @@ function openEdgeMenu(a, edge, ev) {
         class: 'menu-item danger',
         onclick: () => {
           closePopover();
-          if (ui.panelDirty && ui.savePanel && !ui.savePanel()) return;
           checkpoint(a);
           unlinkEdge(a, edge.id);
           touch(a);
@@ -2822,7 +2892,52 @@ const FREQUENT_ACTIONS = [
   'text.compose',
   'logic.filter',
   'logic.delay',
-  'http.request',
+];
+
+const PICKER_MESSAGE_SERVICES = ['telegram', 'email', 'slack', 'discord'];
+const PICKER_AI_SERVICES = ['ai', 'ollama', 'mcp'];
+const PICKER_SOURCE_SERVICES = [
+  'rss',
+  'webhook',
+  'google_sheets',
+  'google_drive',
+  'google_calendar',
+  'postgres',
+  'notion',
+];
+const PICKER_CATEGORIES = [
+  {
+    id: 'messages',
+    label: 'picker.cat.messages',
+    match: (a) => PICKER_MESSAGE_SERVICES.includes(a.service),
+  },
+  { id: 'ai', label: 'picker.cat.ai', match: (a) => PICKER_AI_SERVICES.includes(a.service) },
+  {
+    id: 'sources',
+    label: 'picker.cat.sources',
+    match: (a) => PICKER_SOURCE_SERVICES.includes(a.service),
+  },
+  { id: 'text', label: 'picker.cat.text', match: (a) => a.type === 'text.compose' },
+  {
+    id: 'logic',
+    label: 'picker.cat.logic',
+    match: (a) => a.kind === 'logic' && a.type !== 'text.compose',
+  },
+  {
+    id: 'context',
+    label: 'picker.cat.context',
+    match: (a) => a.kind === 'context' && a.type !== 'context.model',
+  },
+  { id: 'advanced', label: 'picker.cat.advanced', match: (a) => a.type === 'context.model' },
+  {
+    id: 'other',
+    label: 'picker.cat.other',
+    match: (a) => a.kind === 'action' && !isDevAction(a) &&
+      !PICKER_MESSAGE_SERVICES.includes(a.service) &&
+      !PICKER_AI_SERVICES.includes(a.service) &&
+      !PICKER_SOURCE_SERVICES.includes(a.service),
+  },
+  { id: 'dev', label: 'cat.dev', match: (a) => a.kind === 'action' && isDevAction(a) },
 ];
 
 /**
@@ -2832,12 +2947,24 @@ const FREQUENT_ACTIONS = [
 function openPicker(a, parentId, opts = {}) {
   const hasTrigger = a.nodes.some((n) => ACTIONS[n.action]?.kind === 'trigger');
   const triggerMode = !hasTrigger && (!a.nodes.length || parentId === null);
+  const quickMode = Boolean(opts.at) && !opts.browseAll && !triggerMode;
   const list = h('div', { class: 'picker-list' });
+  let selectedCategory = 'all';
   const choose = (id) => {
     if (opts.at) closePopover();
     else closeModal();
     addStep(a, parentId, id, opts);
   };
+  const browseAll = () => {
+    if (opts.at) closePopover();
+    openPicker(a, parentId, { ...opts, at: null, browseAll: true });
+  };
+  const browseButton = () => h(
+    'button',
+    { type: 'button', class: 'picker-all', onclick: browseAll },
+    t('picker.browseAll'),
+    h('span', { 'aria-hidden': 'true' }, '→')
+  );
   const quickRow = (id) => {
     const act = ACTIONS[id];
     return h(
@@ -2849,7 +2976,7 @@ function openPicker(a, parentId, opts = {}) {
   };
   const fill = (query) => {
     clear(list);
-    if (!query.trim() && !triggerMode) {
+    if (quickMode && !query.trim()) {
       const recent = (store.settings.recentActions ?? []).filter(
         (id) => ACTIONS[id] && !ACTIONS[id].planned && ACTIONS[id].kind !== 'trigger'
       );
@@ -2866,13 +2993,12 @@ function openPicker(a, parentId, opts = {}) {
           h('h3', { class: 'picker-group' }, t('picker.frequent')),
           ...frequent.map(quickRow)
         );
+      list.append(browseButton());
+      return;
     }
-    const groups = PICKER_GROUPS.filter((g) =>
-      triggerMode ? g.id === 'trigger' : g.id !== 'trigger'
-    );
     const matches = bestMatches(
       Object.entries(ACTIONS)
-        .filter(([, act]) => groups.some((g) => g.match(act)))
+        .filter(([, act]) => triggerMode ? act.kind === 'trigger' : act.kind !== 'trigger')
         .map(([id, act]) => ({
           id,
           act,
@@ -2885,7 +3011,11 @@ function openPicker(a, parentId, opts = {}) {
         }))
     );
     let total = 0;
+    const groups = triggerMode
+      ? [{ id: 'trigger', label: 'kind.trigger', match: (act) => act.kind === 'trigger' }]
+      : PICKER_CATEGORIES;
     for (const g of groups) {
+      if (selectedCategory !== 'all' && selectedCategory !== g.id) continue;
       const items = matches
         .filter((x) => g.match(x.act))
         .sort((x, y) => (x.act.planned ? 1 : 0) - (y.act.planned ? 1 : 0) || y.score - x.score);
@@ -2922,26 +3052,43 @@ function openPicker(a, parentId, opts = {}) {
           )
         )
       );
-      const sub = {
-        trigger: 'kind.triggerSub',
-        action: 'kind.actionSub',
-        context: 'kind.contextSub',
-        logic: 'kind.logicSub',
-        dev: 'cat.devSub',
-      }[g.id];
-      const head = h(
-        'h3',
-        { class: 'picker-group' },
-        t(g.label),
-        sub ? h('span', { class: 'picker-group-sub' }, ` — ${t(sub)}`) : null
-      );
-      if (g.id === 'dev' && !query)
+      const head = h('h3', { class: 'picker-group' }, t(g.label));
+      if (g.id === 'dev' && !query && !quickMode)
         list.append(h('details', { class: 'picker-dev' }, h('summary', {}, t('cat.dev')), rows));
       else list.append(head, ...rows);
     }
     if (!total) list.append(h('p', { class: 'empty' }, t('picker.empty')));
+    if (quickMode) list.append(browseButton());
   };
-  fill('');
+  const categoryNav = h('div', {
+    class: 'picker-categories',
+    role: 'group',
+    'aria-label': t('picker.categories'),
+  });
+  const categoryList = triggerMode
+    ? [{ id: 'all', label: 'picker.cat.all' }, { id: 'trigger', label: 'kind.trigger' }]
+    : [{ id: 'all', label: 'picker.cat.all' }, ...PICKER_CATEGORIES];
+  const paintCategories = () => {
+    clear(categoryNav);
+    categoryNav.append(
+      ...categoryList.map((category) =>
+        h(
+          'button',
+          {
+            type: 'button',
+            class: ['picker-category', selectedCategory === category.id && 'selected'],
+            'aria-pressed': selectedCategory === category.id ? 'true' : 'false',
+            onclick: () => {
+              selectedCategory = category.id;
+              paintCategories();
+              fill(search.value);
+            },
+          },
+          t(category.label)
+        )
+      )
+    );
+  };
   const search = h('input', {
     type: 'search',
     class: 'input search-input',
@@ -2971,6 +3118,8 @@ function openPicker(a, parentId, opts = {}) {
       (i <= 0 ? search : items[i - 1]).focus();
     }
   });
+  paintCategories();
+  fill('');
   if (opts.at) {
     const anchor = h('span', {
       class: 'click-anchor',
@@ -2987,6 +3136,7 @@ function openPicker(a, parentId, opts = {}) {
           triggerMode ? t('picker.titleTrigger') : t('picker.title')
         ),
         search,
+        quickMode ? null : categoryNav,
         list
       ),
     ]);
@@ -2997,7 +3147,7 @@ function openPicker(a, parentId, opts = {}) {
   openModal({
     title: triggerMode ? t('picker.titleTrigger') : t('picker.title'),
     wide: true,
-    body: [search, list],
+    body: [categoryNav, search, list],
     actions: [],
   });
 }
@@ -3022,6 +3172,8 @@ function addStep(a, parentId, actionId, opts = {}) {
   const link = (source, target) => {
     a.edges.push({ id: uid('e'), source, target });
     linkContext(a, source, target);
+    autoConfigureAiInput(a, source, target);
+    autoConfigureRssAi(a, source, target);
   };
   const ok = (source, target) => !linkProblem(a, source, target);
   const e = opts.insertEdge;
@@ -3103,6 +3255,39 @@ function openPanel(a, nodeId) {
   ui.focusedField = null;
   render();
   document.querySelector('.panel')?.focus();
+}
+
+function renameStep(a, node) {
+  const input = h('input', {
+    class: 'input',
+    value: node.label ?? '',
+    placeholder: nodeTitle({ ...node, label: '' }),
+    maxlength: 80,
+    'aria-label': t('step.renameInput'),
+  });
+  openModal({
+    title: t('step.renameTitle'),
+    body: h('div', { class: 'field' },
+      h('label', { class: 'field-label' }, t('step.renameInput')),
+      input,
+      h('p', { class: 'small muted' }, t('step.renameHelp'))
+    ),
+    actions: [
+      { label: t('common.cancel') },
+      {
+        label: t('common.ok'),
+        primary: true,
+        onClick: () => {
+          if (ui.panelDirty && ui.savePanel && !ui.savePanel()) return false;
+          checkpoint(a);
+          node.label = input.value.trim();
+          touch(a);
+          render();
+          return true;
+        },
+      },
+    ],
+  });
 }
 
 function closePanel() {
@@ -3250,16 +3435,10 @@ function presetBlock(a, node, saveNode) {
     'div',
     { class: 'field voice-presets' },
     h('div', { class: 'field-label' }, t(`${prefix}.title`)),
-    live.isLive
-      ? h(
-          'p',
-          { class: 'small muted preset-sync-status', role: 'status', 'data-preset-sync': '' },
-          t(`preset.${live.presetState.status}`)
-        )
-      : null,
     line,
     h('div', { class: 'row-gap', style: { flexWrap: 'wrap' } }, select, load, saveBtn),
-    status.preset ? versionHistory(a, node, status.preset, kind, apply) : null
+    status.preset ? versionHistory(a, node, status.preset, kind, apply) : null,
+    live.isLive ? h('p', { class: 'preset-sync', 'data-preset-sync': '', role: 'status' }, t(`preset.${live.presetState.status === 'idle' ? 'saved' : live.presetState.status}`)) : null
   );
 }
 
@@ -3679,13 +3858,14 @@ function stepFields(a, node, act) {
     ];
   }
   if (!act?.forEach || (!listChoices(a, node).length && !node.config?.forEach)) return base;
+  const autoRss = isRssAiPerItem(a, node);
   return [
     {
       key: 'forEach',
       type: 'forEach',
       required: false,
       noOptionalMark: true, // a choice with a default, not something to fill in
-      basic: true,
+      basic: !autoRss,
       label: t('fe.label'),
       help: t('fe.help'),
     },
@@ -3704,6 +3884,19 @@ function stepFields(a, node, act) {
 
 function nodePanel(a, node) {
   if (!node) return null;
+  if (node.action === 'ai.process') {
+    const aggregateSource = rssByAggregateExpression(a, node.config?.input);
+    const connectedSource = rssSourceConnectedToAi(a, node);
+    const shouldNormalize = aggregateSource
+      ? rssSourceAppliesToAi(a, aggregateSource, node)
+      : Boolean(connectedSource && isRssAiPerItem(a, node) && hasLegacyRssAiEdge(a, connectedSource, node));
+    if (shouldNormalize && (aggregateSource || connectedSource)) {
+      checkpoint(a);
+      if (aggregateSource) node.config = normalizeRssAiSelection(a, node, node.config);
+      normalizeRssAiEdges(a, (aggregateSource ?? connectedSource).id, node.id);
+      touch(a);
+    }
+  }
   const act = ACTIONS[node.action];
   const service = SERVICES[act?.service];
   const nums = stepNumbers(a);
@@ -3729,12 +3922,9 @@ function nodePanel(a, node) {
     const val = bound?.expression ?? node.config?.[f.key];
     let control;
     if (bound) {
-      control = h(
-        'div',
-        { id, class: 'input bound-field', role: 'note' },
+      control = h('div', { id, class: 'input bound-field', role: 'note' },
         h('span', { class: 'bound-field-dot', 'data-port-type': bound.input.type }),
-        `${nodeTitle(bound.source)} · ${L(bound.output.name)}`
-      );
+        `${nodeTitle(bound.source)} · ${L(bound.output.name)}`);
       Object.defineProperty(control, 'value', { get: () => val });
     } else if (f.type === 'boolean') {
       control = h('input', {
@@ -3996,16 +4186,14 @@ function nodePanel(a, node) {
         : label;
     if (f.type === 'boolean')
       return h('div', { class: 'field field-inline', 'data-field': f.key }, control, label, err);
-    const help = bound
-      ? h('div', { class: 'small muted' }, t('port.bound'))
-      : f.help
-        ? h(
-            'div',
-            { class: 'small muted' },
-            L(f.help),
-            control._extraHelp ? h('div', { class: 'fe-nudge' }, control._extraHelp) : null
-          )
-        : null;
+    const help = bound ? h('div', { class: 'small muted' }, t('port.bound')) : f.help
+      ? h(
+          'div',
+          { class: 'small muted' },
+          L(f.help),
+          control._extraHelp ? h('div', { class: 'fe-nudge' }, control._extraHelp) : null
+        )
+      : null;
     if (f.type === 'forEach' && !f.noNudge) {
       forEachHelp = () => {
         const src = listSource(a, control.value);
@@ -4059,7 +4247,18 @@ function nodePanel(a, node) {
   let forEachHelp = () => {};
   const hasUpstream = ancestorsOf(a, node.id).size > 0;
 
-  const fields = stepFields(a, node, act);
+  const promptBinding = boundField(a, node, 'prompt');
+  const promptConnected = Boolean(promptBinding && node.config?.prompt === promptBinding.expression);
+  const autoRss = isRssAiPerItem(a, node);
+  const fields = stepFields(a, node, act).filter((field) =>
+    !(promptConnected && field.key === 'instruction') &&
+    !(autoRss && ['readLinks', 'maxLinks'].includes(field.key))
+  ).map((field) => {
+    if (node.action === 'ai.process' && autoRss && ['input', 'readLinks'].includes(field.key))
+      return { ...field, basic: false };
+    if (promptConnected && field.key === 'input') return { ...field, required: false };
+    return field;
+  });
   const basic = fields.filter((f) => f.basic);
   const advanced = fields.filter((f) => !f.basic);
 
@@ -4105,17 +4304,10 @@ function nodePanel(a, node) {
 
   // Data from earlier steps is inserted with "+ Data" on each field (or the { key).
   const dataBlock =
-    fields.some((f) => f.acceptsData) && hasUpstream
+    !autoRss && fields.some((f) => f.acceptsData) && hasUpstream
       ? h('p', { class: 'small muted data-hint-line' }, t('panel.dataPickerHint'))
       : null;
 
-  const labelInput = h('input', {
-    id: `lbl_${node.id}`,
-    class: 'input',
-    value: node.label ?? '',
-    placeholder: L(act?.name),
-    oninput: markDirty,
-  });
   const disabledInput = h('input', {
     id: `dis_${node.id}`,
     type: 'checkbox',
@@ -4182,6 +4374,8 @@ function nodePanel(a, node) {
       }
     }
     if (!ok) {
+      const advancedPanel = document.querySelector('.panel-details');
+      if (advancedPanel && !advancedPanel.open) advancedPanel.open = true;
       resultBox.replaceChildren(h('div', { class: 'alert error' }, t('common.saveError')));
       return false;
     }
@@ -4193,9 +4387,18 @@ function nodePanel(a, node) {
       const bound = port.binding && boundField(a, node, port.binding);
       if (bound) config[port.binding] = bound.expression;
     }
+    const rssInputSource = rssByAggregateExpression(a, config.input);
+    const shouldNormalizeRssInput = Boolean(
+      rssInputSource && rssSourceAppliesToAi(a, rssInputSource, node, config)
+    );
+    Object.assign(config, normalizeRssAiSelection(a, node, config));
+    if (isRssAiPerItem(a, node, config)) {
+      config.readLinks = true;
+      config.maxLinks = 1;
+    }
     checkpoint(a);
+    if (shouldNormalizeRssInput) normalizeRssAiEdges(a, rssInputSource.id, node.id);
     node.config = config;
-    node.label = labelInput.value.trim();
     node.disabled = disabledInput.checked;
     if (accountSelect) node.connectionId = accountSelect.value || null;
     if (a.nodeErrors) delete a.nodeErrors[node.id];
@@ -4267,10 +4470,13 @@ function nodePanel(a, node) {
       : null,
     connectedInputs(a, node),
     warningsBlock(a, node),
+    autoRss ? h('div', { class: 'ai-auto-note' }, t('ai.rssAuto')) : null,
+    act?.type === 'ai.process' && !autoRss
+      ? h('p', { class: 'small muted data-hint-line' }, t('ai.dataAdvanced'))
+      : null,
     basic.length ? h('h3', { class: 'panel-section' }, t('panel.basic')) : null,
     basic.map(fieldControl),
     act?.type === 'core.rss' ? rssMemoryBlock(a, node) : null,
-    act?.type === 'ai.process' ? modelPromptBlock(a, node, controls) : null,
     act?.type === 'context.voice' ? voiceToolsBlock(a, node, controls) : null,
     act?.type === 'context.voice' ? voiceSizeBlock(node, controls) : null,
     PRESET_KINDS[act?.type] ? presetBlock(a, node, saveNode) : null,
@@ -4280,12 +4486,7 @@ function nodePanel(a, node) {
       { class: 'panel-details', ...rememberOpen('advanced') },
       h('summary', {}, t('panel.advanced')),
       advanced.map(fieldControl),
-      h(
-        'div',
-        { class: 'field' },
-        h('label', { class: 'field-label', for: `lbl_${node.id}` }, t('panel.stepName')),
-        labelInput
-      ),
+      act?.type === 'ai.process' ? modelPromptBlock(a, node, controls) : null,
       h(
         'div',
         { class: 'field field-inline' },

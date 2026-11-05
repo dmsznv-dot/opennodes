@@ -121,8 +121,10 @@ export function toEngineGraph(a) {
     edges: a.edges.map((e) => ({
       id: e.id,
       source: e.source,
+      sourceHandle: resolvedHandles(a, e).sourceHandle,
       target: e.target,
-      ...resolvedHandles(a, e),
+      targetHandle: resolvedHandles(a, e).targetHandle,
+      ...(ACTIONS[a.nodes.find((n) => n.id === e.source)?.action]?.kind === 'context' ? { kind: 'context' } : {}),
     })),
   };
 }
@@ -142,11 +144,10 @@ export function fromEngineGraph(nodes = [], edges = []) {
       };
     }),
     edges: edges.map((e) => ({
-      id: e.id,
-      source: e.source,
-      target: e.target,
-      ...(e.sourceHandle !== undefined && { sourceHandle: e.sourceHandle }),
-      ...(e.targetHandle !== undefined && { targetHandle: e.targetHandle }),
+      id: e.id, source: e.source, target: e.target,
+      ...((e.sourceHandle !== 'main' || e.targetHandle !== 'main') ? { sourceHandle: e.sourceHandle, targetHandle: e.targetHandle } : {}),
+      // Old explicit generic context links still use config expressions, not bindings.
+      ...(e.targetHandle === 'main' && nodes.find((n) => n.id === e.source)?.type?.startsWith('context.') ? { sourceHandle: e.sourceHandle, targetHandle: 'main' } : {}),
     })),
   };
 }

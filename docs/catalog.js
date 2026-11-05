@@ -342,6 +342,7 @@ export function systemPrompt(voice) {
 }
 
 export const SERVICES = {
+  model: { name: tr('Модель ИИ', 'AI model'), icon: 'MD', color: '#9b83ed', auth: false },
   manual: { name: tr('Тестовый запуск', 'Test run'), icon: '▶', color: '#64748b', auth: false },
   schedule: { name: tr('Расписание', 'Schedule'), icon: '⏱', color: '#0ea5e9', auth: false },
   telegram: {
@@ -416,12 +417,6 @@ export const SERVICES = {
     auth: false,
   },
   voice: { name: tr('Голос бренда', 'Brand voice'), icon: 'BV', color: '#a855f7', auth: false },
-  model: {
-    name: tr('Настройки модели', 'Model settings'),
-    icon: 'MD',
-    color: '#0d9488',
-    auth: false,
-  },
   rss: { name: tr('RSS-лента', 'RSS feed'), icon: 'RSS', color: '#f97316', auth: false },
   webhook: {
     name: tr('Вебхук / форма', 'Webhook / form'),
@@ -522,6 +517,19 @@ export const SERVICE_ORDER = [
 ];
 
 export const ACTIONS = {
+  'context.model': {
+    type: 'context.model', service: 'model', kind: 'context', contextField: 'modelConfig', noInputs: true,
+    name: tr('Настройки модели', 'Model settings'),
+    desc: tr('Подключите к входу «Модель» в шаге ИИ. Подключение к API выбирается в самом шаге ИИ.', 'Connect to the Model input of an AI step. Select the API connection on the AI step.'),
+    needs: tr('идентификатор модели', 'a model identifier'), gives: tr('настройки модели для ИИ', 'model settings for AI'),
+    keywords: 'модель model config настройки контекст',
+    fields: [
+      { key: 'name', type: 'text', basic: true, required: false, label: tr('Название', 'Name'), placeholder: tr('Модель для постов', 'Model for posts') },
+      { key: 'model', type: 'text', basic: true, required: true, label: tr('Идентификатор модели', 'Model identifier'), help: tr('Используйте имя из списка моделей вашего API-подключения.', 'Use a name from the model list of your API connection.') },
+    ],
+    outputs: [{ key: 'model', label: tr('Модель', 'Model'), example: 'model-id' }],
+    simulate: (c) => ({ output: { model: c.model, name: c.name ?? '', version: c.presetVersion ?? null }, summary: tr('Настройки модели готовы. Внешних запросов нет.', 'Model settings are ready. No external calls.') }),
+  },
   // ── Triggers ────────────────────────────────────────────────────────────
   'manual.run': {
     type: 'trigger.manual',
@@ -926,7 +934,8 @@ export const ACTIONS = {
         key: 'input',
         type: 'textarea',
         required: true,
-        basic: true,
+        requiredUnless: 'prompt',
+        basic: false,
         acceptsData: true,
         label: tr('Данные', 'Data'),
         placeholder: tr(
@@ -962,8 +971,8 @@ export const ACTIONS = {
         basic: true,
         label: tr('Шаблон инструкции', 'Prompt template'),
         help: tr(
-          'Инструкция из шага «Шаблон инструкции», подключённого стрелкой. Текст в поле «Что сделать» добавится после неё.',
-          'The instruction from a linked “Prompt template” step. Text in “What to do” is added after it.'
+          'Подключите шаг «Шаблон инструкции», чтобы использовать его как задачу для ИИ. Тогда поле «Что сделать» скроется.',
+          'Connect a “Prompt template” step to use it as the AI task. The separate “What to do” field then disappears.'
         ),
       },
       {
@@ -981,7 +990,7 @@ export const ACTIONS = {
         key: 'readLinks',
         type: 'boolean',
         required: false,
-        basic: true,
+        basic: false,
         label: tr('Открыть ссылки и прочитать статьи', 'Open the links and read the articles'),
         help: tr(
           'Модель сама ссылки не открывает. Сервер скачает страницы по ссылкам из данных и передаст ей текст статей.',
@@ -1003,7 +1012,7 @@ export const ACTIONS = {
         type: 'text',
         required: false,
         basic: false,
-        label: tr('Модель', 'Model'),
+        label: tr('Модель (переопределение)', 'Model override'),
         placeholder: 'gpt-4o-mini',
         help: tr(
           'Пусто — модель по умолчанию из подключения ИИ.',
@@ -1645,66 +1654,6 @@ export const ACTIONS = {
         `Из ${clip(c.feedUrl, 50)} получили бы до ${c.maxItems} записей (пример: 3)`,
         `Would fetch up to ${c.maxItems} items from ${clip(c.feedUrl, 50)} (example: 3)`
       ),
-    }),
-  },
-  'context.model': {
-    type: 'context.model',
-    service: 'model',
-    kind: 'context',
-    contextField: 'model',
-    noInputs: true,
-    name: tr('Настройки модели', 'Model settings'),
-    desc: tr(
-      'Модель и параметры генерации для шагов ИИ.',
-      'Model and generation settings for AI steps.'
-    ),
-    needs: tr('название модели', 'a model name'),
-    gives: tr('настройки для подключённых шагов ИИ', 'settings for connected AI steps'),
-    keywords: 'модель параметры температура model settings temperature tokens',
-    fields: [
-      {
-        key: 'name',
-        type: 'text',
-        required: false,
-        basic: true,
-        label: tr('Название настроек', 'Settings name'),
-      },
-      {
-        key: 'model',
-        type: 'text',
-        required: true,
-        basic: true,
-        label: tr('Модель', 'Model'),
-        placeholder: 'gpt-4o-mini',
-      },
-      {
-        key: 'temperature',
-        type: 'number',
-        required: false,
-        basic: true,
-        label: tr('Температура', 'Temperature'),
-      },
-      {
-        key: 'maxTokens',
-        type: 'number',
-        required: false,
-        basic: false,
-        label: tr('Лимит токенов ответа', 'Max output tokens'),
-      },
-    ],
-    outputs: [
-      { key: 'model', label: tr('Настройки модели', 'Model settings'), example: 'gpt-4o-mini' },
-    ],
-    simulate: (c) => ({
-      output: {
-        model: c.model,
-        name: c.name ?? '',
-        version: c.presetVersion ?? null,
-        ...(c.temperature !== undefined &&
-          c.temperature !== '' && { temperature: Number(c.temperature) }),
-        ...(c.maxTokens !== undefined && c.maxTokens !== '' && { maxTokens: Number(c.maxTokens) }),
-      },
-      summary: tr(`Модель «${c.model ?? ''}» готова.`, `Model “${c.model ?? ''}” is ready.`),
     }),
   },
   'context.voice': {
