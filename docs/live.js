@@ -11,6 +11,8 @@
 import { ACTIONS, SERVICES, TEMPLATES } from './catalog.js';
 import { nodeTitle, stepNumbers, stepOrder, exampleContext } from './engine.js';
 import { t, formatDateTime } from './i18n.js';
+import { enginePorts, resolvedHandles } from './ports.js';
+import { createPresetSync } from './preset-sync.js';
 
 export const API = (typeof window !== 'undefined' && window.OPENNODES?.api) || null;
 export const isLive = Boolean(API);
@@ -96,8 +98,6 @@ const TYPE_TO_ACTION = Object.fromEntries(
     .map(([id, a]) => [a.type, id])
 );
 
-const port = (id, direction) => ({ id, name: id, type: 'any', direction, required: false });
-
 export function toEngineGraph(a) {
   return {
     nodes: a.nodes.map((n) => {
@@ -112,8 +112,7 @@ export function toEngineGraph(a) {
           ...(n.connectionId && { credentialId: n.connectionId }),
           ...(n.disabled && { disabled: true }),
         },
-        inputs: action?.kind === 'trigger' ? [] : [port('main', 'input')],
-        outputs: [port('main', 'output')],
+        ...enginePorts(n),
         ...(n.position && {
           position: { x: Math.round(n.position.x), y: Math.round(n.position.y) },
         }),
@@ -122,9 +121,10 @@ export function toEngineGraph(a) {
     edges: a.edges.map((e) => ({
       id: e.id,
       source: e.source,
-      sourceHandle: 'main',
+      sourceHandle: resolvedHandles(a, e).sourceHandle,
       target: e.target,
-      targetHandle: 'main',
+      targetHandle: resolvedHandles(a, e).targetHandle,
+      ...(ACTIONS[a.nodes.find((n) => n.id === e.source)?.action]?.kind === 'context' ? { kind: 'context' } : {}),
     })),
   };
 }
@@ -143,7 +143,12 @@ export function fromEngineGraph(nodes = [], edges = []) {
         ...(n.position && { position: { x: n.position.x, y: n.position.y } }),
       };
     }),
-    edges: edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
+    edges: edges.map((e) => ({
+      id: e.id, source: e.source, target: e.target,
+      ...((e.sourceHandle !== 'main' || e.targetHandle !== 'main') ? { sourceHandle: e.sourceHandle, targetHandle: e.targetHandle } : {}),
+      // Old explicit generic context links still use config expressions, not bindings.
+      ...(e.targetHandle === 'main' && nodes.find((n) => n.id === e.source)?.type?.startsWith('context.') ? { sourceHandle: e.sourceHandle, targetHandle: 'main' } : {}),
+    })),
   };
 }
 
@@ -491,6 +496,14 @@ function applyLastRuns(store) {
   }
 }
 
+export const presetState = { status: 'idle', error: null };
+let presetSync = null;
+let presetsLoaded = false;
+function updatePresetState(status, error = null) {
+  Object.assign(presetState, { status, error });
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event('opennodes:presets'));
+}
+
 const synced = new Map(); // automation id → JSON of what the server has
 const syncedConnections = new Set();
 
@@ -502,6 +515,8 @@ export async function loadWorkspace(store) {
   session.user = me.user;
   session.workspace = me.workspaces[0];
   const ws = session.workspace.id;
+  presetSync = createPresetSync(api, ws, updatePresetState);
+  presetsLoaded = false;
   const [catalog, wfs, creds, runs] = await Promise.all([
     api('GET', '/catalog'),
     api('GET', `/workspaces/${ws}/workflows`),
@@ -517,6 +532,12 @@ export async function loadWorkspace(store) {
   for (const a of store.automations) synced.set(a.id, snapshot(a));
   syncedConnections.clear();
   for (const c of store.connections) syncedConnections.add(c.id);
+  await presetSync
+    .load(store)
+    .then(() => {
+      presetsLoaded = true;
+    })
+    .catch(() => {});
 }
 
 /** Fresh run history from the server; tests from this session stay listed in the editor. */
@@ -576,21 +597,42 @@ async function syncNow(store, onError) {
     for (const id of connIds) syncedConnections.add(id);
   } catch (err) {
     onError?.(err);
+    throw err;
   }
+}
+
+async function saveAll(store, onError) {
+  const results = await Promise.allSettled([
+    syncNow(store, onError),
+    presetSync
+      ? (async () => {
+          if (!presetsLoaded) {
+            await presetSync.load(store);
+            presetsLoaded = true;
+          }
+          await presetSync.flush(store);
+        })()
+      : Promise.resolve(),
+  ]);
+  const errors = results.filter((r) => r.status === 'rejected').map((r) => r.reason);
+  if (errors.length === 1) throw errors[0];
+  if (errors.length) throw new AggregateError(errors, 'Some workspace changes could not be saved.');
 }
 
 export function scheduleSync(store, onError) {
   if (!session.workspace) return;
   clearTimeout(timer);
   timer = setTimeout(() => {
-    chain = chain.then(() => syncNow(store, onError));
+    chain = chain.catch(() => {}).then(() => saveAll(store, onError));
+    // Background saves report through onError and presetState; explicit flushes still reject.
+    void chain.catch(() => {});
   }, 400);
 }
 
 /** Saves pending changes now (before publish / test, which read the server copy). */
 export function flushSync(store, onError) {
   clearTimeout(timer);
-  chain = chain.then(() => syncNow(store, onError));
+  chain = chain.catch(() => {}).then(() => saveAll(store, onError));
   return chain;
 }
 

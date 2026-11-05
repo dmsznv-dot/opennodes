@@ -417,7 +417,7 @@ describe('overlaps between steps — warnings that light up the steps involved',
     expect(await warn(base())).toEqual([]);
   });
 
-  it('two voices linked: the one not used is lit up; one linked but not chosen too', async () => {
+  it('uses a linked voice automatically and warns about multiple voices or flow-only links', async () => {
     const a = base();
     a.edges.push(
       { id: 'ev1', source: 'v1', target: 'ai' },
@@ -427,6 +427,9 @@ describe('overlaps between steps — warnings that light up the steps involved',
     expect(await warn(a)).toEqual([['warn.several.voice', ['v2']]]);
     a.edges.pop();
     delete a.nodes[5].config.voice;
+    expect(await warn(a)).toEqual([]);
+    // An explicit main link keeps its legacy flow-only meaning.
+    a.edges.at(-1).targetHandle = 'main';
     expect(await warn(a)).toEqual([['warn.notChosen.voice', ['v1']]]);
   });
 

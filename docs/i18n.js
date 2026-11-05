@@ -1,3 +1,4 @@
+import { MESSAGES } from './messages-v3.js';
 /**
  * OpenNodes demo — central RU/EN dictionary.
  * UI chrome uses message keys below; catalog content (services, actions, templates)
@@ -83,6 +84,7 @@ const DICT = {
     'cat.sheets': 'Таблицы',
     'cat.ai': 'ИИ-помощник',
     'cat.reports': 'Отчёты',
+    'cat.personal': 'Личное',
     'cat.custom': 'Свой сценарий',
     'cat.dev': 'Для разработчиков',
 
@@ -504,6 +506,23 @@ const DICT = {
     'picker.planned': 'Планируется',
     'picker.empty': 'Ничего не нашлось. Попробуйте «сообщение», «письмо», «ИИ», «таблица».',
     'picker.devSection': 'HTTP-запросы, вебхуки и база данных — в разделе «Для разработчиков».',
+    'picker.browseAll': 'Посмотреть все шаги',
+    'picker.categories': 'Категории шагов',
+    'picker.cat.all': 'Все',
+    'picker.cat.messages': 'Мессенджеры и почта',
+    'picker.cat.ai': 'ИИ и агенты',
+    'picker.cat.sources': 'Источники и сервисы',
+    'picker.cat.text': 'Текст',
+    'picker.cat.logic': 'Условия и ожидание',
+    'picker.cat.context': 'Инструкции и стиль',
+    'picker.cat.advanced': 'Для опытных',
+    'picker.cat.other': 'Другие действия',
+    'step.renameButton': 'Переименовать: {name}',
+    'step.renameTitle': 'Переименовать шаг',
+    'step.renameInput': 'Название шага',
+    'step.renameHelp': 'Оставьте пустым, чтобы вернуть исходное название.',
+    'ai.rssAuto': 'Заголовок, текст и ссылка подставляются автоматически. ИИ обрабатывает каждую запись отдельно и читает статью по её ссылке.',
+    'ai.dataAdvanced': 'Данные можно задать в «Дополнительно» или прямо в шаблоне инструкции. Для RSS привязка настраивается автоматически.',
 
     'kind.trigger': 'Запуск сценария',
     'kind.triggerSub': 'что его начинает',
@@ -619,6 +638,7 @@ const DICT = {
     'cat.sheets': 'Spreadsheets',
     'cat.ai': 'AI assistant',
     'cat.reports': 'Reports',
+    'cat.personal': 'Personal',
     'cat.custom': 'Custom',
     'cat.dev': 'For developers',
 
@@ -1041,6 +1061,23 @@ const DICT = {
     'picker.planned': 'Planned',
     'picker.empty': 'Nothing found. Try “message”, “email”, “AI”, “spreadsheet”.',
     'picker.devSection': 'HTTP requests, webhooks and databases are under “For developers”.',
+    'picker.browseAll': 'Browse all steps',
+    'picker.categories': 'Step categories',
+    'picker.cat.all': 'All',
+    'picker.cat.messages': 'Messaging and email',
+    'picker.cat.ai': 'AI and agents',
+    'picker.cat.sources': 'Sources and services',
+    'picker.cat.text': 'Text',
+    'picker.cat.logic': 'Conditions and waits',
+    'picker.cat.context': 'Instructions and style',
+    'picker.cat.advanced': 'Advanced',
+    'picker.cat.other': 'Other actions',
+    'step.renameButton': 'Rename: {name}',
+    'step.renameTitle': 'Rename step',
+    'step.renameInput': 'Step name',
+    'step.renameHelp': 'Leave it empty to restore the default name.',
+    'ai.rssAuto': 'The title, text and link are filled in automatically. AI processes each item separately and reads the article at its link.',
+    'ai.dataAdvanced': 'Set data under “Advanced” or directly in the prompt template. RSS is connected automatically.',
 
     'kind.trigger': 'Start of the automation',
     'kind.triggerSub': 'what starts it',
@@ -1121,13 +1158,12 @@ const LIVE = {
     'common.error': 'Ошибка',
     'auth.loginTitle': 'Вход в OpenNodes',
     'auth.setupTitle': 'Первый запуск',
-    'auth.setupText':
-      'Создайте аккаунт владельца — он управляет этой установкой. Остальных можно будет пригласить позже.',
+    'auth.setupText': 'Создайте аккаунт для управления этой установкой OpenNodes.',
     'auth.email': 'Почта',
     'auth.password': 'Пароль',
     'auth.passwordHint': 'Не короче 8 символов.',
-    'auth.workspace': 'Название команды',
-    'auth.workspaceDefault': 'Моя команда',
+    'auth.workspace': 'Название пространства',
+    'auth.workspaceDefault': 'Мои сценарии',
     'auth.login': 'Войти',
     'auth.create': 'Создать аккаунт',
     'auth.logout': 'Выйти',
@@ -1225,13 +1261,12 @@ const LIVE = {
     'common.error': 'Error',
     'auth.loginTitle': 'Sign in to OpenNodes',
     'auth.setupTitle': 'First start',
-    'auth.setupText':
-      'Create the owner account — it manages this installation. You can invite others later.',
+    'auth.setupText': 'Create an account to manage this OpenNodes installation.',
     'auth.email': 'Email',
     'auth.password': 'Password',
     'auth.passwordHint': 'At least 8 characters.',
-    'auth.workspace': 'Team name',
-    'auth.workspaceDefault': 'My team',
+    'auth.workspace': 'Workspace name',
+    'auth.workspaceDefault': 'My automations',
     'auth.login': 'Sign in',
     'auth.create': 'Create account',
     'auth.logout': 'Sign out',
@@ -1329,7 +1364,8 @@ export function getLocale() {
 
 export function t(key, params = {}) {
   const live = liveMode ? (LIVE[locale][key] ?? LIVE.en[key]) : undefined;
-  const template = live ?? DICT[locale][key] ?? DICT.en[key] ?? key;
+  const template =
+    MESSAGES[locale]?.[key] ?? MESSAGES.en[key] ?? live ?? DICT[locale][key] ?? DICT.en[key] ?? key;
   return template.replace(/\{(\w+)\}/g, (m, name) => (name in params ? String(params[name]) : m));
 }
 

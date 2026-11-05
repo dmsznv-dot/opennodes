@@ -15,6 +15,10 @@ export function arePortsCompatible(sourceType: PortType, targetType: PortType): 
     return true;
   }
 
+  // Text is the semantic equivalent of a legacy string, never a file reference.
+  if ((sourceType === 'text' && targetType === 'string') ||
+      (sourceType === 'string' && targetType === 'text')) return true;
+
   // Trigger output can only feed trigger or any
   if (sourceType === 'trigger' || targetType === 'trigger') {
     return false;
@@ -23,7 +27,7 @@ export function arePortsCompatible(sourceType: PortType, targetType: PortType): 
   // JSON can accept string, number, boolean as valid JSON values
   if (
     targetType === 'json' &&
-    (sourceType === 'string' || sourceType === 'number' || sourceType === 'boolean')
+    (sourceType === 'string' || sourceType === 'text' || sourceType === 'number' || sourceType === 'boolean')
   ) {
     return true;
   }

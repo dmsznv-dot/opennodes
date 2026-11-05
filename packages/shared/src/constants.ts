@@ -6,6 +6,13 @@ export const PORT_TYPES = [
   'boolean',
   'binary',
   'any',
+  'text',
+  'context',
+  'prompt',
+  'imageAsset',
+  'imageCollection',
+  'document',
+  'modelConfig',
 ] as const;
 
 export type PortType = (typeof PORT_TYPES)[number];

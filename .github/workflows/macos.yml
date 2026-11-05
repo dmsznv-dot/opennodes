@@ -1,0 +1,24 @@
+name: macOS desktop
+on:
+  pull_request:
+  workflow_dispatch:
+jobs:
+  desktop:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm --filter @localflow/desktop test
+      - run: pnpm build:macos
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenNodes-macOS
+          path: build/macos/OpenNodes-macOS-*.zip
+          if-no-files-found: error

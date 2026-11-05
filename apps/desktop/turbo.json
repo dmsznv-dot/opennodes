@@ -1,0 +1,7 @@
+{
+  "extends": ["//"],
+  "tasks": {
+    "build": { "outputs": ["runtime/opennodes-lock"], "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/scripts/build-desktop-helper.mjs"] },
+    "test": { "inputs": ["runtime/**", "tests/**", "package.json"] }
+  }
+}
