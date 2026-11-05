@@ -81,7 +81,7 @@ opennodes/
 
 ## Quick Start
 
-### macOS desktop alpha · 0.3.1
+### macOS desktop alpha · 0.3.2
 
 The desktop app uses native AppKit menus, a window and a menu-bar item. The editor
 runs inside WKWebView with the real local engine and embedded database. Packaged
@@ -109,9 +109,9 @@ pending edits again, replaces the app and restarts it. Data stays in Application
 Support. Future versions are published by pushing a matching `vX.Y.Z` tag or
 `release/vX.Y.Z` branch; the
 release workflow builds and verifies both Apple Silicon and Intel archives before
-publishing either. If you already have OpenNodes 0.3.0, install 0.3.1 through
-**Update**. Version 0.3.1 includes the Personal Assistant template, node editor
-improvements, and fixes to desktop updates and preset synchronization.
+publishing either. To recover from the updater issue in 0.3.0 or 0.3.1, quit
+OpenNodes and replace the app with 0.3.2 from GitHub Releases once. Later releases
+can be installed through **Update**.
 
 Nodes now expose typed, colored ports. Hover or focus a port to see its meaning;
 starting a connection softly highlights compatible inputs. Named connections bind

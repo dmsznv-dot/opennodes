@@ -153,13 +153,24 @@ func validateUpdateZIP(_ url: URL) throws {
     }
 }
 
+// A Bundle instance can keep the old Info.plist cached after a replacement at the same path.
+func readUpdateBundleInfo(_ app: URL) throws -> [String: Any] {
+    let info = app.appendingPathComponent("Contents/Info.plist")
+    let data = try Data(contentsOf: info)
+    guard let plist = try PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any] else {
+        throw UpdateFailure("The update application metadata is invalid.")
+    }
+    return plist
+}
+
 func validateUpdateBundle(_ app: URL, version: String, architecture: String) throws {
     let fm = FileManager.default
     let resolved = app.resolvingSymlinksInPath().standardizedFileURL
-    guard resolved == app.standardizedFileURL,
-          let bundle = Bundle(url: app), bundle.bundleIdentifier == "app.opennodes.desktop",
-          bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String == version,
-          bundle.object(forInfoDictionaryKey: "CFBundleExecutable") as? String == "OpenNodes" else { throw UpdateFailure("The update is not the expected OpenNodes application.") }
+    guard resolved == app.standardizedFileURL else { throw UpdateFailure("The update application path is invalid.") }
+    let info = try readUpdateBundleInfo(app)
+    guard info["CFBundleIdentifier"] as? String == "app.opennodes.desktop",
+          info["CFBundleShortVersionString"] as? String == version,
+          info["CFBundleExecutable"] as? String == "OpenNodes" else { throw UpdateFailure("The update is not the expected OpenNodes application.") }
     guard let enumerator = fm.enumerator(at: app, includingPropertiesForKeys: [.isSymbolicLinkKey]) else { throw UpdateFailure("The update bundle cannot be read.") }
     for case let item as URL in enumerator {
         let actual = item.resolvingSymlinksInPath().standardizedFileURL.path
