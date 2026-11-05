@@ -2513,3 +2513,9 @@ textarea.input {
 .version-diff {
   margin-top: var(--space-2);
 }
+
+/* The chosen link: thicker, in the accent colour; Delete removes it. */
+.edge.edge-selected {
+  stroke: var(--accent, #6d5efc);
+  stroke-width: 3.5;
+}

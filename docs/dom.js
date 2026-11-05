@@ -13,7 +13,12 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 
 export function svg(tag, attrs = {}, ...children) {
   const el = document.createElementNS(SVG_NS, tag);
-  for (const [k, v] of Object.entries(attrs)) if (v != null) el.setAttribute(k, String(v));
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v == null) continue;
+    // Handlers are listeners, never inline-script attributes.
+    if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, String(v));
+  }
   appendChildren(el, children);
   return el;
 }

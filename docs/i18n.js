@@ -49,7 +49,7 @@ const DICT = {
       'Вставить данные прошлых шагов, дату или сведения о запуске. То же — клавишей {.',
     'hint.connect': 'Потяните отсюда к другому шагу, чтобы связать шаги.',
     'hint.canvasNav':
-      'Двумя пальцами — перемещение, щипок или ⌘ + колесо — масштаб. Клик по пустому месту — добавить шаг.',
+      'Двумя пальцами — перемещение, щипок или ⌘ + колесо — масштаб. Правая кнопка — меню (добавить шаг и др.). Клик по связи выделяет её, Delete — удаляет.',
     'hint.connCheck': 'Проверяет, что токен или ключ рабочий. Сообщения при этом не отправляются.',
 
     'menu.open': 'Меню профиля',
@@ -268,6 +268,11 @@ const DICT = {
       '«{name}» не берёт данные из других шагов — проведите связь от него к шагу ИИ.',
     'cv.ctxFromCtx': 'Шаг контекста нельзя подключить к другому шагу контекста — только к шагу ИИ.',
     'cv.ctxLabel.voice': 'голос',
+    'cv.menuAdd': 'Добавить шаг здесь',
+    'cv.menuFit': 'Вписать всё',
+    'cv.menuUndo': 'Отменить',
+    'cv.menuRedo': 'Повторить',
+    'cv.menuOpen': 'Открыть настройки шага',
     'cv.ctxLabel.prompt': 'шаблон',
     'panel.dataPickerHint':
       'Теги — данные прошлых шагов — вставляются кнопкой «+ Данные» или клавишей {. Тег можно перетащить мышью; нажмите на него, чтобы сменить формат или сделать ссылкой.',
@@ -544,7 +549,7 @@ const DICT = {
     'hint.addData': 'Insert data from earlier steps, the date or run details. Or press {.',
     'hint.connect': 'Drag from here to another step to connect them.',
     'hint.canvasNav':
-      'Two fingers pan, pinch or ⌘ + wheel zooms. Click an empty spot to add a step.',
+      'Two fingers pan, pinch or ⌘ + wheel zooms. Right click opens the menu (add a step and more). Click a link to select it, Delete removes it.',
     'hint.connCheck': 'Checks that the token or key works. No messages are sent.',
 
     'menu.open': 'Profile menu',
@@ -761,6 +766,11 @@ const DICT = {
     'cv.ctxNoInput': '“{name}” takes no data from other steps — link it to an AI step instead.',
     'cv.ctxFromCtx': 'A context step cannot lead into another context step — only into an AI step.',
     'cv.ctxLabel.voice': 'voice',
+    'cv.menuAdd': 'Add a step here',
+    'cv.menuFit': 'Fit all',
+    'cv.menuUndo': 'Undo',
+    'cv.menuRedo': 'Redo',
+    'cv.menuOpen': 'Open step settings',
     'cv.ctxLabel.prompt': 'template',
     'panel.dataPickerHint':
       'Tags — data from earlier steps — go in with “+ Data” or the { key. Drag a tag with the mouse; click it to change its format or make it a link.',

@@ -5,7 +5,9 @@
  * gestures into view changes and callbacks.
  *
  * Mouse: wheel pans (Shift for horizontal), Ctrl/Cmd + wheel zooms at the cursor,
- * drag on empty space / Space + drag / middle button pans.
+ * drag on empty space / Space + drag / middle button pans. Left click on empty space
+ * clears the selection; right click opens the menu of what is under it (the board, a
+ * step, a link).
  * Trackpad: two fingers pan, pinch zooms at the fingers (browsers send it as Ctrl + wheel).
  */
 
@@ -47,6 +49,7 @@ window.addEventListener('keyup', (e) => {
  *   bounds: () => {minX:number,minY:number,maxX:number,maxY:number}|null,
  *   onView: (view) => void,
  *   onEmptyClick?: (world: {x:number,y:number}, client: {x:number,y:number}) => void,
+ *   onMenu?: (target: {kind:'board'|'node'|'edge', id?: string}, world: {x:number,y:number}, client: {x:number,y:number}) => void,
  *   onNodeDragStart?: (id: string) => void,
  *   onNodeDrag?: (id: string, dx: number, dy: number) => void,
  *   onNodeDragEnd?: (id: string) => void,
@@ -206,6 +209,20 @@ export function attachCanvas(viewport, world, opts) {
     }
   };
   viewport.addEventListener('pointerup', finish);
+  // Right click: the menu of what is under the pointer, instead of the browser's.
+  viewport.addEventListener('contextmenu', (e) => {
+    if (e.target.closest('.canvas-toolbar, .panel, .panel-wrap, input, textarea, select')) return;
+    e.preventDefault();
+    if (!opts.onMenu) return;
+    const edge = e.target.closest('[data-edge-id]');
+    const card = e.target.closest('[data-node-id]');
+    const target = edge
+      ? { kind: 'edge', id: edge.dataset.edgeId }
+      : card
+        ? { kind: 'node', id: card.dataset.nodeId }
+        : { kind: 'board' };
+    opts.onMenu(target, toWorld(e.clientX, e.clientY), { x: e.clientX, y: e.clientY });
+  });
   viewport.addEventListener('pointercancel', finish);
   // A drag must not end with a click that opens a card or a menu.
   viewport.addEventListener(

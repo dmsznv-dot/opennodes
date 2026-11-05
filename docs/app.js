@@ -230,6 +230,16 @@ document.addEventListener('keydown', (e) => {
       if (a) redo(a);
       return;
     }
+    if ((e.key === 'Delete' || e.key === 'Backspace') && ui.selectedEdgeId && a) {
+      e.preventDefault();
+      deleteSelectedEdge(a);
+      return;
+    }
+    if (e.key === 'Escape' && ui.selectedEdgeId && !ui.panelNodeId) {
+      ui.selectedEdgeId = null;
+      render();
+      return;
+    }
     if (!mod && !e.altKey) {
       const act = { '+': 'zoomIn', '=': 'zoomIn', '-': 'zoomOut', 0: 'reset', f: 'fit', F: 'fit' }[
         e.key
@@ -1565,6 +1575,9 @@ function restore(a, snap) {
   render();
 }
 
+const canUndo = (a) => ui.history?.id === a.id && ui.history.past.length > 0;
+const canRedo = (a) => ui.history?.id === a.id && ui.history.future.length > 0;
+
 function undo(a) {
   const h = ui.history;
   if (h?.id !== a.id || !h.past.length) return;
@@ -1853,13 +1866,23 @@ function canvasView(a) {
             t(`cv.ctxLabel.${fromAct.contextField}`)
           )
         );
+      const selected = ui.selectedEdgeId === e.id;
       edgeGroup.append(
-        svg('path', { d: p.d, class: context ? 'edge edge-context' : 'edge' }),
+        svg('path', {
+          d: p.d,
+          class: ['edge', context && 'edge-context', selected && 'edge-selected']
+            .filter(Boolean)
+            .join(' '),
+        }),
         svg('path', {
           d: p.d,
           class: 'edge-hit',
           'data-edge-id': e.id,
-          onclick: (ev) => openEdgeMenu(a, e, ev),
+          // A click selects the link (Delete removes it); right click opens its menu.
+          onclick: () => {
+            ui.selectedEdgeId = selected ? null : e.id;
+            drawEdges();
+          },
         })
       );
       if (context) continue;
@@ -2060,12 +2083,24 @@ function canvasView(a) {
         (ui.views ??= {})[a.id] = view;
         saveView(a.id, view);
       },
-      onEmptyClick: (pt, client) => {
-        if (ui.panelNodeId) return closePanel();
-        openPicker(a, null, {
-          at: client,
-          position: { x: snap(pt.x - CARD_W / 2), y: snap(pt.y - 20) },
-        });
+      // Left click on the board clears the selection: the open step, the chosen link.
+      onEmptyClick: () => {
+        if (ui.selectedEdgeId) {
+          ui.selectedEdgeId = null;
+          drawEdges();
+        }
+        if (ui.panelNodeId) closePanel();
+      },
+      onMenu: (target, pt, client) => {
+        if (target.kind === 'edge') {
+          const edge = a.edges.find((x) => x.id === target.id);
+          if (!edge) return;
+          ui.selectedEdgeId = edge.id;
+          drawEdges();
+          return openEdgeMenu(a, edge, { clientX: client.x, clientY: client.y });
+        }
+        if (target.kind === 'node') return openNodeMenu(a, target.id, client);
+        openBoardMenu(a, pt, client);
       },
       onNodeDragStart: () => checkpoint(a),
       onNodeDrag: (id, dx, dy) => {
@@ -2145,6 +2180,81 @@ function linkContext(a, source, target) {
   to.config = { ...to.config, [fieldKey]: voiceExpr(source) };
   if (fieldKey === 'prompt' && from.config?.forEach && toAct.forEach && !to.config.forEach)
     to.config.forEach = from.config.forEach;
+}
+
+/** A menu at the pointer, the same for the board, a step and a link. */
+function openMenuAt(client, items) {
+  const anchor = h('span', {
+    class: 'click-anchor',
+    style: { left: `${client.x}px`, top: `${client.y}px` },
+  });
+  document.body.append(anchor);
+  openPopover(
+    anchor,
+    items.filter(Boolean).map((it) =>
+      h(
+        'button',
+        {
+          type: 'button',
+          role: 'menuitem',
+          class: ['menu-item', it.danger && 'danger'],
+          disabled: it.disabled,
+          onclick: () => {
+            closePopover();
+            it.run();
+          },
+        },
+        it.label
+      )
+    )
+  );
+  anchor.remove();
+}
+
+/** Right click on the board: add a step there, fit, undo / redo. */
+function openBoardMenu(a, pt, client) {
+  openMenuAt(client, [
+    {
+      label: t('cv.menuAdd'),
+      run: () =>
+        openPicker(a, null, {
+          at: client,
+          position: { x: snap(pt.x - CARD_W / 2), y: snap(pt.y - 20) },
+        }),
+    },
+    { label: t('cv.menuFit'), run: () => ui.canvas?.fit() },
+    { label: t('cv.menuUndo'), disabled: !canUndo(a), run: () => undo(a) },
+    { label: t('cv.menuRedo'), disabled: !canRedo(a), run: () => redo(a) },
+  ]);
+}
+
+/** Right click on a step: open it, add the next step, delete it. */
+function openNodeMenu(a, id, client) {
+  const n = a.nodes.find((x) => x.id === id);
+  if (!n) return;
+  openMenuAt(client, [
+    { label: t('cv.menuOpen'), run: () => openPanel(a, id) },
+    { label: t('ed.addNext'), run: () => openPicker(a, id) },
+    {
+      label: t('panel.delete'),
+      danger: true,
+      run: () => {
+        if (confirm(t('panel.deleteConfirm', { name: nodeTitle(n) }))) deleteStep(a, id);
+      },
+    },
+  ]);
+}
+
+/** Removes the chosen link (Delete / Backspace on the board). */
+function deleteSelectedEdge(a) {
+  const id = ui.selectedEdgeId;
+  ui.selectedEdgeId = null;
+  if (!id || !a.edges.some((e) => e.id === id)) return false;
+  checkpoint(a);
+  a.edges = a.edges.filter((e) => e.id !== id);
+  touch(a);
+  render();
+  return true;
 }
 
 function openEdgeMenu(a, edge, ev) {
