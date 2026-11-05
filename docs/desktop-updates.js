@@ -154,12 +154,12 @@ export function createDesktopUpdates({ openModal, flush, onState = () => {} }) {
   function renderButton() {
     if (!headerButton) return;
     const available = ['available', 'downloading', 'ready', 'installing'].includes(state.status);
-    headerButton.className = `btn desktop-update-button${available ? ' has-update' : ''}`;
+    headerButton.className = `btn desktop-update-button update-button${available ? ' has-update' : ''}`;
     headerButton.setAttribute('aria-label', t('update.open'));
     clear(headerButton).append(
       document.createTextNode('Update'),
       ...(available
-        ? [h('span', { class: 'desktop-update-badge', 'aria-hidden': 'true' }, '•')]
+        ? [h('span', { class: 'desktop-update-badge update-indicator', 'aria-hidden': 'true' })]
         : [])
     );
   }
@@ -172,12 +172,12 @@ export function createDesktopUpdates({ openModal, flush, onState = () => {} }) {
       h('p', { class: 'muted' }, t('update.current', { v: state.currentVersion })),
       h(
         'p',
-        { class: 'desktop-update-status', role: 'status', 'aria-live': 'polite' },
+        { class: 'desktop-update-status update-heading', role: 'status', 'aria-live': 'polite' },
         t(`update.${statusKey}`, { v: state.version ?? '' })
       ),
     ];
     if (state.releaseNotes) {
-      nodes.push(h('div', { class: 'desktop-update-notes' }, state.releaseNotes));
+      nodes.push(h('div', { class: 'desktop-update-notes update-notes' }, state.releaseNotes));
     }
     if (state.status === 'downloading') {
       const progress = Number.isFinite(state.progress)
@@ -201,7 +201,7 @@ export function createDesktopUpdates({ openModal, flush, onState = () => {} }) {
       h('p', { class: 'muted' }, t('update.data')),
       h(
         'div',
-        { class: 'desktop-update-actions' },
+        { class: 'desktop-update-actions update-actions row-gap' },
         h(
           'button',
           { type: 'button', class: 'btn', disabled: busy, onclick: check },

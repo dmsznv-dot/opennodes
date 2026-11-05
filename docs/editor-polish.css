@@ -81,6 +81,7 @@
 .connected-input-row .port-dot { flex: 0 0 auto; width: 8px; height: 8px; }
 .connected-input-row button { margin-left: auto; width: 26px; height: 26px; }
 .preset-sync { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-3); margin-top: 8px; }
+.preset-sync[hidden] { display: none; }
 .preset-sync::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: var(--ok); }
 .preset-sync.sync-error { color: var(--err); }
 .preset-sync.sync-error::before { background: var(--err); }

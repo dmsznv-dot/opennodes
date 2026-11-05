@@ -41,12 +41,12 @@ export function createPresetSync(request, workspaceId, onState = () => {}) {
   const publish = async (pending, initial) => {
     let remote = initial;
     for (let attempt = 0; attempt < 3; attempt++) {
-      if (remote) {
-        revision = remote.revision;
-        pending = merge(remote, pending);
-        if (stable(pending) === stable(libraries(remote))) return remote;
-      }
-      try { return await request('PUT', endpoint, { expectedRevision: revision, ...pending }); }
+      if (remote) revision = remote.revision;
+      // Reconcile each retry against the original edits, so rejected writes do
+      // not carry forward copies created for an earlier server revision.
+      const candidate = remote ? merge(remote, pending) : pending;
+      if (remote && stable(candidate) === stable(libraries(remote))) return remote;
+      try { return await request('PUT', endpoint, { expectedRevision: revision, ...candidate }); }
       catch (error) {
         if (error.status !== 409 || attempt === 2) throw error;
         remote = await request('GET', endpoint);

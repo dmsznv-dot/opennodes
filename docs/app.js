@@ -188,8 +188,10 @@ const desktopUpdates = createDesktopUpdates({
 });
 window.addEventListener('opennodes:presets', () => {
   for (const el of document.querySelectorAll('[data-preset-sync]')) {
-    el.textContent = t(`preset.${live.presetState.status}`);
-    el.classList.toggle('sync-error', live.presetState.status === 'error');
+    const { status } = live.presetState;
+    el.textContent = status === 'idle' ? '' : t(`preset.${status}`);
+    el.hidden = status === 'idle';
+    el.classList.toggle('sync-error', status === 'error');
   }
   if (live.presetState.status === 'saved') {
     try {
@@ -3438,7 +3440,18 @@ function presetBlock(a, node, saveNode) {
     line,
     h('div', { class: 'row-gap', style: { flexWrap: 'wrap' } }, select, load, saveBtn),
     status.preset ? versionHistory(a, node, status.preset, kind, apply) : null,
-    live.isLive ? h('p', { class: 'preset-sync', 'data-preset-sync': '', role: 'status' }, t(`preset.${live.presetState.status === 'idle' ? 'saved' : live.presetState.status}`)) : null
+    live.isLive
+      ? h(
+          'p',
+          {
+            class: ['preset-sync', live.presetState.status === 'error' && 'sync-error'],
+            'data-preset-sync': '',
+            role: 'status',
+            hidden: live.presetState.status === 'idle',
+          },
+          live.presetState.status === 'idle' ? '' : t(`preset.${live.presetState.status}`)
+        )
+      : null
   );
 }
 

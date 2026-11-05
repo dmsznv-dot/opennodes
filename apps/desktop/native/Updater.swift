@@ -1,7 +1,8 @@
 import Foundation
 import WebKit
 
-// Bounded ephemeral transfers. Renderer content never supplies download URLs.
+// One bounded transfer at a time, on an ephemeral session. Redirects may only stay
+// on GitHub's release download hosts; renderer content never supplies a URL.
 private final class UpdateTransfer: NSObject, URLSessionDataDelegate {
     private let maximum: Int64
     private let file: FileHandle?
@@ -28,7 +29,8 @@ private final class UpdateTransfer: NSObject, URLSessionDataDelegate {
         request.setValue(api ? "application/vnd.github+json" : "application/octet-stream", forHTTPHeaderField: "Accept")
         request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
         session.dataTask(with: request).resume()
-        finished.wait(); session.invalidateAndCancel()
+        finished.wait()
+        session.invalidateAndCancel()
         if let failure = failure { throw failure }
         return buffer
     }
@@ -41,10 +43,13 @@ private final class UpdateTransfer: NSObject, URLSessionDataDelegate {
         completionHandler(request)
     }
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
-        guard let response = response as? HTTPURLResponse, response.statusCode == 200, response.expectedContentLength <= maximum else {
-            failure = UpdateFailure("GitHub cannot provide this update. Check your connection and try again."); completionHandler(.cancel); return
+        guard let response = response as? HTTPURLResponse, response.statusCode == 200,
+              response.expectedContentLength <= maximum else {
+            failure = UpdateFailure("GitHub cannot provide this update. Check your connection and try again.")
+            completionHandler(.cancel); return
         }
-        expected = response.expectedContentLength; completionHandler(.allow)
+        expected = response.expectedContentLength
+        completionHandler(.allow)
     }
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         bytes += Int64(data.count)
@@ -54,7 +59,8 @@ private final class UpdateTransfer: NSObject, URLSessionDataDelegate {
         if expected > 0 { progress?(min(1, Double(bytes) / Double(expected))) }
     }
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        if failure == nil { failure = error }; finished.signal()
+        if failure == nil { failure = error }
+        finished.signal()
     }
 }
 
@@ -65,19 +71,19 @@ final class DesktopUpdater: NSObject, WKScriptMessageHandler {
     var acceptsMessage: ((WKScriptMessage) -> Bool)?
     private var release: VerifiedRelease?
     private var busy = false
+    private var prepared: (helper: URL, plan: URL, stage: URL)?
     private(set) var state: [String: Any]
     private let worker = DispatchQueue(label: "app.opennodes.updater", qos: .utility)
     private let resultURL: URL
     private let dataDirectory: URL
     private var completedBackup: URL?
-    private struct StagedUpdate { let directory: URL; let helper: URL; let plan: URL }
-    private var stagedUpdate: StagedUpdate?
     init(dataURL: URL) {
         currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.3.0"
         dataDirectory = dataURL.standardizedFileURL
         resultURL = dataURL.appendingPathComponent("update-result.json")
         state = ["status": "idle", "currentVersion": currentVersion]
         super.init()
+        // The helper records failures outside the bundle, so they survive rollback.
         if let data = try? Data(contentsOf: resultURL), let result = try? JSONSerialization.jsonObject(with: data) as? [String: String] {
             if let error = result["error"] { state = ["status": "error", "currentVersion": currentVersion, "error": error] }
             else if result["version"] == currentVersion, let backup = result["backup"],
@@ -89,9 +95,11 @@ final class DesktopUpdater: NSObject, WKScriptMessageHandler {
         }
     }
     func completeLaunch() {
+        // Keep the previous bundle until the new engine and editor actually load.
         guard let backup = completedBackup else { return }
         try? FileManager.default.removeItem(at: backup)
-        try? FileManager.default.removeItem(at: resultURL); completedBackup = nil
+        try? FileManager.default.removeItem(at: resultURL)
+        completedBackup = nil
     }
     func publish() { onState?(state) }
     private func set(_ status: String, extra: [String: Any] = [:]) {
@@ -101,12 +109,35 @@ final class DesktopUpdater: NSObject, WKScriptMessageHandler {
     }
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard acceptsMessage?(message) == true, let body = message.body as? [String: Any], body.count == 1, let action = body["action"] as? String else { return }
-        switch action {
-        case "check": check()
-        case "install": install()
-        case "confirmInstall": confirmInstall()
-        case "cancelInstall": cancelInstall()
-        default: break
+        if action == "check" { check() }
+        else if action == "install" { install() }
+        else if action == "confirmInstall" { finishInstall() }
+        else if action == "cancelInstall" { cancelInstall() }
+    }
+    private func cancelInstall() {
+        guard state["status"] as? String == "ready", let prepared = prepared else { return }
+        try? FileManager.default.removeItem(at: prepared.stage)
+        self.prepared = nil; busy = false
+        set("error", extra: ["error": "Changes cannot be saved. The update is cancelled; your editor stays open."])
+    }
+    func cancelPendingOnQuit() {
+        guard let prepared = prepared else { return }
+        try? FileManager.default.removeItem(at: prepared.stage)
+        self.prepared = nil
+    }
+    private func finishInstall() {
+        // The renderer freezes editing and flushes again after the download, then acknowledges.
+        guard state["status"] as? String == "ready", let prepared = prepared else { return }
+        self.prepared = nil
+        do {
+            let process = Process(); process.executableURL = prepared.helper; process.arguments = [prepared.plan.path]
+            process.currentDirectoryURL = prepared.stage; process.standardInput = FileHandle.nullDevice
+            process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
+            try process.run()
+            set("installing"); onInstall?()
+        } catch {
+            busy = false; set("error", extra: ["error": error.localizedDescription])
+            try? FileManager.default.removeItem(at: prepared.stage)
         }
     }
     func check() {
@@ -123,30 +154,6 @@ final class DesktopUpdater: NSObject, WKScriptMessageHandler {
                 }
             } catch { DispatchQueue.main.async { self?.busy = false; self?.set("error", extra: ["error": error.localizedDescription]) } }
         }
-    }
-    // Ready is a save barrier, not permission to terminate. The renderer freezes
-    // editing, completes a final flush, and only then sends confirmInstall.
-    private func confirmInstall() {
-        guard state["status"] as? String == "ready", let staged = stagedUpdate else { return }
-        do {
-            let process = Process(); process.executableURL = staged.helper; process.arguments = [staged.plan.path]
-            process.currentDirectoryURL = staged.directory; process.standardInput = FileHandle.nullDevice
-            process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
-            try process.run()
-            stagedUpdate = nil
-            set("installing"); onInstall?()
-        } catch {
-            try? FileManager.default.removeItem(at: staged.directory); stagedUpdate = nil
-            busy = false; set("error", extra: ["error": error.localizedDescription])
-        }
-    }
-    private func cancelInstall() {
-        guard state["status"] as? String == "ready", let staged = stagedUpdate else { return }
-        try? FileManager.default.removeItem(at: staged.directory); stagedUpdate = nil
-        busy = false; set("error", extra: ["error": "The update is cancelled because editor changes cannot be saved. Your current app keeps running."])
-    }
-    func cancelPendingOnQuit() {
-        if let staged = stagedUpdate { try? FileManager.default.removeItem(at: staged.directory); stagedUpdate = nil }
     }
     private func install() {
         guard !busy, let release = release else { publish(); return }
@@ -184,8 +191,8 @@ final class DesktopUpdater: NSObject, WKScriptMessageHandler {
                 let candidate = stage.appendingPathComponent("OpenNodes.app", isDirectory: true)
                 try fm.copyItem(at: app, to: candidate)
                 try validateUpdateBundle(candidate, version: release.version, architecture: VerifiedRelease.architecture)
+                // The helper comes from the already running app, never the renderer or download.
                 let helper = stage.appendingPathComponent("OpenNodesUpdateHelper")
-                // Use the running app's helper, not an executable chosen by a page.
                 try fm.copyItem(at: target.appendingPathComponent("Contents/Resources/OpenNodesUpdateHelper"), to: helper)
                 try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: helper.path)
                 let plan = UpdateInstallPlan(target: target.path, stage: stage.path, version: release.version, previousVersion: previous, architecture: VerifiedRelease.architecture, parentPID: ProcessInfo.processInfo.processIdentifier, resultFile: resultURL.path, dataDirectory: dataDirectory.path)
@@ -194,8 +201,11 @@ final class DesktopUpdater: NSObject, WKScriptMessageHandler {
                 try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: planURL.path)
                 try? fm.removeItem(at: temp); temporary = nil
                 DispatchQueue.main.async {
-                    guard let self = self else { try? fm.removeItem(at: stage); return }
-                    self.stagedUpdate = StagedUpdate(directory: stage, helper: helper, plan: planURL)
+                    guard let self = self else {
+                        try? fm.removeItem(at: stage)
+                        return
+                    }
+                    self.prepared = (helper, planURL, stage)
                     self.set("ready", extra: ["progress": 1])
                 }
             } catch {

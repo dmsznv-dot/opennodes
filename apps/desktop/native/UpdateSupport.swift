@@ -14,7 +14,8 @@ struct ReleaseVersion: Comparable, Equatable {
     let patch: UInt64
     let string: String
     init?(_ input: String) {
-        // Stable versions only; reject ambiguous leading zeros and suffixes.
+        // Stable releases only. Leading zeroes, prefixes, prerelease and build suffixes
+        // are rejected rather than compared ambiguously.
         let parts = input.split(separator: ".", omittingEmptySubsequences: false)
         guard parts.count == 3, parts.allSatisfy({ !$0.isEmpty && ($0 == "0" || !$0.hasPrefix("0")) && $0.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }) }),
               let a = UInt64(parts[0]), let b = UInt64(parts[1]), let c = UInt64(parts[2]) else { return nil }
@@ -59,11 +60,14 @@ struct VerifiedRelease {
         let release = try JSONDecoder().decode(GitHubRelease.self, from: data)
         guard !release.draft, !release.prerelease else { return nil }
         let tag = release.tag_name.hasPrefix("v") ? String(release.tag_name.dropFirst()) : release.tag_name
-        guard let next = ReleaseVersion(tag), let installed = ReleaseVersion(current) else { throw UpdateFailure("The release has an invalid stable version.") }
+        guard let next = ReleaseVersion(tag), let installed = ReleaseVersion(current) else {
+            throw UpdateFailure("The release has an invalid stable version.")
+        }
         guard next > installed else { return nil }
         let name = "OpenNodes-macOS-\(architecture).zip"
         let matches = release.assets.filter { $0.name == name }
-        guard matches.count == 1, let asset = matches.first, asset.size > 0, asset.size <= maximumArchive else {
+        guard matches.count == 1, let asset = matches.first,
+              asset.size > 0, asset.size <= maximumArchive else {
             throw UpdateFailure("This release has no valid macOS archive for this Mac.")
         }
         guard let digest = asset.digest, digest.hasPrefix("sha256:") else { throw UpdateFailure("GitHub does not provide the required SHA-256 digest for this release.") }
@@ -91,6 +95,7 @@ func runTool(_ executable: String, _ arguments: [String], maximumOutput: Int = 1
     guard process.terminationStatus == 0 else { throw UpdateFailure("Update validation failed (\(URL(fileURLWithPath: executable).lastPathComponent)).") }
     return output
 }
+
 func sha256File(_ url: URL) throws -> String {
     let file = try FileHandle(forReadingFrom: url); defer { try? file.close() }
     var hash = SHA256()
@@ -98,8 +103,8 @@ func sha256File(_ url: URL) throws -> String {
     return hash.finalize().map { String(format: "%02x", $0) }.joined()
 }
 
-// Validate both central and local ZIP names before extraction. An archive may not
-// write through a symlink. Internal production-package links remain supported.
+// Validate central and local ZIP names before extraction. An archive cannot write
+// through a symlink. Internal package links are permitted, external links are not.
 func validateUpdateZIP(_ url: URL) throws {
     let data = try Data(contentsOf: url, options: .mappedIfSafe)
     func u16(_ p: Int) -> Int { Int(data[p]) | Int(data[p+1]) << 8 }
@@ -109,8 +114,10 @@ func validateUpdateZIP(_ url: URL) throws {
     for p in stride(from: data.count - 22, through: max(0, data.count - 65_557), by: -1) {
         if u32(p) == 0x06054b50 && p + 22 + u16(p+20) == data.count { footer = p; break }
     }
-    guard let end = footer, u16(end+4) == 0, u16(end+6) == 0, u16(end+8) == u16(end+10), u16(end+10) > 0, u16(end+10) < 65_535 else { throw UpdateFailure("Unsupported update ZIP layout.") }
-    guard u32(end+16) + u32(end+12) == end else { throw UpdateFailure("Invalid update ZIP directory.") }
+    guard let end = footer, u16(end+4) == 0, u16(end+6) == 0, u16(end+8) == u16(end+10),
+          u16(end+10) > 0, u16(end+10) < 65_535 else { throw UpdateFailure("Unsupported update ZIP layout.") }
+    let centralEnd = u32(end+16) + u32(end+12)
+    guard centralEnd == end else { throw UpdateFailure("Invalid update ZIP directory.") }
     var cursor = u32(end+16), names = Set<String>(), links = [String](), expanded: Int64 = 0
     for _ in 0..<u16(end+10) {
         guard cursor >= 0, cursor + 46 <= end, u32(cursor) == 0x02014b50 else { throw UpdateFailure("Invalid ZIP entry.") }
@@ -118,9 +125,11 @@ func validateUpdateZIP(_ url: URL) throws {
         let size = u32(cursor+24), compressed = u32(cursor+20), local = u32(cursor+42)
         guard cursor + 46 + count + extra + comment <= end, flags & 1 == 0, [0,8].contains(method),
               let name = String(data: data.subdata(in: cursor+46..<cursor+46+count), encoding: .utf8),
-              !name.contains("\\"), !name.contains("\0"), !name.contains("\n"), !name.hasPrefix("/"), name == name.precomposedStringWithCanonicalMapping,
+              !name.contains("\\"), !name.contains("\0"), !name.contains("\n"), !name.hasPrefix("/"),
+              name == name.precomposedStringWithCanonicalMapping,
               name.split(separator: "/", omittingEmptySubsequences: false).enumerated().allSatisfy({ index, p in ![".", ".."].contains(String(p)) && (!p.isEmpty || index == name.split(separator: "/", omittingEmptySubsequences: false).count - 1) }),
-              name == "OpenNodes.app/" || name.hasPrefix("OpenNodes.app/") || name.hasPrefix("__MACOSX/"), names.insert(name.lowercased()).inserted else { throw UpdateFailure("Unsafe or duplicate update ZIP path.") }
+              name == "OpenNodes.app/" || name.hasPrefix("OpenNodes.app/") || name.hasPrefix("__MACOSX/"),
+              names.insert(name.lowercased()).inserted else { throw UpdateFailure("Unsafe or duplicate update ZIP path.") }
         guard local >= 0, local + 30 <= u32(end+16), u32(local) == 0x04034b50, u16(local+6) == flags, u16(local+8) == method,
               u16(local+26) == count, local + 30 + count + u16(local+28) + compressed <= u32(end+16),
               data.subdata(in: local+30..<local+30+count) == data.subdata(in: cursor+46..<cursor+46+count) else { throw UpdateFailure("ZIP local entry does not match its directory.") }
@@ -143,15 +152,18 @@ func validateUpdateZIP(_ url: URL) throws {
         guard destination.hasPrefix("/archive/OpenNodes.app/") else { throw UpdateFailure("Update symlink escapes the application.") }
     }
 }
+
 func validateUpdateBundle(_ app: URL, version: String, architecture: String) throws {
     let fm = FileManager.default
-    guard app.resolvingSymlinksInPath().standardizedFileURL == app.standardizedFileURL,
+    let resolved = app.resolvingSymlinksInPath().standardizedFileURL
+    guard resolved == app.standardizedFileURL,
           let bundle = Bundle(url: app), bundle.bundleIdentifier == "app.opennodes.desktop",
           bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String == version,
           bundle.object(forInfoDictionaryKey: "CFBundleExecutable") as? String == "OpenNodes" else { throw UpdateFailure("The update is not the expected OpenNodes application.") }
     guard let enumerator = fm.enumerator(at: app, includingPropertiesForKeys: [.isSymbolicLinkKey]) else { throw UpdateFailure("The update bundle cannot be read.") }
     for case let item as URL in enumerator {
-        guard item.resolvingSymlinksInPath().standardizedFileURL.path.hasPrefix(app.path + "/") else { throw UpdateFailure("An update bundle link escapes the application.") }
+        let actual = item.resolvingSymlinksInPath().standardizedFileURL.path
+        guard actual.hasPrefix(app.path + "/") else { throw UpdateFailure("An update bundle link escapes the application.") }
     }
     let expected = architecture == "arm64" ? "arm64" : "x86_64"
     for path in ["Contents/MacOS/OpenNodes", "Contents/Resources/node", "Contents/Resources/OpenNodesUpdateHelper"] {
@@ -164,6 +176,7 @@ func validateUpdateBundle(_ app: URL, version: String, architecture: String) thr
     // Ad-hoc signatures provide integrity, not publisher identity. Trust originates
     // from the fixed GitHub repository over HTTPS plus its release-asset digest.
 }
+
 struct UpdateInstallPlan: Codable {
     let target: String
     let stage: String
@@ -174,14 +187,19 @@ struct UpdateInstallPlan: Codable {
     let resultFile: String
     let dataDirectory: String
 }
+
 func validateInstallLocation(_ target: URL) throws {
     let fm = FileManager.default, parent = target.deletingLastPathComponent()
     guard target.pathExtension == "app", target == target.resolvingSymlinksInPath().standardizedFileURL,
-          !target.path.contains("/AppTranslocation/"), !target.path.hasPrefix("/Volumes/"), fm.isWritableFile(atPath: target.path), fm.isWritableFile(atPath: parent.path),
-          (try fm.attributesOfItem(atPath: target.path)[.ownerAccountID] as? NSNumber)?.uint32Value == getuid() else { throw UpdateFailure("Move OpenNodes to a writable Applications folder, then reopen it before updating.") }
+          !target.path.contains("/AppTranslocation/"), !target.path.hasPrefix("/Volumes/"),
+          fm.isWritableFile(atPath: target.path), fm.isWritableFile(atPath: parent.path),
+          (try fm.attributesOfItem(atPath: target.path)[.ownerAccountID] as? NSNumber)?.uint32Value == getuid() else {
+        throw UpdateFailure("Move OpenNodes to a writable Applications folder, then reopen it before updating.")
+    }
 }
-// The sibling staging directory ensures both renames happen on the destination
-// volume. Preserve the old bundle until the new engine and editor load.
+
+// Both renames happen on the destination volume. Failure restores the old bundle;
+// the backup is kept after success until the next launch verifies the new app.
 func replaceUpdateBundle(target: URL, staged: URL, backup: URL, validate: (URL) throws -> Void, reopen: (URL) throws -> Void) throws {
     let fm = FileManager.default
     guard !fm.fileExists(atPath: backup.path) else { throw UpdateFailure("An update backup already exists.") }
