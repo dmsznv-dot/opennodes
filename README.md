@@ -88,6 +88,7 @@ runs inside WKWebView with the real local engine and embedded database. Packaged
 builds include Node and production dependencies; Docker and a separate Node
 installation are not needed to use the app.
 
+Requires macOS 13.5 or later (matching the bundled Node runtime).
 Build on a Mac (Apple Silicon or Intel; the result matches the build machine):
 
 ```bash
