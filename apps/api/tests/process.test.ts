@@ -242,6 +242,25 @@ describe('@localflow/api — brand voice (context step)', () => {
     expect(v.outputPayload.voice).toBe(system.slice(voice));
   });
 
+  it('a voice over the limit goes in without its last examples, and says how many', async () => {
+    const examples = Array.from(
+      { length: 6 },
+      (_, i) => `Пример ${i + 1}. ${'слово '.repeat(250)}`
+    ).join('\n---\n');
+    const res = await runProcess(
+      { input: 'x', instruction: 'Перескажи', voice: '{{ $nodes.v.output }}' },
+      { ...VOICE, examples }
+    );
+    expect(res.execution.status).toBe('SUCCEEDED');
+    const system: string = modelRequests[0].messages[0].content;
+    expect(system).toContain('Пример 1.');
+    expect(system).not.toContain('Пример 6.');
+    expect(system).toContain('- Never use: канцелярит');
+    const v = res.steps.find((st) => st.nodeId === 'v');
+    expect(v.outputPayload.droppedExamples).toBeGreaterThan(0);
+    expect(v.outputPayload.voice.length).toBeLessThanOrEqual(6000);
+  });
+
   it('without a voice the AI step sends the same system message as before', async () => {
     const res = await runProcess({ input: '{{ $trigger.list }}', instruction: 'Перескажи' });
     expect(res.execution.status).toBe('SUCCEEDED');

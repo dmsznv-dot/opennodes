@@ -20,13 +20,14 @@ const EMOJI: Record<string, string> = {
   ok: 'emoji are fine where they help',
 };
 
-/** A brand voice as rules for the model: who we write for, how, what never to do, examples. */
-export function voiceText(config: Record<string, unknown>): string {
+/**
+ * The most a voice may take in the model's request. Above it, examples are dropped from
+ * the end (rules always stay): a long profile must not silently crowd out the task.
+ */
+export const MAX_VOICE_CHARS = 6000;
+
+function voiceLines(config: Record<string, unknown>, examples: string[]): string {
   const name = toText(config.name).trim() || 'Brand voice';
-  const examples = toText(config.examples)
-    .split(/\n\s*---+\s*\n|\n{3,}/)
-    .map((x) => x.trim())
-    .filter(Boolean);
   const rules = [
     line('Language of the answer', config.language),
     line('Audience', config.audience),
@@ -45,6 +46,30 @@ export function voiceText(config: Record<string, unknown>): string {
       ? ['Examples of texts written in this voice:', ...examples.map((e) => `---\n${e}`), '---']
       : []),
   ].join('\n');
+}
+
+/** A brand voice as rules for the model, fitted to the limit; `dropped` examples left out. */
+export function fitVoice(config: Record<string, unknown>): {
+  text: string;
+  dropped: number;
+  examples: number;
+} {
+  const all = toText(config.examples)
+    .split(/\n\s*---+\s*\n|\n{3,}/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+  let kept = all.length;
+  let text = voiceLines(config, all);
+  while (text.length > MAX_VOICE_CHARS && kept > 0) {
+    kept -= 1;
+    text = voiceLines(config, all.slice(0, kept));
+  }
+  return { text, dropped: all.length - kept, examples: all.length };
+}
+
+/** A brand voice as rules for the model: who we write for, how, what never to do, examples. */
+export function voiceText(config: Record<string, unknown>): string {
+  return fitVoice(config).text;
 }
 
 const evaluator = new ExpressionEvaluator();
@@ -100,10 +125,13 @@ export function buildContextExecutors(): Record<string, NodeExecutor> {
   return {
     'context.voice': {
       async execute(_node, config) {
-        const voice = voiceText(config);
+        const fit = fitVoice(config);
+        const voice = fit.text;
         return {
           output: {
             voice,
+            // Examples left out to keep the voice within the limit (the rules always stay).
+            ...(fit.dropped ? { droppedExamples: fit.dropped } : {}),
             name: toText(config.name).trim(),
             version: config.presetVersion ?? null,
             chars: voice.length,

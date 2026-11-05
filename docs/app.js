@@ -31,7 +31,7 @@ import {
   GROUPS,
 } from './tags.js';
 import { markdownNodes } from './markdown.js';
-import { savePreset, applyPreset, presetStatus, PRESET_KINDS } from './presets.js';
+import { savePreset, applyPreset, presetStatus, PRESET_KINDS, VOICE_KEYS } from './presets.js';
 import {
   ACTIONS,
   SERVICES,
@@ -43,6 +43,8 @@ import {
   isDevAction,
   postFields,
   voiceText,
+  fitVoice,
+  MAX_VOICE_CHARS,
   systemPrompt,
   userPrompt,
   askedLanguage,
@@ -2057,7 +2059,11 @@ function linkContext(a, source, target) {
   const fieldKey = Object.keys(CONTEXT_FIELD).find((k) => CONTEXT_FIELD[k] === from?.action);
   const toAct = ACTIONS[to?.action];
   if (!fieldKey || !toAct?.fields?.some((f) => f.key === fieldKey && f.type === fieldKey)) return;
-  if (to.config?.[fieldKey]) return;
+  if (to.config?.[fieldKey]) {
+    const used = a.nodes.find((n) => voiceExpr(n.id) === to.config[fieldKey]);
+    toast(t(`${fieldKey}.kept`, { name: used?.config?.name || nodeTitle(used ?? to) }));
+    return;
+  }
   to.config = { ...to.config, [fieldKey]: voiceExpr(source) };
   if (fieldKey === 'prompt' && from.config?.forEach && toAct.forEach && !to.config.forEach)
     to.config.forEach = from.config.forEach;
@@ -2749,9 +2755,39 @@ function presetBlock(a, node, saveNode) {
   );
 }
 
+/** How much of the model's request the voice takes, and what happens above the limit. */
+function voiceSizeBlock(node, controls) {
+  const text = h('p', { class: 'small muted' });
+  const update = () => {
+    const config = { ...node.config };
+    for (const k of VOICE_KEYS) {
+      const c = controls.get(k);
+      if (c) config[k] = c.value;
+    }
+    const fit = fitVoice(config);
+    const size = {
+      n: fit.text.length.toLocaleString(getLocale()),
+      tokens: Math.ceil(fit.text.length / 3).toLocaleString(getLocale()),
+      max: MAX_VOICE_CHARS.toLocaleString(getLocale()),
+    };
+    text.className = fit.dropped ? 'small fe-nudge' : 'small muted';
+    text.textContent = fit.dropped
+      ? t('voice.sizeOver', { ...size, dropped: fit.dropped, examples: fit.examples })
+      : t('voice.size', size);
+  };
+  const holder = h('span', { hidden: true });
+  holder._updatePreview = update;
+  controls.set('__voiceSize', holder);
+  const box = h('div', { class: 'field voice-size' }, text);
+  // Its fields are plain inputs: recount on every keystroke in the panel.
+  queueMicrotask(() => box.closest('.panel')?.addEventListener('input', update));
+  return box;
+}
+
 /** “What the model gets”: the AI step's system and user messages, built as the server does. */
 function modelPromptBlock(a, node, controls) {
   const warn = h('p', { class: 'small fe-nudge', hidden: true });
+  const sources = h('ul', { class: 'small muted prompt-sources' });
   const sys = h('pre', { class: 'prompt-preview' });
   const user = h('pre', { class: 'prompt-preview' });
   const update = () => {
@@ -2768,6 +2804,30 @@ function modelPromptBlock(a, node, controls) {
       .join('\n\n');
     const data = previewTemplate(a, controls.get('input')?.value ?? '').trim();
     sys.textContent = systemPrompt(voice);
+    // Where each part comes from: the step, and the library version if any.
+    const from = (n, key) =>
+      n
+        ? h(
+            'li',
+            {},
+            t(key, {
+              name: n.config?.name || nodeTitle(n),
+              n: stepNumbers(a).get(n.id),
+            }),
+            n.config?.presetVersion ? ` · ${t('voice.fromLib', { v: n.config.presetVersion })}` : ''
+          )
+        : null;
+    const fit = voiceNode ? fitVoice(voiceNode.config ?? {}) : null;
+    clear(sources);
+    sources.append(
+      ...[
+        from(promptNode, 'voice.srcPrompt'),
+        from(voiceNode, 'voice.srcVoice'),
+        fit?.dropped
+          ? h('li', { class: 'fe-nudge' }, t('voice.srcDropped', { dropped: fit.dropped }))
+          : null,
+      ].filter(Boolean)
+    );
     user.textContent = clipText(
       userPrompt(instruction || '…', data, '', Boolean(ui.panelForEach?.())),
       2000
@@ -2784,6 +2844,8 @@ function modelPromptBlock(a, node, controls) {
     'details',
     { class: 'panel-details model-prompt' },
     h('summary', {}, t('voice.preview')),
+    h('p', { class: 'small muted' }, t('voice.order')),
+    sources,
     warn,
     h('div', { class: 'field-label' }, t('voice.system')),
     sys,
@@ -2937,6 +2999,8 @@ function nodePanel(a, node) {
         ),
         known ? null : h('option', { value: val, selected: true }, t('tok.deleted'))
       );
+      // More than one linked: say which one is used — never drop one without a word.
+      if (choices.length > 1) control._extraHelp = t(`${f.type}.several`, { n: choices.length });
     } else if (f.type === 'connections') {
       // Several connections of one service, e.g. the MCP servers an agent may use.
       const chosen = new Set(Array.isArray(val) ? val : []);
@@ -3121,7 +3185,14 @@ function nodePanel(a, node) {
         : label;
     if (f.type === 'boolean')
       return h('div', { class: 'field field-inline', 'data-field': f.key }, control, label, err);
-    const help = f.help ? h('div', { class: 'small muted' }, L(f.help)) : null;
+    const help = f.help
+      ? h(
+          'div',
+          { class: 'small muted' },
+          L(f.help),
+          control._extraHelp ? h('div', { class: 'fe-nudge' }, control._extraHelp) : null
+        )
+      : null;
     if (f.type === 'forEach' && !f.noNudge) {
       forEachHelp = () => {
         const src = listSource(a, control.value);
@@ -3343,6 +3414,7 @@ function nodePanel(a, node) {
     basic.map(fieldControl),
     act?.type === 'core.rss' ? rssMemoryBlock(a, node) : null,
     act?.type === 'ai.process' ? modelPromptBlock(a, node, controls) : null,
+    act?.type === 'context.voice' ? voiceSizeBlock(node, controls) : null,
     PRESET_KINDS[act?.type] ? presetBlock(a, node, saveNode) : null,
     dataBlock,
     h(

@@ -216,14 +216,12 @@ const VOICE_EMOJI = {
   ok: 'emoji are fine where they help',
 };
 
-/** A brand voice as rules for the model — exactly what the AI step sends. */
-export function voiceText(c = {}) {
+/** The most a voice may take in the request; above it, examples are dropped from the end. */
+export const MAX_VOICE_CHARS = 6000;
+
+function voiceLines(c, examples) {
   const v = (x) => String(x ?? '').trim();
   const line = (label, value) => (v(value) ? `- ${label}: ${v(value)}` : '');
-  const examples = v(c.examples)
-    .split(/\n\s*---+\s*\n|\n{3,}/)
-    .map((x) => x.trim())
-    .filter(Boolean);
   const rules = [
     line('Language of the answer', c.language),
     line('Audience', c.audience),
@@ -242,6 +240,26 @@ export function voiceText(c = {}) {
       ? ['Examples of texts written in this voice:', ...examples.map((e) => `---\n${e}`), '---']
       : []),
   ].join('\n');
+}
+
+/** The voice fitted to the limit — the same as the server: `{ text, dropped, examples }`. */
+export function fitVoice(c = {}) {
+  const all = String(c.examples ?? '')
+    .split(/\n\s*---+\s*\n|\n{3,}/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+  let kept = all.length;
+  let text = voiceLines(c, all);
+  while (text.length > MAX_VOICE_CHARS && kept > 0) {
+    kept -= 1;
+    text = voiceLines(c, all.slice(0, kept));
+  }
+  return { text, dropped: all.length - kept, examples: all.length };
+}
+
+/** A brand voice as rules for the model — exactly what the AI step sends. */
+export function voiceText(c = {}) {
+  return fitVoice(c).text;
 }
 
 export const PLATFORM_RULES =
@@ -1705,7 +1723,15 @@ export const ACTIONS = {
       },
     ],
     simulate: (c) => ({
-      output: { voice: voiceText(c), name: c.name ?? '', version: c.presetVersion ?? null },
+      output: (() => {
+        const fit = fitVoice(c);
+        return {
+          voice: fit.text,
+          ...(fit.dropped ? { droppedExamples: fit.dropped } : {}),
+          name: c.name ?? '',
+          version: c.presetVersion ?? null,
+        };
+      })(),
       summary: tr(
         `Голос «${c.name ?? ''}» готов для шагов ИИ. Внешних запросов нет.`,
         `Voice “${c.name ?? ''}” is ready for AI steps. No external calls.`

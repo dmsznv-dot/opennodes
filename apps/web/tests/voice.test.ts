@@ -176,3 +176,25 @@ describe('prompt template — a context step the AI step fills in', () => {
     expect(presetStatus(two.list, step, keys)).toMatchObject({ newer: false, edited: false });
   });
 });
+
+describe('brand voice — size limit', () => {
+  it('drops examples from the end above the limit, keeps the rules, and matches the server', async () => {
+    const { fitVoice, MAX_VOICE_CHARS } = await import('../../../docs/catalog.js');
+    const { fitVoice: serverFit } =
+      await import('../../../packages/execution-runtime/src/context.ts');
+    const long = Array.from(
+      { length: 6 },
+      (_, i) => `Пример ${i + 1}. ${'слово '.repeat(250)}`
+    ).join('\n---\n');
+    const config = { ...VOICE, examples: long };
+    const fit = fitVoice(config);
+    expect(fit).toEqual(serverFit(config));
+    expect(fit.text.length).toBeLessThanOrEqual(MAX_VOICE_CHARS);
+    expect(fit.dropped).toBeGreaterThan(0);
+    expect(fit.examples).toBe(6);
+    expect(fit.text).toContain('Пример 1.');
+    expect(fit.text).not.toContain('Пример 6.');
+    expect(fit.text).toContain('- Never use: канцелярит');
+    expect(fitVoice(VOICE).dropped).toBe(0);
+  });
+});

@@ -249,6 +249,21 @@ const DICT = {
     'dpick.foot': 'Серым — пример значения: из последней проверки или образец.',
     'tok.deleted': 'Шаг удалён',
     'voice.none': 'Без голоса',
+    'voice.size': 'Размер голоса: {n} из {max} символов (≈ {tokens} токенов).',
+    'voice.sizeOver':
+      'Голос больше {max} символов: в запрос войдут не все примеры — {dropped} из {examples} отброшены с конца. Правила остаются целиком.',
+    'voice.several': 'К шагу подключено голосов: {n}. Используется выбранный здесь.',
+    'prompt.several': 'К шагу подключено шаблонов: {n}. Используется выбранный здесь.',
+    'voice.kept':
+      'У шага уже есть голос «{name}» — он и остаётся. Сменить можно в поле «Голос бренда».',
+    'prompt.kept':
+      'У шага уже есть шаблон «{name}» — он и остаётся. Сменить можно в поле «Шаблон инструкции».',
+    'voice.order':
+      'Порядок важности: правила платформы → инструкция (шаблон и «Что сделать») → голос бренда. Если они расходятся, модель следует инструкции.',
+    'voice.srcPrompt': 'Инструкция: шаблон «{name}» (шаг {n})',
+    'voice.srcVoice': 'Голос: «{name}» (шаг {n})',
+    'voice.fromLib': 'версия {v} из библиотеки',
+    'voice.srcDropped': 'Голос длиннее лимита. Примеров, которые не войдут в запрос: {dropped}.',
     'prompt.none': 'Без шаблона',
     'prompt.noneLinked': 'Без шаблона — подключите шаг «Шаблон инструкции» стрелкой',
     'pt.title': 'Библиотека шаблонов',
@@ -682,6 +697,22 @@ const DICT = {
     'dpick.foot': 'Grey — a sample value: from the latest test, or an example.',
     'tok.deleted': 'Step deleted',
     'voice.none': 'No voice',
+    'voice.size': 'The voice takes {n} characters (≈ {tokens} tokens) of {max}.',
+    'voice.sizeOver':
+      'The voice is over {max} characters: not all examples go into the request — {dropped} of {examples} are dropped from the end. The rules stay in full.',
+    'voice.several': '{n} voices are linked to this step. The one chosen here is used.',
+    'prompt.several': '{n} templates are linked to this step. The one chosen here is used.',
+    'voice.kept':
+      'The step already has the voice “{name}” — it stays. Change it in the “Brand voice” field.',
+    'prompt.kept':
+      'The step already has the template “{name}” — it stays. Change it in the “Prompt template” field.',
+    'voice.order':
+      'Order of importance: platform rules → the instruction (template and “What to do”) → the brand voice. Where they disagree, the model follows the instruction.',
+    'voice.srcPrompt': 'Instruction: template “{name}” (step {n})',
+    'voice.srcVoice': 'Voice: “{name}” (step {n})',
+    'voice.fromLib': 'version {v} from the library',
+    'voice.srcDropped':
+      'The voice is over the limit: {dropped} examples will not go into the request.',
     'prompt.none': 'No template',
     'prompt.noneLinked': 'No template — link a “Prompt template” step with an arrow',
     'pt.title': 'Template library',
