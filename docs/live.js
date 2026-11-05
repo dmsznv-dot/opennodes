@@ -329,7 +329,14 @@ function toStep(s, a, nums) {
     if (s.nodeType?.startsWith('trigger.')) summary = triggerSummary(s.nodeType, out?.payload);
   } else if (s.status === 'FAILED') status = 'failed';
   else if (s.status === 'SKIPPED') status = out?.disabled ? 'skipped' : 'notReached';
-  else if (s.status === 'PENDING' && out?.waitingUntil) {
+  else if (s.status === 'PENDING' && out?.approval) {
+    // Waiting for a person: the run card shows what to decide on, with the two buttons.
+    status = 'approval';
+    summary = t('run.approval', {
+      title: out.title || '',
+      when: formatDateTime(Date.parse(out.waitingUntil)),
+    });
+  } else if (s.status === 'PENDING' && out?.waitingUntil) {
     status = 'waiting';
     summary = t('run.waiting', { when: formatDateTime(Date.parse(out.waitingUntil)) });
   } else if (s.status === 'RUNNING' || s.status === 'PENDING') {
@@ -505,6 +512,10 @@ export async function loadWorkspace(store) {
 }
 
 /** Fresh run history from the server; tests from this session stay listed in the editor. */
+/** A person's answer to a run that waits for approval; the run resumes on the server. */
+export const decideApproval = (runId, decision) =>
+  api('POST', `/executions/${runId}/approval`, { decision });
+
 export async function reloadRuns(store) {
   const res = await api('GET', `/workspaces/${session.workspace.id}/executions?limit=50`);
   const tests = store.runs.filter((r) => r.kind === 'test');

@@ -12,6 +12,18 @@ const server = http.createServer((req, res) => {
     if (req.url === '/v1/chat/completions') {
       const body = JSON.parse(raw);
       modelRequests.push(body);
+      // A reviewer gets a verdict: low for officialese, high otherwise; “BROKEN” gets prose.
+      const sys = String(body.messages[0]?.content ?? '');
+      if (sys.startsWith('You review a text')) {
+        const text = String(body.messages.at(-1).content);
+        const content = text.includes('BROKEN')
+          ? 'Looks fine to me.'
+          : text.includes('осуществляется')
+            ? 'Вот оценка: {"score": 3, "issues": ["«осуществляется» — канцелярит"]}'
+            : '{"score": 9, "issues": []}';
+        res.setHeader('content-type', 'application/json');
+        return res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content } }] }));
+      }
       res.setHeader('content-type', 'application/json');
       return res.end(
         JSON.stringify({
@@ -59,7 +71,12 @@ const port = (direction: 'input' | 'output') => [
 async function runProcess(
   config: Record<string, unknown>,
   voice?: Record<string, unknown>,
-  extra: { prompt?: Record<string, unknown>; payload?: Record<string, unknown> } = {}
+  extra: {
+    prompt?: Record<string, unknown>;
+    payload?: Record<string, unknown>;
+    type?: string;
+    after?: boolean;
+  } = {}
 ) {
   const api = new LocalFlowApiServer({ databaseUrl: 'pglite://memory', ssrfAllowlist: [host] });
   apis.push(api);
@@ -95,7 +112,7 @@ async function runProcess(
         },
         {
           id: 'p',
-          type: 'ai.process',
+          type: extra.type ?? 'ai.process',
           data: { label: 'p', config, credentialId: ai.body.id },
           inputs: port('input'),
           outputs: port('output'),
@@ -107,6 +124,18 @@ async function runProcess(
                 id: 'v',
                 type: 'context.voice',
                 data: { label: 'v', config: voice },
+                inputs: port('input'),
+                outputs: port('output'),
+              },
+            ]
+          : []),
+        // A step after the checked one, to see whether the flow went on.
+        ...(extra.after
+          ? [
+              {
+                id: 'next',
+                type: 'primitive.map',
+                data: { label: 'next', config: { transform: { went: true } } },
                 inputs: port('input'),
                 outputs: port('output'),
               },
@@ -127,6 +156,9 @@ async function runProcess(
       ],
       edges: [
         { id: 'e', source: 't', sourceHandle: 'main', target: 'p', targetHandle: 'main' },
+        ...(extra.after
+          ? [{ id: 'ea', source: 'p', sourceHandle: 'main', target: 'next', targetHandle: 'main' }]
+          : []),
         ...(voice
           ? [{ id: 'ev', source: 'v', sourceHandle: 'main', target: 'p', targetHandle: 'main' }]
           : []),
@@ -340,5 +372,48 @@ describe('@localflow/api — Prompt Template (context step)', () => {
     const res = await runProcess({ input: 'x' });
     expect(res.execution.status).toBe('FAILED');
     expect(res.step.errorMessage).toMatch(/Instruction.*Prompt Template/);
+  });
+});
+
+describe('@localflow/api — Text review (checks a text against the brand voice)', () => {
+  const VOICE = { name: 'Канал о дизайне', avoid: 'канцелярит' };
+  const review = (text: string, more: Record<string, unknown> = {}) =>
+    runProcess({ text, voice: '{{ $nodes.v.output }}', ...more }, VOICE, {
+      type: 'ai.review',
+      after: true,
+    });
+
+  it('gives a score and the problems, passes the text on unchanged, and sends the voice', async () => {
+    const res = await review('Доставка осуществляется в течение дня.');
+    expect(res.execution.status).toBe('SUCCEEDED');
+    expect(res.step.outputPayload).toMatchObject({
+      text: 'Доставка осуществляется в течение дня.',
+      passed: false,
+      score: 3,
+      passScore: 7,
+      issues: ['«осуществляется» — канцелярит'],
+      voice: 'Канал о дизайне',
+    });
+    const system: string = modelRequests[0].messages[0].content;
+    expect(system).toContain('You never rewrite the text');
+    expect(system).toContain('- Never use: канцелярит');
+    // Without “stop if it fails” the flow goes on.
+    expect(res.steps.find((s) => s.nodeId === 'next')?.status).toBe('SUCCEEDED');
+  });
+
+  it('“stop if it fails” holds the steps below for a weak text, not for a good one', async () => {
+    const weak = await review('Доставка осуществляется в течение дня.', { stopIfFails: true });
+    expect(weak.step.outputPayload.stopped).toBe(true);
+    expect(weak.steps.find((s) => s.nodeId === 'next')?.status ?? 'SKIPPED').toBe('SKIPPED');
+    modelRequests = [];
+    const good = await review('Привезём сегодня.', { stopIfFails: true });
+    expect(good.step.outputPayload).toMatchObject({ passed: true, score: 9 });
+    expect(good.steps.find((s) => s.nodeId === 'next')?.status).toBe('SUCCEEDED');
+  });
+
+  it('a reply without a score is an error, not a silent pass', async () => {
+    const res = await review('BROKEN text');
+    expect(res.execution.status).toBe('FAILED');
+    expect(res.step.errorMessage).toMatch(/did not give a score/);
   });
 });

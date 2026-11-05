@@ -281,3 +281,97 @@ describe('@localflow/api — runs go through the queue and the worker (S-3)', ()
     expect(done.steps).toHaveLength(3);
   });
 });
+
+describe('@localflow/api — Approval: the run waits for a person', () => {
+  async function start(timeoutHours?: number) {
+    const api = await boot();
+    const ctx = await owner(api);
+    const wfId = await publish(
+      api,
+      ctx,
+      [
+        node('t', 'trigger.manual'),
+        node('ok', 'core.approval', {
+          title: 'Пост в канал',
+          content: 'Текст: {{ $trigger.text }}',
+          ...(timeoutHours ? { timeoutHours } : {}),
+        }),
+        node('send', 'primitive.map', { transform: { sent: '{{ $trigger.text }}' } }),
+      ],
+      [edge('t', 'ok'), edge('ok', 'send')]
+    );
+    const res = await api.inject<{ execution: Exec; steps: Step[] }>({
+      method: 'POST',
+      url: `/api/v1/workflows/${wfId}/execute`,
+      headers: ctx.headers,
+      body: { payload: { text: 'Привет' }, wait: true },
+    });
+    return { api, ctx, res };
+  }
+  const decide = (
+    api: LocalFlowApiServer,
+    headers: Record<string, string>,
+    id: string,
+    decision: string
+  ) =>
+    api.inject<{ code?: string }>({
+      method: 'POST',
+      url: `/api/v1/executions/${id}/approval`,
+      headers,
+      body: { decision },
+    });
+
+  it('waits with what to approve; “approve” runs the steps below', async () => {
+    const { api, ctx, res } = await start();
+    expect(res.body.execution.status).toBe('WAITING');
+    const waiting = res.body.steps.find((s) => s.nodeId === 'ok')!;
+    expect(waiting.outputPayload).toMatchObject({
+      approval: true,
+      title: 'Пост в канал',
+      content: 'Текст: Привет',
+    });
+    expect(res.body.steps.find((s) => s.nodeId === 'send')).toBeUndefined();
+
+    expect((await decide(api, ctx.headers, res.body.execution.id, 'approved')).statusCode).toBe(
+      202
+    );
+    const done = await until(api, ctx.headers, res.body.execution.id, 'SUCCEEDED');
+    const byNode = Object.fromEntries(done.steps.map((s) => [s.nodeId, s]));
+    expect(byNode.ok!.outputPayload).toMatchObject({ approved: true, content: 'Текст: Привет' });
+    expect(byNode.send!.outputPayload).toEqual({ sent: 'Привет' });
+    expect(done.steps).toHaveLength(3);
+    // Decided once: a second answer is refused.
+    expect((await decide(api, ctx.headers, res.body.execution.id, 'rejected')).statusCode).toBe(
+      409
+    );
+  });
+
+  it('“reject” stops the steps below — nothing is sent', async () => {
+    const { api, ctx, res } = await start();
+    await decide(api, ctx.headers, res.body.execution.id, 'rejected');
+    const done = await until(api, ctx.headers, res.body.execution.id, 'SUCCEEDED');
+    const byNode = Object.fromEntries(done.steps.map((s) => [s.nodeId, s]));
+    expect(byNode.ok!.outputPayload).toMatchObject({ approved: false, reason: 'rejected' });
+    expect(byNode.send?.status ?? 'SKIPPED').toBe('SKIPPED');
+  });
+
+  it('no answer in time counts as “no”', async () => {
+    const { api, ctx, res } = await start(0.0001); // ~0.4 s
+    const done = await until(api, ctx.headers, res.body.execution.id, 'SUCCEEDED');
+    const byNode = Object.fromEntries(done.steps.map((s) => [s.nodeId, s]));
+    expect(byNode.ok!.outputPayload).toMatchObject({ approved: false, reason: 'timeout' });
+    expect(byNode.send?.status ?? 'SKIPPED').toBe('SKIPPED');
+  });
+
+  it('refuses a wrong answer and a run that does not wait for one', async () => {
+    const { api, ctx, res } = await start();
+    expect((await decide(api, ctx.headers, res.body.execution.id, 'maybe')).statusCode).toBe(400);
+    const other = await decide(
+      api,
+      ctx.headers,
+      '00000000-0000-4000-8000-000000000000',
+      'approved'
+    );
+    expect(other.statusCode).toBe(404);
+  });
+});

@@ -1,7 +1,12 @@
 import { LocalFlowError } from '@localflow/shared';
 
 export class EngineError extends LocalFlowError {
-  constructor(message: string, code = 'ERR_ENGINE_EXECUTION', statusCode = 500, details?: Record<string, unknown>) {
+  constructor(
+    message: string,
+    code = 'ERR_ENGINE_EXECUTION',
+    statusCode = 500,
+    details?: Record<string, unknown>
+  ) {
     super(message, code, statusCode, details);
     this.name = 'EngineError';
   }
@@ -32,7 +37,10 @@ export class ExecutionTimeoutError extends EngineError {
 }
 
 export class CycleDetectedError extends EngineError {
-  constructor(public readonly cycleNodes: string[], public readonly cyclePath: string[]) {
+  constructor(
+    public readonly cycleNodes: string[],
+    public readonly cyclePath: string[]
+  ) {
     super(
       `ERR_WORKFLOW_CYCLE_DETECTED: Workflow graph contains a cycle involving nodes: ${cycleNodes.join(' -> ')}`,
       'ERR_WORKFLOW_CYCLE_DETECTED',
@@ -61,7 +69,14 @@ export class UnknownNodeTypeError extends EngineError {
  * re-enqueues the run, and on resume the step runs again and can complete.
  */
 export class ExecutionSuspendedSignal extends Error {
-  constructor(public readonly resumeAt: Date) {
+  /**
+   * `details` are kept on the waiting step (e.g. what an approval asks about), so the
+   * person deciding can see them and the step reads them back when the run resumes.
+   */
+  constructor(
+    public readonly resumeAt: Date,
+    public readonly details?: Record<string, unknown>
+  ) {
     super(`Execution suspended until ${resumeAt.toISOString()}`);
     this.name = 'ExecutionSuspendedSignal';
   }

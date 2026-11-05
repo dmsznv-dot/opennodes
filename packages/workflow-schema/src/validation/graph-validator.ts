@@ -41,7 +41,7 @@ export interface GraphValidationResult {
  * The editor derives the same rules from its catalog (docs/engine.js `linkProblem`).
  */
 export const CONTEXT_LINKS: Record<string, { consumers: readonly string[]; inputs: boolean }> = {
-  'context.voice': { consumers: ['ai.process'], inputs: false },
+  'context.voice': { consumers: ['ai.process', 'ai.review'], inputs: false },
   'context.prompt': { consumers: ['ai.process'], inputs: true },
 };
 

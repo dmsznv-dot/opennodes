@@ -24,6 +24,7 @@ import { buildConnectorExecutors, notImplementedNodeTypes } from './connectors.j
 /** Triggers the engine starts runs from (they need no executor). */
 const TRIGGER_TYPES = ['trigger.manual', 'trigger.webhook', 'trigger.cron', 'trigger.telegram'];
 import { buildDelayExecutors } from './delay.js';
+import { buildApprovalExecutors } from './approval.js';
 import { buildLogicExecutors } from './logic.js';
 import { settleRssItems, withOnlyNewItems, withPageImages } from './rss.js';
 import { buildAgentExecutor } from './agent.js';
@@ -132,6 +133,7 @@ export class ExecutionRuntime {
       ...connectors,
       ...buildLogicExecutors(),
       ...buildContextExecutors(),
+      ...buildApprovalExecutors({ journal: this.journal }),
       ...buildDelayExecutors({
         journal: this.journal,
         inlineMaxMs: options.inlineDelayMaxMs ?? 5_000,

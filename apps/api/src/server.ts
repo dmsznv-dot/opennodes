@@ -45,6 +45,7 @@ import {
   rssMemory,
   setWorkflowTriggersEnabled,
   syncWorkflowTriggers,
+  decideApproval,
 } from '@localflow/execution-runtime';
 import { verifyWebhookHmac } from '@localflow/connectors-core';
 import { LocalFlowError, SafeHttpClient, slugifyWorkspaceName } from '@localflow/shared';
@@ -1135,6 +1136,54 @@ export class LocalFlowApiServer {
           status: 'CANCELLED',
         });
         return respond(200, { execution: updated });
+      }
+
+      // A person's answer to an “Approval” step: the run goes on (approved) or the steps
+      // below it are skipped (rejected). Either way the run resumes now.
+      const execApprovalMatch = pathname.match(/^\/api\/v1\/executions\/([^/]+)\/approval$/);
+      if (req.method === 'POST' && execApprovalMatch) {
+        const executionId = execApprovalMatch[1]!;
+        const exec = await this.findExecution(rt, executionId);
+        if (!exec) return respond(404, { code: 'ERR_NOT_FOUND', message: 'Execution not found.' });
+        await this.requireWorkspacePermission(
+          rt,
+          exec.workspaceId,
+          auth.userId,
+          PERMISSIONS.WORKFLOW_EXECUTE
+        );
+        const decision = (req.body as { decision?: unknown } | undefined)?.decision;
+        if (decision !== 'approved' && decision !== 'rejected') {
+          return respond(400, {
+            code: 'ERR_VALIDATION',
+            message: 'decision must be "approved" or "rejected".',
+          });
+        }
+        const nodeId = exec.metadata?.waitingNodeId;
+        const decided =
+          exec.status === 'WAITING' &&
+          typeof nodeId === 'string' &&
+          (await decideApproval(rt.execution.journal, executionId, nodeId, decision, auth.userId));
+        if (!decided) {
+          return respond(409, {
+            code: 'ERR_NOT_WAITING_FOR_APPROVAL',
+            message: 'This run is not waiting for an approval (it was decided or has finished).',
+            status: exec.status,
+          });
+        }
+        await rt.queue.executionProducer.add(
+          'resumeWorkflow',
+          {
+            executionId,
+            workflowId: exec.workflowId,
+            workflowVersionId: exec.workflowVersionId,
+            workspaceId: exec.workspaceId,
+            triggerType: exec.triggerType,
+            isResume: true,
+            enqueuedAt: Date.now(),
+          },
+          { jobId: `approval_${executionId}_${Date.now()}`, attempts: 1 }
+        );
+        return respond(202, { executionId, decision });
       }
 
       const execGetMatch = pathname.match(/^\/api\/v1\/executions\/([^/]+)$/);

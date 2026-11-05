@@ -10,11 +10,7 @@ import { TopologicalScheduler } from './topological-scheduler.js';
 import { EdgeResolver } from './edge-resolver.js';
 import type { NodeExecutor, StepLogger } from './node-executor.js';
 import { NodeExecutorRegistry } from './node-executor-registry.js';
-import {
-  ExecutionSuspendedSignal,
-  ExecutionTimeoutError,
-  UnknownNodeTypeError,
-} from './errors.js';
+import { ExecutionSuspendedSignal, ExecutionTimeoutError, UnknownNodeTypeError } from './errors.js';
 
 export interface WorkflowEngineOptions {
   journal?: ExecutionJournal;
@@ -134,9 +130,7 @@ export class WorkflowEngine {
     const workflowVersionId = options.workflowVersionId ?? randomUUID();
     const triggerType = options.triggerType ?? 'manual';
     const timeoutMs =
-      options.timeoutMs ??
-      workflow.executionPolicy?.executionTimeoutMs ??
-      this.defaultTimeoutMs;
+      options.timeoutMs ?? workflow.executionPolicy?.executionTimeoutMs ?? this.defaultTimeoutMs;
 
     // 1. Idempotency check
     if (options.idempotencyKey && !options.resumeFromExecutionId) {
@@ -202,8 +196,7 @@ export class WorkflowEngine {
     const orderedNodes = this.scheduler.schedule(workflow.nodes, workflow.edges);
 
     const startWall = Date.now();
-    const executionId =
-      options.resumeFromExecutionId ?? options.executionId ?? randomUUID();
+    const executionId = options.resumeFromExecutionId ?? options.executionId ?? randomUUID();
 
     // 3. Create or transition Execution row in journal
     let execRecord = await journal.findExecutionById(executionId);
@@ -278,8 +271,7 @@ export class WorkflowEngine {
 
       // Check cancellation
       if (options.cancellationToken?.isCancelled) {
-        const cancelMsg =
-          options.cancellationToken.reason ?? 'User requested cancellation';
+        const cancelMsg = options.cancellationToken.reason ?? 'User requested cancellation';
         const finishedAt = new Date();
         const durationMs = Date.now() - startWall;
         execRecord = await journal.updateExecution(executionId, {
@@ -305,7 +297,9 @@ export class WorkflowEngine {
       // Skip already-completed step during crash resumption
       if (completedIds.has(node.id)) {
         const cachedOut = context.getNodeOutput(node.id);
-        context.setActivePorts(node.id, [...(options.completedNodePorts?.get(node.id) ?? ['main'])]);
+        context.setActivePorts(node.id, [
+          ...(options.completedNodePorts?.get(node.id) ?? ['main']),
+        ]);
         stepRecords.push({
           id: randomUUID(),
           executionId,
@@ -321,11 +315,7 @@ export class WorkflowEngine {
       }
 
       // Check edge dependency / branch skip
-      const shouldRun = this.edgeResolver.shouldExecuteNode(
-        node,
-        workflow.edges,
-        context
-      );
+      const shouldRun = this.edgeResolver.shouldExecuteNode(node, workflow.edges, context);
 
       // On resume a node may already have a journal row (interrupted, waiting or skipped);
       // reuse it so a run never lists the same step twice.
@@ -336,16 +326,18 @@ export class WorkflowEngine {
       if (!shouldRun) {
         context.markSkipped(node.id);
         const now = new Date();
-        const skippedDb = priorRow ?? await journal.createNodeExecution({
-          executionId,
-          nodeId: node.id,
-          nodeType: node.type,
-          nodeName: node.data.label,
-          status: 'SKIPPED',
-          startedAt: now,
-          finishedAt: now,
-          durationMs: 0,
-        });
+        const skippedDb =
+          priorRow ??
+          (await journal.createNodeExecution({
+            executionId,
+            nodeId: node.id,
+            nodeType: node.type,
+            nodeName: node.data.label,
+            status: 'SKIPPED',
+            startedAt: now,
+            finishedAt: now,
+            durationMs: 0,
+          }));
         stepRecords.push({
           id: skippedDb.id,
           executionId,
@@ -363,19 +355,24 @@ export class WorkflowEngine {
 
       // A switched-off step is passed over: it does nothing and the flow continues.
       if (node.data.disabled) {
-        context.setActivePorts(node.id, node.outputs.length ? node.outputs.map((o) => o.id) : ['main']);
+        context.setActivePorts(
+          node.id,
+          node.outputs.length ? node.outputs.map((o) => o.id) : ['main']
+        );
         const now = new Date();
-        const disabledDb = priorRow ?? await journal.createNodeExecution({
-          executionId,
-          nodeId: node.id,
-          nodeType: node.type,
-          nodeName: node.data.label,
-          status: 'SKIPPED',
-          outputPayload: { disabled: true },
-          startedAt: now,
-          finishedAt: now,
-          durationMs: 0,
-        });
+        const disabledDb =
+          priorRow ??
+          (await journal.createNodeExecution({
+            executionId,
+            nodeId: node.id,
+            nodeType: node.type,
+            nodeName: node.data.label,
+            status: 'SKIPPED',
+            outputPayload: { disabled: true },
+            startedAt: now,
+            finishedAt: now,
+            durationMs: 0,
+          }));
         stepRecords.push({
           id: disabledDb.id,
           executionId,
@@ -396,10 +393,7 @@ export class WorkflowEngine {
       const scope = context.buildExpressionScope();
       let evaluatedConfig: Record<string, unknown>;
       try {
-        evaluatedConfig = this.expressionEvaluator.evaluateObject(
-          node.data.config ?? {},
-          scope
-        );
+        evaluatedConfig = this.expressionEvaluator.evaluateObject(node.data.config ?? {}, scope);
       } catch (err: unknown) {
         const errMsg = err instanceof Error ? err.message : String(err);
         const now = new Date();
@@ -548,7 +542,7 @@ export class WorkflowEngine {
         const resumeAt = suspended.resumeAt;
         const waitingRow = await journal.updateNodeExecution(nodeExecRow.id, {
           status: 'PENDING',
-          outputPayload: { waitingUntil: resumeAt.toISOString() },
+          outputPayload: { ...suspended.details, waitingUntil: resumeAt.toISOString() },
         });
         execRecord = await journal.updateExecution(executionId, {
           status: 'WAITING',
@@ -619,8 +613,7 @@ export class WorkflowEngine {
           retryCount: attempt,
         });
       } else {
-        const errMsg =
-          lastError instanceof Error ? lastError.message : String(lastError);
+        const errMsg = lastError instanceof Error ? lastError.message : String(lastError);
         const errCode =
           lastError &&
           typeof lastError === 'object' &&
@@ -792,15 +785,16 @@ export class WorkflowEngine {
     // 2. Check Primitives Registry
     const primitive = this.primitiveRegistry.get(node.type);
     if (primitive) {
-      const incomingEdges = this.edgeResolver.getIncomingEdges(
-        node.id,
-        workflow.edges
-      );
+      const incomingEdges = this.edgeResolver.getIncomingEdges(node.id, workflow.edges);
       const rawConfig =
         node.type === 'primitive.filter' ||
         node.type === 'primitive.branchIf' ||
         node.type === 'primitive.if'
-          ? { ...(node.data.config ?? {}), ...evaluatedConfig, predicate: node.data.config?.predicate }
+          ? {
+              ...(node.data.config ?? {}),
+              ...evaluatedConfig,
+              predicate: node.data.config?.predicate,
+            }
           : evaluatedConfig;
 
       const primResult = await primitive.execute(rawConfig, {
@@ -810,10 +804,7 @@ export class WorkflowEngine {
         nodeOutputs: context.nodeOutputs,
         incomingEdges,
         evaluateExpression: (expr, localScope) =>
-          this.expressionEvaluator.evaluate(
-            expr,
-            context.buildExpressionScope(localScope)
-          ),
+          this.expressionEvaluator.evaluate(expr, context.buildExpressionScope(localScope)),
         logger: stepLogger,
       });
       return {

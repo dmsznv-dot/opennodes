@@ -2481,3 +2481,23 @@ textarea.input {
   background: var(--surface-2, rgba(127, 127, 127, 0.08));
   margin: 0 0 var(--space-3);
 }
+
+.approval-box {
+  margin: var(--space-2) 0;
+  padding: var(--space-3);
+  border: 1px solid var(--accent, #6d5efc);
+  border-radius: 8px;
+  display: grid;
+  gap: var(--space-2);
+}
+.approval-content {
+  max-height: 260px;
+  overflow: auto;
+}
+
+.draft-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+  margin: var(--space-2) 0;
+}

@@ -223,7 +223,9 @@ describe('context steps — link rules in the editor', () => {
     expect(key('voice', 'tg')).toBe('cv.ctxTarget');
     expect(key('voice', 'tpl')).toBe('cv.ctxFromCtx');
     expect(key('ai', 't')).toBe('cv.triggerNoInput');
-    expect(linkProblem(a, 'voice', 'tg').params.list).toMatch(/Process text with AI|Обработать текст с помощью ИИ/);
+    expect(linkProblem(a, 'voice', 'tg').params.list).toMatch(
+      /Process text with AI|Обработать текст с помощью ИИ/
+    );
   });
 
   it('derives the same rules as the server’s list', async () => {
@@ -238,5 +240,79 @@ describe('context steps — link rules in the editor', () => {
       expect(contextConsumers(id).map((c) => A[c].type)).toEqual(rule.consumers);
       expect(!A[id].noInputs).toBe(rule.inputs);
     }
+  });
+});
+
+describe('text review, approval, and rules from examples', () => {
+  it('the reviewer takes a voice, judges without rewriting, and can stop the scenario', async () => {
+    const { ACTIONS: A } = await import('../../../docs/catalog.js');
+    const { contextConsumers } = await import('../../../docs/engine.js');
+    const r = A['ai.review'];
+    expect(r.type).toBe('ai.review');
+    expect(r.fields.map((f) => f.key)).toEqual(
+      expect.arrayContaining(['text', 'voice', 'stopIfFails', 'criteria', 'passScore'])
+    );
+    expect(contextConsumers('context.voice')).toEqual(['ai.process', 'ai.review']);
+    expect(contextConsumers('context.prompt')).toEqual(['ai.process']);
+    const ap = A['logic.approval'];
+    expect(ap.type).toBe('core.approval');
+    expect(ap.fields.find((f) => f.key === 'content')).toMatchObject({
+      required: true,
+      acceptsData: true,
+    });
+  });
+
+  it('reads the AI’s draft of rules: known keys only, emoji from the list only', async () => {
+    const { parseVoiceDraft, splitExamples } = await import('../../../docs/catalog.js');
+    expect(
+      parseVoiceDraft(
+        'Вот: {"language": "русский", "tone": ["тёплый", "простой"], "emoji": "many", "secret": "x", "cta": ""}'
+      )
+    ).toEqual({ language: 'русский', tone: 'тёплый, простой' });
+    expect(parseVoiceDraft('нет JSON')).toBe(null);
+    expect(parseVoiceDraft('{"emoji": "lots"}')).toBe(null);
+    // Split the same way as the server's voice.
+    const text = 'Один.\n---\nДва.\n\n\n\nТри.';
+    expect(splitExamples(text)).toEqual(['Один.', 'Два.', 'Три.']);
+    const { fitVoice } = await import('../../../packages/execution-runtime/src/context.ts');
+    expect(fitVoice({ examples: text }).examples).toBe(3);
+  });
+
+  it('a run waiting for approval shows what to decide on', async () => {
+    const { toRun } = await import('../../../docs/live.js');
+    const a = {
+      id: 'wf',
+      name: 'x',
+      nodes: [
+        { id: 'trigger', action: 'manual.run', config: {} },
+        { id: 'ok', action: 'logic.approval', config: { content: 'x' } },
+      ],
+      edges: [{ id: 'e', source: 'trigger', target: 'ok' }],
+    };
+    const run = toRun(
+      {
+        id: 'r1',
+        workflowId: 'wf',
+        status: 'WAITING',
+        createdAt: new Date().toISOString(),
+        steps: [
+          {
+            nodeId: 'ok',
+            status: 'PENDING',
+            outputPayload: {
+              approval: true,
+              title: 'Пост',
+              content: 'Текст поста',
+              waitingUntil: new Date(Date.now() + 3600_000).toISOString(),
+            },
+          },
+        ],
+      },
+      [a]
+    );
+    expect(run.result).toBe('waiting');
+    const step = run.steps.find((s) => s.nodeId === 'ok');
+    expect(step.status).toBe('approval');
+    expect(step.output.content).toBe('Текст поста');
   });
 });

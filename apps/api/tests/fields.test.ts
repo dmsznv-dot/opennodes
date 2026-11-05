@@ -28,6 +28,7 @@ const EFFECT_ONLY: Record<string, string> = {
   'text.format.find': 'replaced away: "MK_replaceWith" stands in its place',
   'ai.process.titleLine': 'per item only: the AI is asked for a title line (audit.test)',
   'rss.read.pageImages': 'off: items without a picture are not looked up (audit.test)',
+  'logic.approval.timeoutHours': 'sets when the wait ends: waitingUntil (queue.test)',
   'context.voice.emoji': 'becomes a sentence ("- Emoji: no emoji") in the voice text (voice.test)',
 };
 /** A choice other than the default that makes the rest of the fields count. */
@@ -53,6 +54,11 @@ const web = http.createServer((req, res) => {
     if (url.endsWith('/chat/completions')) {
       const body = JSON.parse(raw);
       const last = body.messages.at(-1).content as string;
+      // The text reviewer must get back a verdict.
+      if (String(body.messages[0]?.content ?? '').startsWith('You review a text'))
+        return json({
+          choices: [{ message: { role: 'assistant', content: '{"score": 5, "issues": ["mk"]}' } }],
+        });
       // The classifier must get back one of its categories.
       const cat = last.match(/MkA|Question/)?.[0];
       return json({
@@ -296,7 +302,10 @@ describe('every field of every step is used', () => {
         }${step?.errorMessage ? ` (${step.errorMessage})` : ''}${ignored.length ? ` — no trace of: ${ignored.join(', ')}` : ''}`
       );
       expect(res.statusCode).toBe(200);
-      expect(step?.status, step?.errorMessage ?? '').toBe('SUCCEEDED');
+      // An approval waits for a person: its step stays PENDING with what to decide on.
+      expect(step?.status, step?.errorMessage ?? '').toBe(
+        act.type === 'core.approval' ? 'PENDING' : 'SUCCEEDED'
+      );
       expect(ignored, `${id}: fields with no effect`).toEqual([]);
     });
   }

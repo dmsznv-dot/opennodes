@@ -262,6 +262,51 @@ export function voiceText(c = {}) {
   return fitVoice(c).text;
 }
 
+/** “Suggest rules from examples”: what the AI is asked, and how its draft is read back. */
+export const VOICE_DRAFT_KEYS = [
+  'language',
+  'audience',
+  'tone',
+  'writeLike',
+  'avoid',
+  'length',
+  'terms',
+  'cta',
+  'emoji',
+];
+
+export const VOICE_DRAFT_INSTRUCTION =
+  'The data are example texts written in one brand voice, separated by "---". Describe that voice so another writer can follow it. Reply with JSON only, nothing else, with these keys (empty string when the examples say nothing about it): "language" (the language of the texts), "audience" (who they are written for), "tone" (the character, 3–6 words), "writeLike" (how to write: 1–3 short sentences), "avoid" (words and habits the texts never use), "length" (typical length), "terms" (recurring terms), "cta" (how the texts end or call to action), "emoji" (one of "none", "few", "ok"). Write the values in the language of the texts.';
+
+/** The AI's draft of voice rules, from its reply: only known keys, only text. */
+export function parseVoiceDraft(reply) {
+  const m = /\{[\s\S]*\}/.exec(String(reply ?? ''));
+  if (!m) return null;
+  let data;
+  try {
+    data = JSON.parse(m[0]);
+  } catch {
+    return null;
+  }
+  if (!data || typeof data !== 'object') return null;
+  const out = {};
+  for (const k of VOICE_DRAFT_KEYS) {
+    const v = Array.isArray(data[k]) ? data[k].join(', ') : data[k];
+    if (typeof v !== 'string' || !v.trim()) continue;
+    if (k === 'emoji' && !['none', 'few', 'ok'].includes(v.trim())) continue;
+    out[k] = v.trim();
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+/** Example texts as the voice keeps them: split by “---” (or 3+ blank lines). */
+export function splitExamples(text) {
+  return String(text ?? '')
+    .split(/\n\s*---+\s*\n|\n{3,}/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
 export const PLATFORM_RULES =
   'You process data for an automation. Follow the instruction exactly and reply with the result only — no preface, no questions. The instruction decides the language and the form of the answer, not the data. Everything you need is in the data and the page texts below.';
 
@@ -1882,6 +1927,174 @@ export const ACTIONS = {
             ),
       };
     },
+  },
+  'ai.review': {
+    type: 'ai.review',
+    service: 'ai',
+    kind: 'action',
+    needs: tr('текст и подключение ИИ', 'a text and an AI connection'),
+    gives: tr(
+      'оценку и список замечаний; текст не меняется',
+      'a score and a list of problems; the text stays as is'
+    ),
+    name: tr(
+      'Проверить текст на соответствие голосу бренда',
+      'Check a text against the brand voice'
+    ),
+    desc: tr(
+      'ИИ оценивает текст по голосу бренда и вашим правилам и перечисляет замечания. Текст не переписывает. Может остановить сценарий, если оценка ниже порога.',
+      'The AI scores the text against the brand voice and your rules and lists problems. It never rewrites the text. Can stop the scenario when the score is below the bar.'
+    ),
+    keywords:
+      'проверить текст ревью ревьюер оценка голос бренда стиль редактор замечания review check quality brand voice',
+    fields: [
+      {
+        key: 'text',
+        type: 'textarea',
+        required: true,
+        basic: true,
+        acceptsData: true,
+        label: tr('Текст для проверки', 'Text to check'),
+        help: tr(
+          'Обычно — результат шага ИИ: «+ Данные».',
+          'Usually the AI step’s result: “+ Data”.'
+        ),
+      },
+      {
+        key: 'voice',
+        type: 'voice',
+        required: false,
+        basic: true,
+        label: tr('Голос бренда', 'Brand voice'),
+        help: tr(
+          'С чем сравнивать: шаг «Голос бренда», подключённый стрелкой.',
+          'What to compare with: a linked “Brand voice” step.'
+        ),
+      },
+      {
+        key: 'stopIfFails',
+        type: 'boolean',
+        required: false,
+        basic: true,
+        default: false,
+        label: tr(
+          'Остановить сценарий, если текст не прошёл',
+          'Stop the scenario when the text fails'
+        ),
+      },
+      {
+        key: 'criteria',
+        type: 'textarea',
+        required: false,
+        basic: false,
+        label: tr('Что ещё проверить', 'What else to check'),
+        placeholder: tr(
+          'Нет ли ошибок в датах; есть ли ссылка на источник',
+          'Dates are right; the source is linked'
+        ),
+      },
+      {
+        key: 'passScore',
+        type: 'number',
+        required: false,
+        basic: false,
+        label: tr('Проходной балл (0–10)', 'Pass score (0–10)'),
+        placeholder: '7',
+      },
+      {
+        key: 'model',
+        type: 'text',
+        required: false,
+        basic: false,
+        label: tr('Модель', 'Model'),
+        placeholder: 'gpt-4o-mini',
+        help: tr(
+          'Пусто — модель по умолчанию из подключения ИИ.',
+          'Empty — the default model of the AI connection.'
+        ),
+      },
+    ],
+    outputs: [
+      {
+        key: 'text',
+        label: tr('Проверенный текст (без изменений)', 'The checked text (unchanged)'),
+        example: tr('Привезём сегодня.', 'We deliver today.'),
+      },
+      { key: 'score', label: tr('Оценка 0–10', 'Score 0–10'), example: '8' },
+      { key: 'passed', label: tr('Прошёл проверку (да/нет)', 'Passed (yes/no)'), example: 'true' },
+      {
+        key: 'report',
+        label: tr('Замечания списком', 'Problems as a list'),
+        example: tr('• «осуществляется» — канцелярит', '• “in order to” — wordy'),
+      },
+    ],
+    simulate: (c) => ({
+      output: { text: c.text ?? '', score: 8, passed: true, issues: [], report: '' },
+      summary: tr(
+        'ИИ оценил бы текст по голосу бренда (в демо — 8 из 10). Текст не меняется.',
+        'The AI would score the text against the brand voice (8 of 10 in the demo). The text stays as is.'
+      ),
+    }),
+  },
+  'logic.approval': {
+    type: 'core.approval',
+    service: 'logic',
+    kind: 'logic',
+    needs: tr('что показать человеку', 'what to show a person'),
+    gives: tr('продолжение только после «Утвердить»', 'the next steps only after “Approve”'),
+    name: tr('Дождаться утверждения человеком', 'Wait for a person to approve'),
+    desc: tr(
+      'Сценарий останавливается и ждёт вашего решения в «Истории». «Утвердить» — идём дальше; «Отклонить» или нет ответа — шаги ниже не выполняются.',
+      'The scenario stops and waits for your decision in “History”. “Approve” goes on; “Reject” or no answer — the steps below do not run.'
+    ),
+    keywords:
+      'утвердить утверждение одобрить согласовать модерация проверка человеком approve approval review human moderation',
+    fields: [
+      {
+        key: 'content',
+        type: 'textarea',
+        required: true,
+        basic: true,
+        acceptsData: true,
+        label: tr('Что показать для решения', 'What to show for the decision'),
+        help: tr('Например, готовый пост: «+ Данные».', 'E.g. the ready post: “+ Data”.'),
+      },
+      {
+        key: 'title',
+        type: 'text',
+        required: false,
+        basic: false,
+        label: tr('Заголовок запроса', 'Request title'),
+        placeholder: tr('Пост в канал', 'Channel post'),
+      },
+      {
+        key: 'timeoutHours',
+        type: 'number',
+        required: false,
+        basic: false,
+        label: tr('Сколько ждать решения, часов', 'How long to wait, hours'),
+        placeholder: '24',
+        help: tr(
+          'Без ответа за это время — как «Отклонить».',
+          'No answer in time counts as “Reject”.'
+        ),
+      },
+    ],
+    outputs: [
+      { key: 'approved', label: tr('Утверждено (да/нет)', 'Approved (yes/no)'), example: 'true' },
+      {
+        key: 'content',
+        label: tr('Что утверждали', 'What was approved'),
+        example: tr('Текст поста…', 'The post…'),
+      },
+    ],
+    simulate: (c) => ({
+      output: { approved: true, content: c.content ?? '' },
+      summary: tr(
+        'В демо считается утверждённым. В работе сценарий ждёт вашего решения в «Истории».',
+        'Counted as approved in the demo. Live, the scenario waits for your decision in “History”.'
+      ),
+    }),
   },
   'logic.delay': {
     type: 'primitive.delay',

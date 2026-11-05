@@ -12,6 +12,7 @@ import {
 import { CORE_CONNECTORS } from '@localflow/connectors-core';
 import { AI_CONNECTORS } from '@localflow/connectors-ai';
 import { buildProcessExecutor } from './process.js';
+import { buildReviewExecutor } from './review.js';
 import { renderForParseMode, textFields, toText } from './text.js';
 import type { NodeExecutor, StepExecutionContext } from '@localflow/workflow-engine';
 
@@ -450,6 +451,7 @@ export function buildConnectorExecutors(
     httpClient: options.httpClient,
     ssrfAllowlist: options.ssrfAllowlist,
   });
+  executors['ai.review'] = buildReviewExecutor(executors['ai.openai']!);
   return executors;
 }
 

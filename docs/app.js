@@ -44,6 +44,10 @@ import {
   postFields,
   voiceText,
   fitVoice,
+  VOICE_DRAFT_INSTRUCTION,
+  VOICE_DRAFT_KEYS,
+  parseVoiceDraft,
+  splitExamples,
   MAX_VOICE_CHARS,
   systemPrompt,
   userPrompt,
@@ -1383,13 +1387,66 @@ function runCard(run, { showAutomation = false, inEditor = false } = {}) {
     h(
       'ol',
       { class: 'step-results' },
-      run.steps.map((s) => stepResultRow(s, a))
+      run.steps.map((s) => stepResultRow(s, a, run))
     )
   );
 }
 
-function stepResultRow(s, a) {
+/** What a waiting approval asks about, and “Approve” / “Reject”. */
+function approvalBox(s, run) {
+  const status = h('p', { class: 'small muted', role: 'status' });
+  const decide = async (decision, btns) => {
+    if (decision === 'rejected' && !confirm(t('appr.rejectConfirm'))) return;
+    btns.forEach((b) => (b.disabled = true));
+    try {
+      await live.decideApproval(run.id, decision);
+      status.textContent = t(decision === 'approved' ? 'appr.approvedNow' : 'appr.rejectedNow');
+      await live.reloadRuns(store);
+      setTimeout(
+        () =>
+          live
+            .reloadRuns(store)
+            .then(render)
+            .catch(() => {}),
+        1500
+      );
+    } catch (err) {
+      btns.forEach((b) => (b.disabled = false));
+      status.textContent = err?.message ?? String(err);
+    }
+  };
+  const approve = h(
+    'button',
+    { type: 'button', class: 'btn btn-primary btn-small' },
+    t('appr.approve')
+  );
+  const reject = h(
+    'button',
+    { type: 'button', class: 'btn btn-ghost btn-small' },
+    t('appr.reject')
+  );
+  approve.onclick = () => decide('approved', [approve, reject]);
+  reject.onclick = () => decide('rejected', [approve, reject]);
+  return h(
+    'div',
+    { class: 'approval-box' },
+    s.output?.content
+      ? h(
+          'div',
+          { class: 'post-preview-text approval-content' },
+          markdownNodes(clipText(s.output.content, 3000))
+        )
+      : null,
+    live.isLive
+      ? h('div', { class: 'row-gap' }, approve, reject)
+      : h('p', { class: 'small muted' }, t('appr.demo')),
+    status
+  );
+}
+
+function stepResultRow(s, a, run) {
   const icon = {
+    approval: '✋',
     ok: '✓',
     stopped: '■',
     failed: '✕',
@@ -1434,6 +1491,7 @@ function stepResultRow(s, a) {
             t('hist.fix')
           )
         : null,
+      s.status === 'approval' && run ? approvalBox(s, run) : null,
       s.input || s.output
         ? h(
             'details',
@@ -2782,6 +2840,156 @@ function presetBlock(a, node, saveNode) {
   );
 }
 
+const SAMPLE_FILE_MAX = 200_000; // bytes per file
+const SAMPLE_FILES_MAX = 10;
+
+/** Put a value into a panel field as if typed, so the step counts as changed. */
+function setControl(c, value) {
+  if (!c) return;
+  c.value = value;
+  c.dispatchEvent(new Event(c.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true }));
+}
+
+/**
+ * Example texts from .txt / .md files, and “Suggest rules from examples”: the AI reads
+ * 3–10 examples and drafts the rules; the person picks which ones to take.
+ */
+function voiceToolsBlock(a, node, controls) {
+  const status = h('p', { class: 'small muted', role: 'status' });
+  const file = h('input', {
+    type: 'file',
+    accept: '.txt,.md,text/plain,text/markdown',
+    multiple: true,
+    hidden: true,
+    onchange: async () => {
+      const files = [...file.files].slice(0, SAMPLE_FILES_MAX);
+      const texts = [];
+      const skipped = [];
+      for (const f of files) {
+        if (f.size > SAMPLE_FILE_MAX || !/\.(txt|md)$/i.test(f.name)) skipped.push(f.name);
+        else texts.push((await f.text()).trim());
+      }
+      file.value = '';
+      const ex = controls.get('examples');
+      const added = texts.filter(Boolean);
+      if (added.length) setControl(ex, [ex.value.trim(), ...added].filter(Boolean).join('\n---\n'));
+      status.textContent = [
+        added.length ? t('vt.imported', { n: added.length }) : '',
+        skipped.length ? t('vt.skipped', { names: skipped.join(', ') }) : '',
+        file.files.length > SAMPLE_FILES_MAX ? t('vt.tooMany', { n: SAMPLE_FILES_MAX }) : '',
+      ]
+        .filter(Boolean)
+        .join(' ');
+    },
+  });
+  const importBtn = h(
+    'button',
+    { type: 'button', class: 'btn btn-small', onclick: () => file.click() },
+    t('vt.import')
+  );
+  const suggestBtn = h(
+    'button',
+    {
+      type: 'button',
+      class: 'btn btn-small',
+      onclick: async () => {
+        const examples = splitExamples(controls.get('examples')?.value);
+        if (examples.length < 3) return (status.textContent = t('vt.needThree'));
+        if (!live.isLive) return (status.textContent = t('vt.demo'));
+        const conn = store.connections.find((c) => c.service === 'ai');
+        if (!conn) return (status.textContent = t('vt.noAi'));
+        suggestBtn.disabled = true;
+        status.textContent = t('vt.working');
+        try {
+          // A one-off check of a two-step scenario: nothing is saved or recorded.
+          const run = await live.testRun({
+            id: a.id,
+            nodes: [
+              { id: 'trigger', action: 'manual.run', config: {} },
+              {
+                id: 'draft',
+                action: 'ai.process',
+                connectionId: conn.id,
+                config: {
+                  // Braces in a text would read as data: keep them plain.
+                  input: examples
+                    .slice(0, 10)
+                    .join('\n---\n')
+                    .replace(/\{\{|\}\}/g, (m) => m.split('').join(' ')),
+                  instruction: VOICE_DRAFT_INSTRUCTION,
+                },
+              },
+            ],
+            edges: [{ id: 'e', source: 'trigger', target: 'draft' }],
+          });
+          const step = run.steps.find((x) => x.nodeId === 'draft');
+          const draft = parseVoiceDraft(step?.output?.text);
+          if (!draft) {
+            status.textContent = step?.error ? describeIssue(step.error) : t('vt.noDraft');
+            return;
+          }
+          status.textContent = '';
+          openDraft(draft, controls);
+        } catch (err) {
+          status.textContent = err?.message ?? String(err);
+        } finally {
+          suggestBtn.disabled = false;
+        }
+      },
+    },
+    t('vt.suggest')
+  );
+  return h(
+    'div',
+    { class: 'field voice-tools' },
+    h('div', { class: 'row-gap', style: { flexWrap: 'wrap' } }, importBtn, suggestBtn, file),
+    h('p', { class: 'small muted' }, t('vt.help')),
+    status
+  );
+}
+
+/** The AI's draft: each rule with a tick (on for empty fields); nothing changes until “Apply”. */
+function openDraft(draft, controls) {
+  const fields = ACTIONS['context.voice'].fields;
+  const rows = VOICE_DRAFT_KEYS.filter((k) => draft[k]).map((k) => {
+    const f = fields.find((x) => x.key === k);
+    const current = controls.get(k)?.value ?? '';
+    const shown =
+      k === 'emoji' ? L(f.options.find((o) => o.value === draft[k])?.label) || draft[k] : draft[k];
+    const box = h('input', { type: 'checkbox', class: 'switch', checked: !current });
+    return {
+      k,
+      box,
+      el: h(
+        'label',
+        { class: 'draft-row' },
+        box,
+        h(
+          'span',
+          {},
+          h('b', {}, `${L(f.label)}: `),
+          shown,
+          current ? h('span', { class: 'small muted' }, ` (${t('vt.now', { v: current })})`) : null
+        )
+      ),
+    };
+  });
+  openModal({
+    title: t('vt.draftTitle'),
+    body: [h('p', { class: 'small muted' }, t('vt.draftHelp')), ...rows.map((r) => r.el)],
+    actions: [
+      { label: t('common.cancel') },
+      {
+        label: t('vt.apply'),
+        primary: true,
+        onClick: () => {
+          for (const r of rows) if (r.box.checked) setControl(controls.get(r.k), draft[r.k]);
+        },
+      },
+    ],
+  });
+}
+
 /** How much of the model's request the voice takes, and what happens above the limit. */
 function voiceSizeBlock(node, controls) {
   const text = h('p', { class: 'small muted' });
@@ -3441,12 +3649,13 @@ function nodePanel(a, node) {
     basic.map(fieldControl),
     act?.type === 'core.rss' ? rssMemoryBlock(a, node) : null,
     act?.type === 'ai.process' ? modelPromptBlock(a, node, controls) : null,
+    act?.type === 'context.voice' ? voiceToolsBlock(a, node, controls) : null,
     act?.type === 'context.voice' ? voiceSizeBlock(node, controls) : null,
     PRESET_KINDS[act?.type] ? presetBlock(a, node, saveNode) : null,
     dataBlock,
     h(
       'details',
-      { class: 'panel-details' },
+      { class: 'panel-details', ...rememberOpen('advanced') },
       h('summary', {}, t('panel.advanced')),
       advanced.map(fieldControl),
       h(
@@ -4308,6 +4517,21 @@ function pathBetween(a, from, to) {
   return path;
 }
 
+/**
+ * A panel section (“Advanced”, “For developers”) stays as the person left it: open or
+ * closed, for every step, across visits.
+ */
+function rememberOpen(key) {
+  return {
+    open: Boolean(store.settings.panelOpen?.[key]),
+    ontoggle: (e) => {
+      if (Boolean(store.settings.panelOpen?.[key]) === e.target.open) return;
+      store.settings.panelOpen = { ...store.settings.panelOpen, [key]: e.target.open };
+      save();
+    },
+  };
+}
+
 function devSection(a, node, nums) {
   const act = ACTIONS[node.action];
   const outgoing = a.edges.filter((e) => e.source === node.id);
@@ -4322,9 +4546,10 @@ function devSection(a, node, nums) {
     )
   );
   const msg = h('div', { class: 'small', role: 'status' });
+  const last = lastOutputs(a).get(node.id);
   return h(
     'details',
-    { class: 'panel-details dev' },
+    { class: 'panel-details dev', ...rememberOpen('dev') },
     h('summary', {}, t('panel.dev')),
     h(
       'dl',
@@ -4344,6 +4569,10 @@ function devSection(a, node, nums) {
         2
       )
     ),
+    h('div', { class: 'field-label' }, t('panel.devLastOutput')),
+    last === undefined
+      ? h('p', { class: 'small muted' }, t('panel.devNoOutput'))
+      : h('pre', { class: 'code' }, clipText(JSON.stringify(last, null, 2), 8000)),
     h('div', { class: 'field-label' }, t('panel.devEdges')),
     outgoing.length
       ? h(
@@ -4389,6 +4618,11 @@ function devSection(a, node, nums) {
                 onclick: () => {
                   const target = select.value;
                   if (a.edges.some((e) => e.source === node.id && e.target === target)) return;
+                  const problem = linkProblem(a, node.id, target);
+                  if (problem) {
+                    msg.textContent = t(problem.key, problem.params);
+                    return;
+                  }
                   const candidate = [...a.edges, { id: uid('e'), source: node.id, target }];
                   const check = validateDag(a.nodes, candidate);
                   if (!check.valid) {
