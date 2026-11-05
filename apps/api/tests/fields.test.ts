@@ -264,9 +264,10 @@ describe('every field of every step is used', () => {
               outputs: port('output'),
             },
           ],
-          edges: [
-            { id: 'e', source: 't', sourceHandle: 'main', target: 's', targetHandle: 'main' },
-          ],
+          // A brand voice takes nothing from other steps: it stands alone.
+          edges: act.noInputs
+            ? []
+            : [{ id: 'e', source: 't', sourceHandle: 'main', target: 's', targetHandle: 'main' }],
           payload: {},
         },
       });

@@ -1045,6 +1045,13 @@ textarea.input {
   stroke: #a855f7;
   stroke-dasharray: 6 4;
 }
+.edge-label {
+  font-size: 11px;
+  fill: #a855f7;
+  paint-order: stroke;
+  stroke: var(--bg, #111);
+  stroke-width: 3px;
+}
 .node-card.node-context {
   border-style: dashed;
 }

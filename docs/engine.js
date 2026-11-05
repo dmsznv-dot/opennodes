@@ -9,6 +9,41 @@ import { L, t, getLocale } from './i18n.js';
 
 // ── Graph validation (single trigger + Kahn cycle check) ────────────────────
 
+/** Steps that take a context step of this action (have a field of its type). */
+export function contextConsumers(actionId) {
+  const field = ACTIONS[actionId]?.contextField;
+  return field
+    ? Object.keys(ACTIONS).filter((id) => ACTIONS[id].fields?.some((f) => f.type === field))
+    : [];
+}
+
+/**
+ * Why a link from one step to another is not allowed — `{ key, params }` for the message —
+ * or null. The same rules as the server (workflow-schema `CONTEXT_LINKS`).
+ */
+export function linkProblem(a, sourceId, targetId) {
+  const from = a.nodes.find((n) => n.id === sourceId);
+  const to = a.nodes.find((n) => n.id === targetId);
+  const fromAct = ACTIONS[from?.action];
+  const toAct = ACTIONS[to?.action];
+  if (toAct?.kind === 'trigger') return { key: 'cv.triggerNoInput' };
+  if (fromAct?.kind === 'context' && toAct?.kind === 'context') return { key: 'cv.ctxFromCtx' };
+  if (toAct?.noInputs) return { key: 'cv.ctxNoInput', params: { name: L(toAct.name) } };
+  if (fromAct?.kind === 'context' && !contextConsumers(from.action).includes(to?.action))
+    return {
+      key: 'cv.ctxTarget',
+      params: {
+        name: L(fromAct.name),
+        list: contextConsumers(from.action)
+          .map((id) =>
+            getLocale() === 'ru' ? `«${L(ACTIONS[id].name)}»` : `“${L(ACTIONS[id].name)}”`
+          )
+          .join(', '),
+      },
+    };
+  return null;
+}
+
 export function validateDag(nodes, edges) {
   const triggers = nodes.filter((n) => ACTIONS[n.action]?.kind === 'trigger');
   if (triggers.length === 0)

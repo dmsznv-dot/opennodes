@@ -51,6 +51,7 @@ import {
 } from './catalog.js';
 import {
   validateDag,
+  linkProblem,
   stepOrder,
   stepNumbers,
   ancestorsOf,
@@ -1775,7 +1776,17 @@ function canvasView(a) {
       const p = edgePath(a, cardH, e);
       if (!p) continue;
       // A context step (a brand voice) gives settings, not data: a dashed line, no “insert”.
-      const context = ACTIONS[a.nodes.find((n) => n.id === e.source)?.action]?.kind === 'context';
+      const fromAct = ACTIONS[a.nodes.find((n) => n.id === e.source)?.action];
+      const context = fromAct?.kind === 'context';
+      // Said in words too, not only by colour: “voice”, “template”.
+      if (context)
+        edgeGroup.append(
+          svg(
+            'text',
+            { x: p.mid.x, y: p.mid.y - 6, class: 'edge-label', 'text-anchor': 'middle' },
+            t(`cv.ctxLabel.${fromAct.contextField}`)
+          )
+        );
       edgeGroup.append(
         svg('path', { d: p.d, class: context ? 'edge edge-context' : 'edge' }),
         svg('path', {
@@ -2017,8 +2028,9 @@ function canvasView(a) {
 /** A connection drawn from one step's dot to another step. */
 function connectSteps(a, source, target) {
   if (!target || target === source) return;
-  if (ACTIONS[a.nodes.find((n) => n.id === target)?.action]?.kind === 'trigger') {
-    toast(t('cv.triggerNoInput'), 'error');
+  const problem = linkProblem(a, source, target);
+  if (problem) {
+    toast(t(problem.key, problem.params), 'error');
     return;
   }
   if (a.edges.some((e) => e.source === source && e.target === target)) return;
@@ -2534,15 +2546,30 @@ function addStep(a, parentId, actionId, opts = {}) {
     disabled: false,
     position: opts.position ?? positionBelow(a, parentId),
   });
-  if (opts.insertEdge) {
+  const link = (source, target) => {
+    a.edges.push({ id: uid('e'), source, target });
+    linkContext(a, source, target);
+  };
+  const ok = (source, target) => !linkProblem(a, source, target);
+  const e = opts.insertEdge;
+  if (e && ok(e.source, id) && ok(id, e.target)) {
     // Between two steps: source → new → target, in one undoable change.
-    const e = opts.insertEdge;
     a.edges = a.edges.filter((x) => x.id !== e.id);
-    a.edges.push({ id: uid('e'), source: e.source, target: id });
-    a.edges.push({ id: uid('e'), source: id, target: e.target });
+    link(e.source, id);
+    link(id, e.target);
     makeRoom(a, id, e.source, e.target);
-  } else if (parentId) {
-    a.edges.push({ id: uid('e'), source: parentId, target: id });
+  } else if (parentId && ok(parentId, id)) {
+    link(parentId, id);
+  } else if (parentId && act.kind === 'context' && ok(id, parentId)) {
+    // A voice picked under an AI step goes above and to the side of it, and leads into it.
+    const p = a.nodes.find((x) => x.id === parentId)?.position;
+    const me = a.nodes.find((x) => x.id === id);
+    if (p) me.position = { x: snap(p.x + CARD_W + 48), y: snap(Math.max(0, p.y - CARD_H - 48)) };
+    link(id, parentId);
+  } else if (parentId || e) {
+    const problem =
+      linkProblem(a, e?.source ?? parentId, id) ?? linkProblem(a, id, e?.target ?? parentId);
+    toast(`${t('cv.addedUnlinked')} ${problem ? t(problem.key, problem.params) : ''}`.trim());
   } else if (act.kind !== 'trigger' && a.nodes.length > 1) {
     toast(t('cv.addedUnlinked'));
   }

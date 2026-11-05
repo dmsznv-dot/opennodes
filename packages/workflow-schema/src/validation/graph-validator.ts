@@ -14,7 +14,8 @@ export interface GraphValidationError {
     | 'ERR_MISSING_TRIGGER'
     | 'ERR_MULTIPLE_TRIGGERS'
     | 'ERR_DUPLICATE_NODE_ID'
-    | 'ERR_DUPLICATE_EDGE_ID';
+    | 'ERR_DUPLICATE_EDGE_ID'
+    | 'ERR_CONTEXT_LINK';
   message: string;
   nodeIds?: string[];
   edgeIds?: string[];
@@ -33,6 +34,18 @@ export interface GraphValidationResult {
   warnings: GraphValidationWarning[];
   topologicalOrder?: string[];
 }
+
+/**
+ * Context steps (a brand voice, a prompt template) give settings to the steps they lead
+ * into, not data. Which steps may take each one, and whether it takes anything itself.
+ * The editor derives the same rules from its catalog (docs/engine.js `linkProblem`).
+ */
+export const CONTEXT_LINKS: Record<string, { consumers: readonly string[]; inputs: boolean }> = {
+  'context.voice': { consumers: ['ai.process'], inputs: false },
+  'context.prompt': { consumers: ['ai.process'], inputs: true },
+};
+
+const isContext = (type: string | undefined) => Boolean(type && CONTEXT_LINKS[type]);
 
 export interface ValidateGraphOptions {
   requireSingleTrigger?: boolean; // Default true for publication/execution
@@ -84,8 +97,8 @@ export function validateWorkflowGraph(
   }
 
   // 3. Check trigger constraint
-  const triggerNodes = nodes.filter(
-    (n) => Boolean(n.type?.startsWith('trigger.') || n.type?.startsWith('trigger_'))
+  const triggerNodes = nodes.filter((n) =>
+    Boolean(n.type?.startsWith('trigger.') || n.type?.startsWith('trigger_'))
   );
   if (options.requireSingleTrigger) {
     if (triggerNodes.length === 0) {
@@ -156,6 +169,25 @@ export function validateWorkflowGraph(
         code: 'ERR_PORT_DIRECTION_INVALID',
         message: `Edge '${edge.id}' connects to handle '${edge.targetHandle}' which is not an input port`,
         nodeIds: [edge.target],
+        edgeIds: [edge.id],
+      });
+    }
+
+    // Context steps: only into the steps that use them; a voice takes nothing itself.
+    const contextProblem = isContext(sourceNode.type)
+      ? isContext(targetNode.type)
+        ? 'a context step cannot lead into another context step'
+        : !CONTEXT_LINKS[sourceNode.type]!.consumers.includes(targetNode.type)
+          ? `'${sourceNode.type}' links only to ${CONTEXT_LINKS[sourceNode.type]!.consumers.join(', ')}`
+          : null
+      : isContext(targetNode.type) && !CONTEXT_LINKS[targetNode.type]!.inputs
+        ? `'${targetNode.type}' takes no data from other steps`
+        : null;
+    if (contextProblem) {
+      errors.push({
+        code: 'ERR_CONTEXT_LINK',
+        message: `Edge '${edge.id}' from '${edge.source}' to '${edge.target}': ${contextProblem}`,
+        nodeIds: [edge.source, edge.target],
         edgeIds: [edge.id],
       });
     }

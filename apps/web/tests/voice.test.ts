@@ -198,3 +198,45 @@ describe('brand voice — size limit', () => {
     expect(fitVoice(VOICE).dropped).toBe(0);
   });
 });
+
+describe('context steps — link rules in the editor', () => {
+  const a = {
+    nodes: [
+      { id: 't', action: 'manual.run', config: {} },
+      { id: 'rss', action: 'rss.read', config: {} },
+      { id: 'voice', action: 'context.voice', config: {} },
+      { id: 'tpl', action: 'context.prompt', config: {} },
+      { id: 'ai', action: 'ai.process', config: {} },
+      { id: 'tg', action: 'telegram.sendMessage', config: {} },
+    ],
+    edges: [],
+  };
+
+  it('allows what the server allows and names the reason otherwise', async () => {
+    const { linkProblem } = await import('../../../docs/engine.js');
+    const key = (s, t) => linkProblem(a, s, t)?.key ?? null;
+    expect(key('voice', 'ai')).toBe(null);
+    expect(key('rss', 'tpl')).toBe(null);
+    expect(key('tpl', 'ai')).toBe(null);
+    expect(key('rss', 'ai')).toBe(null);
+    expect(key('t', 'voice')).toBe('cv.ctxNoInput');
+    expect(key('voice', 'tg')).toBe('cv.ctxTarget');
+    expect(key('voice', 'tpl')).toBe('cv.ctxFromCtx');
+    expect(key('ai', 't')).toBe('cv.triggerNoInput');
+    expect(linkProblem(a, 'voice', 'tg').params.list).toMatch(/Process text with AI|Обработать текст с помощью ИИ/);
+  });
+
+  it('derives the same rules as the server’s list', async () => {
+    const { contextConsumers } = await import('../../../docs/engine.js');
+    const { CONTEXT_LINKS } =
+      await import('../../../packages/workflow-schema/src/validation/graph-validator.ts');
+    const { ACTIONS: A } = await import('../../../docs/catalog.js');
+    const contextIds = Object.keys(A).filter((id) => A[id].kind === 'context');
+    expect(contextIds.map((id) => A[id].type).sort()).toEqual(Object.keys(CONTEXT_LINKS).sort());
+    for (const id of contextIds) {
+      const rule = CONTEXT_LINKS[A[id].type];
+      expect(contextConsumers(id).map((c) => A[c].type)).toEqual(rule.consumers);
+      expect(!A[id].noInputs).toBe(rule.inputs);
+    }
+  });
+});

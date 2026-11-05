@@ -1600,6 +1600,9 @@ export const ACTIONS = {
     type: 'context.voice',
     service: 'voice',
     kind: 'context',
+    // Linked to steps that have a field of this type; takes nothing from other steps.
+    contextField: 'voice',
+    noInputs: true,
     needs: tr('правила и примеры текстов', 'rules and sample texts'),
     gives: tr(
       'стиль для шагов ИИ, к которым подключён',
@@ -1742,6 +1745,8 @@ export const ACTIONS = {
     type: 'context.prompt',
     service: 'prompt',
     kind: 'context',
+    // Linked to steps that have a field of this type; its data comes from steps before it.
+    contextField: 'prompt',
     // Its variables may come from each item of a list: filled in the AI step, per item.
     itemVars: true,
     needs: tr(

@@ -240,6 +240,12 @@ const DICT = {
     'cv.addedUnlinked': 'Шаг добавлен без связи — протяните связь от точки внизу предыдущего шага.',
     'cv.cycle': 'Так связать нельзя: получится замкнутый круг.',
     'cv.triggerNoInput': 'К стартовому событию нельзя провести связь — с него всё начинается.',
+    'cv.ctxTarget': '«{name}» подключается только к шагам: {list}.',
+    'cv.ctxNoInput':
+      '«{name}» не берёт данные из других шагов — проведите связь от него к шагу ИИ.',
+    'cv.ctxFromCtx': 'Шаг контекста нельзя подключить к другому шагу контекста — только к шагу ИИ.',
+    'cv.ctxLabel.voice': 'голос',
+    'cv.ctxLabel.prompt': 'шаблон',
     'panel.dataPickerHint':
       'Теги — данные прошлых шагов — вставляются кнопкой «+ Данные» или клавишей {. Тег можно перетащить мышью; нажмите на него, чтобы сменить формат или сделать ссылкой.',
     'dpick.search': 'Найти данные…',
@@ -688,6 +694,11 @@ const DICT = {
       'Step added without a connection — drag one from the dot under the previous step.',
     'cv.cycle': 'Cannot connect like that: it would make a loop.',
     'cv.triggerNoInput': 'Nothing can lead into the start event — everything begins there.',
+    'cv.ctxTarget': '“{name}” links only to these steps: {list}.',
+    'cv.ctxNoInput': '“{name}” takes no data from other steps — link it to an AI step instead.',
+    'cv.ctxFromCtx': 'A context step cannot lead into another context step — only into an AI step.',
+    'cv.ctxLabel.voice': 'voice',
+    'cv.ctxLabel.prompt': 'template',
     'panel.dataPickerHint':
       'Tags — data from earlier steps — go in with “+ Data” or the { key. Drag a tag with the mouse; click it to change its format or make it a link.',
     'dpick.search': 'Find data…',
