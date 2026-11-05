@@ -20,6 +20,7 @@
     "format:check": "prettier --check \"**/*.{ts,tsx,js,json,md}\"",
     "clean": "turbo run clean && rm -rf node_modules",
     "start:local": "node scripts/start-local.mjs",
+    "build:macos": "node scripts/build-macos.mjs",
     "backup": "node scripts/backup.mjs",
     "smoke": "node scripts/smoke.mjs"
   },

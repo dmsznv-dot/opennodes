@@ -1399,9 +1399,13 @@ export class LocalFlowApiServer {
     if (this.httpServer) {
       const server = this.httpServer;
       this.httpServer = undefined;
-      await new Promise<void>((resolve, reject) =>
-        server.close((err) => (err ? reject(err) : resolve()))
-      );
+      // listen() can fail (occupied port, OS policy). Still stop the worker and
+      // release the database below; close() on a non-listening server rejects.
+      if (server.listening) {
+        await new Promise<void>((resolve, reject) =>
+          server.close((err) => (err ? reject(err) : resolve()))
+        );
+      }
     }
     const rt = this.runtime ?? (await this.initPromise?.catch(() => undefined));
     if (rt) {

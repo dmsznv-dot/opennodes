@@ -315,7 +315,7 @@ export class WorkflowEngine {
       }
 
       // Check edge dependency / branch skip
-      const shouldRun = this.edgeResolver.shouldExecuteNode(node, workflow.edges, context);
+      const shouldRun = this.edgeResolver.shouldExecuteNode(node, workflow.edges, context, workflow.nodes);
 
       // On resume a node may already have a journal row (interrupted, waiting or skipped);
       // reuse it so a run never lists the same step twice.

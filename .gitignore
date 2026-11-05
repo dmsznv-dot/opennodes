@@ -26,3 +26,4 @@ coverage/
 
 # Backups (database + encryption key)
 backups/
+apps/desktop/runtime/opennodes-lock

@@ -81,6 +81,32 @@ opennodes/
 
 ## Quick Start
 
+### macOS desktop alpha
+
+The desktop app uses native AppKit menus, a window and a menu-bar item. The editor
+runs inside WKWebView with the real local engine and embedded database. Packaged
+builds include Node and production dependencies; Docker and a separate Node
+installation are not needed to use the app.
+
+Build on a Mac (Apple Silicon or Intel; the result matches the build machine):
+
+```bash
+pnpm install --frozen-lockfile
+pnpm build:macos
+```
+
+Open `build/macos/OpenNodes.app`; the ZIP beside it is the distributable. Create a
+local owner account on first launch. Closing the window keeps automations running;
+use **OpenNodes → Quit** to stop them. Data and the encryption key live in
+`~/Library/Application Support/OpenNodes`, separately from the app. Stop the app
+before backing up that entire directory. The existing `pnpm backup` command backs
+up the CLI installation's `.data`, not the desktop directory.
+
+This is an **ad-hoc signed, unnotarized alpha**, not an App Store release.
+The UI is the existing editor, not a full SwiftUI rewrite. See
+[desktop implementation status](docs/development/2026-11-05-desktop-status.md)
+for the first Node System 2.0 changes and the remaining AI/image pipeline work.
+
 ### 1. Build, Typecheck & Run All Tests (Unit + 286 E2E)
 
 ```bash

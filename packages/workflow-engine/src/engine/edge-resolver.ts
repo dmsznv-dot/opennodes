@@ -9,9 +9,14 @@ export class EdgeResolver {
   shouldExecuteNode(
     node: WorkflowNode,
     edges: WorkflowEdge[],
-    context: ExecutionContext
+    context: ExecutionContext,
+    nodes: readonly WorkflowNode[] = []
   ): boolean {
-    const incoming = this.getIncomingEdges(node.id, edges);
+    // A voice/prompt supplies settings. It cannot make an inactive data branch run.
+    // Infer old links too: published 1.0 snapshots must keep their original checksum.
+    const incoming = this.getIncomingEdges(node.id, edges).filter((edge) =>
+      edge.kind !== 'context' && !nodes.find((n) => n.id === edge.source)?.type.startsWith('context.')
+    );
     if (incoming.length === 0) {
       return true;
     }
