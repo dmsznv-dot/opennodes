@@ -4,7 +4,7 @@
  * never calls real connectors (see docs/README note and BUG-01 in the UX audit).
  */
 import { parseExpr, splitTemplate } from './tokens.js';
-import { ACTIONS, SERVICES, postFields } from './catalog.js';
+import { ACTIONS, SERVICES, postFields, askedLanguage } from './catalog.js';
 import { L, t, getLocale } from './i18n.js';
 
 // ── Graph validation (single trigger + Kahn cycle check) ────────────────────
@@ -42,6 +42,92 @@ export function linkProblem(a, sourceId, targetId) {
       },
     };
   return null;
+}
+
+const ctxRef = (id) => `{{ $nodes.${id}.output }}`;
+
+/**
+ * Where a step overlaps or clashes with other steps — not errors (it still runs) but
+ * things a person should know: `[{ key, params, related: [nodeIds to light up] }]`.
+ * Shown in yellow on the step's card and in its panel; hovering lights up `related`.
+ */
+export function stepWarnings(a, node, { automations = [a] } = {}) {
+  const out = [];
+  const act = ACTIONS[node?.action];
+  if (!act) return out;
+  const cfg = node.config ?? {};
+  const name = (n) => n.config?.name || nodeTitle(n);
+  const nums = stepNumbers(a);
+  const linked = (type) =>
+    a.edges
+      .filter((e) => e.target === node.id)
+      .map((e) => a.nodes.find((n) => n.id === e.source))
+      .filter((n) => n?.action === type);
+
+  for (const [field, type] of [
+    ['voice', 'context.voice'],
+    ['prompt', 'context.prompt'],
+  ]) {
+    if (!act.fields?.some((f) => f.key === field && f.type === field)) continue;
+    const all = linked(type);
+    const chosen = a.nodes.find((n) => n.action === type && ctxRef(n.id) === cfg[field]);
+    const unused = all.filter((n) => n !== chosen);
+    if (all.length > 1)
+      out.push({
+        key: `warn.several.${field}`,
+        params: { n: all.length, name: chosen ? name(chosen) : '—' },
+        related: unused.map((n) => n.id),
+      });
+    else if (unused.length)
+      out.push({
+        key: `warn.notChosen.${field}`,
+        params: { name: name(unused[0]), n: nums.get(unused[0].id) },
+        related: [unused[0].id],
+      });
+  }
+
+  const template = a.nodes.find(
+    (n) => n.action === 'context.prompt' && cfg.prompt && ctxRef(n.id) === cfg.prompt
+  );
+  if (template && String(cfg.instruction ?? '').trim())
+    out.push({
+      key: 'warn.twoSources',
+      params: { name: name(template), n: nums.get(template.id) },
+      related: [template.id],
+    });
+  if (template?.config?.forEach && act.forEach && !cfg.forEach)
+    out.push({
+      key: 'warn.templatePerItem',
+      params: { name: name(template), n: nums.get(template.id) },
+      related: [template.id],
+    });
+
+  const voice = a.nodes.find(
+    (n) => n.action === 'context.voice' && cfg.voice && ctxRef(n.id) === cfg.voice
+  );
+  const instruction = [template?.config?.template, cfg.instruction].filter(Boolean).join(' ');
+  const want = askedLanguage(instruction);
+  const has = askedLanguage(voice?.config?.language);
+  if (voice && want && has && want !== has)
+    out.push({
+      key: 'warn.language',
+      params: { name: name(voice), n: nums.get(voice.id) },
+      related: [voice.id, ...(template ? [template.id] : [])],
+    });
+
+  // Telegram gives a bot's updates to one reader: the approvals bot must not start scenarios.
+  // (This scenario or any other one: the same bot reads its updates once.)
+  if (node.action === 'telegram.approval' && node.connectionId) {
+    const sameBot = (n) =>
+      n.action === 'telegram.newMessage' && n.connectionId === node.connectionId;
+    const here = a.nodes.find(sameBot);
+    const other = automations.find((x) => x.id !== a.id && x.nodes?.some(sameBot));
+    if (here)
+      out.push({ key: 'warn.sameBot', params: { n: nums.get(here.id) }, related: [here.id] });
+    else if (other)
+      out.push({ key: 'warn.sameBotOther', params: { name: other.name }, related: [] });
+  }
+  return out;
 }
 
 export function validateDag(nodes, edges) {

@@ -221,6 +221,39 @@ const DICT = {
     'panel.basic': 'Основные',
     'panel.advanced': 'Дополнительно',
     'ai.twoSourcesShort': 'Инструкция из двух мест',
+    'warn.many': 'Предупреждений: {n}',
+    'rb.running': 'Выполняется',
+    'rb.ok': 'Успех',
+    'rb.failed': 'Ошибка',
+    'rb.stopped': 'Остановлено',
+    'rb.waiting': 'Ждёт решения',
+    'rb.details': 'Показать подробности по шагам',
+    'warn.twoSources':
+      'ИИ берёт инструкцию из двух мест: шаблон «{name}» (шаг {n}) и поле «Что сделать».',
+    'warn.twoSources.short': 'Инструкция из двух мест',
+    'warn.several.voice': 'Подключено голосов: {n}. Используется «{name}», остальные не участвуют.',
+    'warn.several.voice.short': 'Несколько голосов',
+    'warn.several.prompt':
+      'Подключено шаблонов: {n}. Используется «{name}», остальные не участвуют.',
+    'warn.several.prompt.short': 'Несколько шаблонов',
+    'warn.notChosen.voice':
+      'Голос «{name}» (шаг {n}) подключён стрелкой, но не выбран в поле «Голос бренда» — он не используется.',
+    'warn.notChosen.voice.short': 'Голос подключён, но не выбран',
+    'warn.notChosen.prompt':
+      'Шаблон «{name}» (шаг {n}) подключён стрелкой, но не выбран в поле «Шаблон инструкции» — он не используется.',
+    'warn.notChosen.prompt.short': 'Шаблон подключён, но не выбран',
+    'warn.templatePerItem':
+      'Шаблон «{name}» (шаг {n}) берёт данные каждой записи, а этот шаг выполняется один раз — запуск остановится с ошибкой. Включите «Для каждой записи».',
+    'warn.templatePerItem.short': 'Шаблон ждёт «для каждой записи»',
+    'warn.language':
+      'Язык в голосе «{name}» (шаг {n}) и в инструкции разный. Модель последует инструкции.',
+    'warn.language.short': 'Разный язык голоса и инструкции',
+    'warn.sameBot':
+      'Этот бот уже запускает сценарий (шаг {n}). Telegram отдаёт нажатия кнопок только одному читателю — возьмите для утверждений отдельного бота.',
+    'warn.sameBot.short': 'Тот же бот, что запускает сценарий',
+    'warn.sameBotOther':
+      'Этот бот запускает сценарий «{name}». Telegram отдаёт нажатия кнопок только одному читателю — возьмите для утверждений отдельного бота.',
+    'warn.sameBotOther.short': 'Бот занят другим сценарием',
     'ai.twoSources':
       'ИИ берёт инструкцию из двух мест: шаблон «{name}» (шаг {n}) и это поле. Сначала идёт шаблон, затем этот текст.',
     'vh.title': 'История версий ({n})',
@@ -722,6 +755,38 @@ const DICT = {
     'panel.basic': 'Main settings',
     'panel.advanced': 'Advanced',
     'ai.twoSourcesShort': 'Instruction from two places',
+    'warn.many': '{n} warnings',
+    'rb.running': 'Running',
+    'rb.ok': 'Success',
+    'rb.failed': 'Error',
+    'rb.stopped': 'Stopped',
+    'rb.waiting': 'Waiting for a decision',
+    'rb.details': 'Show step-by-step details',
+    'warn.twoSources':
+      'The AI takes its instruction from two places: the template “{name}” (step {n}) and “What to do”.',
+    'warn.twoSources.short': 'Instruction from two places',
+    'warn.several.voice': '{n} voices are linked. “{name}” is used; the others take no part.',
+    'warn.several.voice.short': 'Several voices',
+    'warn.several.prompt': '{n} templates are linked. “{name}” is used; the others take no part.',
+    'warn.several.prompt.short': 'Several templates',
+    'warn.notChosen.voice':
+      'The voice “{name}” (step {n}) is linked but not chosen in “Brand voice” — it is not used.',
+    'warn.notChosen.voice.short': 'Voice linked but not chosen',
+    'warn.notChosen.prompt':
+      'The template “{name}” (step {n}) is linked but not chosen in “Prompt template” — it is not used.',
+    'warn.notChosen.prompt.short': 'Template linked but not chosen',
+    'warn.templatePerItem':
+      'The template “{name}” (step {n}) uses each item’s data, but this step runs once — the run will stop with an error. Turn on “For each item”.',
+    'warn.templatePerItem.short': 'Template needs “for each item”',
+    'warn.language':
+      'The voice “{name}” (step {n}) and the instruction ask for different languages. The model follows the instruction.',
+    'warn.language.short': 'Voice and instruction languages differ',
+    'warn.sameBot':
+      'This bot already starts the scenario (step {n}). Telegram gives button presses to one reader only — use a separate bot for approvals.',
+    'warn.sameBot.short': 'Same bot as the start',
+    'warn.sameBotOther':
+      'This bot starts the scenario “{name}”. Telegram gives button presses to one reader only — use a separate bot for approvals.',
+    'warn.sameBotOther.short': 'Bot used by another scenario',
     'ai.twoSources':
       'The AI takes its instruction from two places: the template “{name}” (step {n}) and this field. The template comes first, then this text.',
     'vh.title': 'Version history ({n})',

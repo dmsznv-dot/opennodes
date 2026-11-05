@@ -64,6 +64,7 @@ import {
 import {
   validateDag,
   linkProblem,
+  stepWarnings,
   stepOrder,
   stepNumbers,
   ancestorsOf,
@@ -1559,6 +1560,8 @@ const snapshot = (a) => JSON.stringify({ nodes: a.nodes, edges: a.edges });
 
 /** Call before changing the graph, so Cmd/Ctrl+Z can bring this state back. */
 function checkpoint(a) {
+  // An edit makes the last run's marks on the board out of date.
+  if (ui.runView?.automationId === a.id && !ui.runView.playing) ui.runView = null;
   if (ui.history?.id !== a.id) ui.history = { id: a.id, past: [], future: [] };
   ui.history.past.push(snapshot(a));
   if (ui.history.past.length > 50) ui.history.past.shift();
@@ -1676,6 +1679,7 @@ function viewEditor(id) {
         },
         ui.busy ? `… ${t('ed.check')}` : `▶ ${t('ed.check')}`
       ),
+      resultBadge(a),
       live.isLive && a.status === 'active' && triggerOf(a)?.action === 'manual.run'
         ? h(
             'button',
@@ -1867,10 +1871,16 @@ function canvasView(a) {
           )
         );
       const selected = ui.selectedEdgeId === e.id;
+      const flowing = ui.runView?.automationId === a.id && ui.runView.flowing?.includes(e.id);
       edgeGroup.append(
         svg('path', {
           d: p.d,
-          class: ['edge', context && 'edge-context', selected && 'edge-selected']
+          class: [
+            'edge',
+            context && 'edge-context',
+            selected && 'edge-selected',
+            flowing && 'edge-run',
+          ]
             .filter(Boolean)
             .join(' '),
         }),
@@ -1964,20 +1974,21 @@ function canvasView(a) {
       ),
       h('span', { class: 'node-title' }, nodeTitle(n)),
       (() => {
-        // An instruction both in a linked template and in “What to do”: said in yellow,
-        // and hovering it lights up the template step.
-        const tpl = twoInstructionSources(a, n.config?.prompt, n.config?.instruction);
-        return tpl
-          ? h(
-              'span',
-              {
-                class: 'node-sub node-warn',
-                onmouseenter: () => highlightNode(tpl.id, true),
-                onmouseleave: () => highlightNode(tpl.id, false),
-              },
-              `⚠ ${t('ai.twoSourcesShort')}`
-            )
-          : h('span', { class: 'node-sub' }, nodeSubtitle(a, n));
+        // Overlaps with other steps (two instructions, two voices, the same bot…): said in
+        // yellow; hovering lights up the steps involved.
+        const warns = stepWarnings(a, n, { automations: store.automations });
+        if (!warns.length) return h('span', { class: 'node-sub' }, nodeSubtitle(a, n));
+        const related = [...new Set(warns.flatMap((w) => w.related))];
+        return h(
+          'span',
+          {
+            class: 'node-sub node-warn',
+            title: warns.map((w) => t(w.key, w.params)).join('\n'),
+            onmouseenter: () => related.forEach((id) => highlightNode(id, true)),
+            onmouseleave: () => related.forEach((id) => highlightNode(id, false)),
+          },
+          `⚠ ${warns.length > 1 ? t('warn.many', { n: warns.length }) : t(`${warns[0].key}.short`)}`
+        );
       })(),
       store.settings.devMode ? h('span', { class: 'node-dev' }, `${act?.type} · ${n.id}`) : null
     );
@@ -2005,6 +2016,9 @@ function canvasView(a) {
     place(n);
   }
   drawEdges();
+  // The last run's marks survive a redraw of the board.
+  ui.redrawEdges = drawEdges;
+  if (ui.runView?.automationId === a.id) queueMicrotask(paintRun);
 
   const zoomLabel = h('span', {}, '100%');
   const toolbar = h(
@@ -2415,10 +2429,124 @@ function recordCheck(a, run, { navigate = false } = {}) {
     ob.step = 4;
   save();
   ui.lastRunId = run.id;
-  ui.runPanelOpen = true;
+  // The result shows next to “Test” (details on click), after the run is played on the board.
+  ui.runPanelOpen = false;
   if (navigate) go(`#/editor/${a.id}`);
   render();
-  document.querySelector('.run-panel')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  playRun(a, run);
+}
+
+const RUN_MARK = {
+  ok: 'ok',
+  failed: 'failed',
+  stopped: 'stopped',
+  waiting: 'waiting',
+  approval: 'waiting',
+};
+const RUN_ICON = { ok: '✓', failed: '✕', stopped: '■', waiting: '⏸' };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const reducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+/** Puts the run's state on the board's cards and links, without drawing it all again. */
+function paintRun() {
+  const rv = ui.runView;
+  for (const card of document.querySelectorAll('.node-card[data-node-id]')) {
+    const id = card.dataset.nodeId;
+    const mark = rv?.marks[id];
+    card.classList.toggle('run-active', rv?.active === id);
+    for (const m of ['ok', 'failed', 'stopped', 'waiting'])
+      card.classList.toggle(`run-${m}`, mark === m);
+    card.querySelector('.run-mark')?.remove();
+    if (mark) card.append(h('span', { class: 'run-mark', 'aria-hidden': 'true' }, RUN_ICON[mark]));
+  }
+  ui.redrawEdges?.();
+}
+
+/**
+ * The run, step by step: each step lights up while it “works”, the link to the next one
+ * shows the data moving, and the step keeps a mark (✓ ✕ ■ ⏸). A replay of the result —
+ * a test runs on the server in one go.
+ */
+async function playRun(a, run) {
+  const token = {};
+  ui.runView = {
+    automationId: a.id,
+    runId: run.id,
+    marks: {},
+    active: null,
+    flowing: [],
+    playing: true,
+    token,
+    result: run.result,
+  };
+  const steps = run.steps.filter((s) => RUN_MARK[s.status] || s.status === 'skipped');
+  const pace = reducedMotion() ? 0 : Math.max(180, Math.min(520, 2600 / Math.max(steps.length, 1)));
+  render();
+  for (const s of steps) {
+    if (ui.runView?.token !== token) return; // a new run or an edit took over
+    const rv = ui.runView;
+    rv.active = s.nodeId;
+    rv.flowing = a.edges
+      .filter((e) => e.target === s.nodeId && rv.marks[e.source] === 'ok')
+      .map((e) => e.id);
+    paintRun();
+    await sleep(pace);
+    if (ui.runView?.token !== token) return;
+    if (RUN_MARK[s.status]) rv.marks[s.nodeId] = RUN_MARK[s.status];
+    rv.active = null;
+    rv.flowing = [];
+    paintRun();
+  }
+  if (ui.runView?.token !== token) return;
+  ui.runView.playing = false;
+  render();
+}
+
+/** “Success” / “Error” next to “Test”: a blinking lamp; a click opens the details below. */
+function resultBadge(a) {
+  const rv = ui.runView;
+  if (ui.busy && rv?.automationId === a.id && rv.waitingForServer)
+    return h(
+      'span',
+      { class: 'run-badge running', role: 'status' },
+      h('span', { class: 'lamp' }),
+      t('rb.running')
+    );
+  if (!rv || rv.automationId !== a.id) return null;
+  const kind = rv.playing
+    ? 'running'
+    : rv.result === 'ok'
+      ? 'ok'
+      : rv.result === 'failed'
+        ? 'failed'
+        : rv.result === 'waiting'
+          ? 'waiting'
+          : 'stopped';
+  return h(
+    'button',
+    {
+      type: 'button',
+      class: ['run-badge', kind],
+      'aria-live': 'polite',
+      'aria-expanded': String(Boolean(ui.runPanelOpen)),
+      title: t('rb.details'),
+      onclick: () => {
+        ui.runPanelOpen = !ui.runPanelOpen;
+        render();
+        if (ui.runPanelOpen)
+          document
+            .querySelector('.run-panel')
+            ?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      },
+    },
+    h('span', { class: 'lamp', 'aria-hidden': 'true' }),
+    t(`rb.${kind}`),
+    kind === 'failed' || kind === 'stopped' || kind === 'waiting'
+      ? ui.runPanelOpen
+        ? ' ▴'
+        : ' ▾'
+      : ''
+  );
 }
 
 function issueList(a, issues) {
@@ -3264,6 +3392,32 @@ function twoInstructionSources(a, promptVal, instruction) {
   );
 }
 
+/**
+ * The step's overlaps with other steps, each with the steps it involves lit up on hover.
+ * (“Two places” for the instruction is shown live under its field instead.)
+ */
+function warningsBlock(a, node) {
+  const warns = stepWarnings(a, node, { automations: store.automations }).filter(
+    (w) => w.key !== 'warn.twoSources'
+  );
+  if (!warns.length) return null;
+  return h(
+    'ul',
+    { class: 'step-warnings' },
+    warns.map((w) =>
+      h(
+        'li',
+        {
+          class: 'two-sources',
+          onmouseenter: () => w.related.forEach((id) => highlightNode(id, true)),
+          onmouseleave: () => w.related.forEach((id) => highlightNode(id, false)),
+        },
+        `⚠ ${t(w.key, w.params)}`
+      )
+    )
+  );
+}
+
 /** Lights up a step on the board (hovering a warning that points at it). */
 function highlightNode(id, on) {
   document
@@ -3934,6 +4088,7 @@ function nodePanel(a, node) {
           h('div', { class: 'small muted' }, t('ed.webhookFields'))
         )
       : null,
+    warningsBlock(a, node),
     basic.length ? h('h3', { class: 'panel-section' }, t('panel.basic')) : null,
     basic.map(fieldControl),
     act?.type === 'core.rss' ? rssMemoryBlock(a, node) : null,
@@ -5215,11 +5370,23 @@ function liveCheck(a, { navigate = false } = {}) {
     .filter((n) => n && !n.disabled && ACTIONS[n.action]?.external);
   const start = async () => {
     ui.busy = true;
+    // While the server runs it: the start step pulses, the badge says “Running”.
+    const first = stepOrder(a)[0];
+    ui.runView = {
+      automationId: a.id,
+      marks: {},
+      active: first,
+      flowing: [],
+      playing: true,
+      waitingForServer: true,
+      token: {},
+    };
     render();
     try {
       await live.flushSync(store, showApiError);
       recordCheck(a, await live.testRun(a), { navigate });
     } catch (err) {
+      ui.runView = null;
       toast(err.message, 'error');
     } finally {
       ui.busy = false;

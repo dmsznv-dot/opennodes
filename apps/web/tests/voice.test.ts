@@ -377,3 +377,117 @@ describe('text review in run history', () => {
     );
   });
 });
+
+describe('overlaps between steps — warnings that light up the steps involved', () => {
+  const base = () => ({
+    id: 'wf',
+    name: 'A',
+    nodes: [
+      { id: 'trigger', action: 'manual.run', config: {} },
+      { id: 'rss', action: 'rss.read', config: {} },
+      { id: 'v1', action: 'context.voice', config: { name: 'Канал', language: 'русский' } },
+      { id: 'v2', action: 'context.voice', config: { name: 'Второй' } },
+      {
+        id: 'tpl',
+        action: 'context.prompt',
+        config: {
+          name: 'Пересказ',
+          template: 'Перескажи {{ $item.title }}',
+          forEach: '{{ $nodes.rss.output.items }}',
+        },
+      },
+      { id: 'ai', action: 'ai.process', config: { input: 'x' } },
+    ],
+    edges: [
+      { id: 'e1', source: 'trigger', target: 'rss' },
+      { id: 'e2', source: 'rss', target: 'ai' },
+      { id: 'e3', source: 'rss', target: 'tpl' },
+    ],
+  });
+  const warn = async (a, id = 'ai', opts) => {
+    const { stepWarnings } = await import('../../../docs/engine.js');
+    return stepWarnings(
+      a,
+      a.nodes.find((n) => n.id === id),
+      opts
+    ).map((w) => [w.key, w.related]);
+  };
+
+  it('a clean AI step has none', async () => {
+    expect(await warn(base())).toEqual([]);
+  });
+
+  it('two voices linked: the one not used is lit up; one linked but not chosen too', async () => {
+    const a = base();
+    a.edges.push(
+      { id: 'ev1', source: 'v1', target: 'ai' },
+      { id: 'ev2', source: 'v2', target: 'ai' }
+    );
+    a.nodes[5].config.voice = '{{ $nodes.v1.output }}';
+    expect(await warn(a)).toEqual([['warn.several.voice', ['v2']]]);
+    a.edges.pop();
+    delete a.nodes[5].config.voice;
+    expect(await warn(a)).toEqual([['warn.notChosen.voice', ['v1']]]);
+  });
+
+  it('template plus “What to do”, a per-item template on a once-only step, languages that differ', async () => {
+    const a = base();
+    a.edges.push(
+      { id: 'et', source: 'tpl', target: 'ai' },
+      { id: 'ev', source: 'v1', target: 'ai' }
+    );
+    Object.assign(a.nodes[5].config, {
+      prompt: '{{ $nodes.tpl.output }}',
+      voice: '{{ $nodes.v1.output }}',
+      instruction: 'Переведи на английский',
+    });
+    expect(await warn(a)).toEqual([
+      ['warn.twoSources', ['tpl']],
+      ['warn.templatePerItem', ['tpl']],
+      ['warn.language', ['v1', 'tpl']],
+    ]);
+    a.nodes[5].config.forEach = '{{ $nodes.rss.output.items }}';
+    expect((await warn(a)).map((w) => w[0])).not.toContain('warn.templatePerItem');
+  });
+
+  it('the approvals bot must not be a bot that starts scenarios — here or in another one', async () => {
+    const a = {
+      id: 'wf',
+      name: 'A',
+      nodes: [
+        { id: 'tg', action: 'telegram.newMessage', config: {}, connectionId: 'bot1' },
+        { id: 'ap', action: 'telegram.approval', config: {}, connectionId: 'bot1' },
+      ],
+      edges: [{ id: 'e', source: 'tg', target: 'ap' }],
+    };
+    expect(await warn(a, 'ap')).toEqual([['warn.sameBot', ['tg']]]);
+    a.nodes[0].connectionId = 'bot2';
+    const other = {
+      id: 'wf2',
+      name: 'Другой',
+      nodes: [{ id: 't', action: 'telegram.newMessage', connectionId: 'bot1' }],
+      edges: [],
+    };
+    expect(await warn(a, 'ap', { automations: [a, other] })).toEqual([['warn.sameBotOther', []]]);
+  });
+
+  it('every warning has a text and a short text in both languages', async () => {
+    const { __DICT_FOR_TESTS } = await import('../../../docs/i18n.js');
+    const keys = [
+      'twoSources',
+      'several.voice',
+      'several.prompt',
+      'notChosen.voice',
+      'notChosen.prompt',
+      'templatePerItem',
+      'language',
+      'sameBot',
+      'sameBotOther',
+    ];
+    for (const lang of ['ru', 'en'])
+      for (const k of keys) {
+        expect(__DICT_FOR_TESTS[lang][`warn.${k}`], `${lang} warn.${k}`).toBeTruthy();
+        expect(__DICT_FOR_TESTS[lang][`warn.${k}.short`], `${lang} warn.${k}.short`).toBeTruthy();
+      }
+  });
+});
