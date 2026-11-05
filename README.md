@@ -81,7 +81,7 @@ opennodes/
 
 ## Quick Start
 
-### macOS desktop alpha · 0.3.0
+### macOS desktop alpha · 0.3.1
 
 The desktop app uses native AppKit menus, a window and a menu-bar item. The editor
 runs inside WKWebView with the real local engine and embedded database. Packaged
