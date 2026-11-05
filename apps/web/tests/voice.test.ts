@@ -316,3 +316,64 @@ describe('text review, approval, and rules from examples', () => {
     expect(step.output.content).toBe('Текст поста');
   });
 });
+
+describe('library versions — compare and roll back', () => {
+  it('compares a version with the step and loads a chosen version into it', async () => {
+    const { diffConfigs } = await import('../../../docs/presets.js');
+    const one = savePreset([], VOICE, { newId: 'vp_a' });
+    const two = savePreset(one.list, { ...VOICE, tone: 'дружелюбный', avoid: '' }, { id: 'vp_a' });
+    const step = applyPreset({ other: 1 }, two.preset);
+    expect(diffConfigs(step, two.preset.versions[0].config)).toEqual([
+      { key: 'tone', from: 'дружелюбный', to: 'экспертный' },
+      { key: 'avoid', from: '', to: 'канцелярит' },
+    ]);
+    const back = applyPreset(step, two.preset, undefined, 1);
+    expect(back).toMatchObject({
+      tone: 'экспертный',
+      avoid: 'канцелярит',
+      presetVersion: 1,
+      other: 1,
+    });
+    expect(presetStatus(two.list, back)).toMatchObject({ newer: true, edited: false, latest: 2 });
+  });
+
+  it('a rollback adds a version and keeps the history', async () => {
+    const { restoreVersion } = await import('../../../docs/presets.js');
+    const one = savePreset([], VOICE, { newId: 'vp_a' });
+    const two = savePreset(one.list, { ...VOICE, tone: 'дружелюбный' }, { id: 'vp_a' });
+    const r = restoreVersion(two.list, 'vp_a', 1);
+    expect(r.link).toEqual({ presetId: 'vp_a', presetVersion: 3 });
+    expect(r.preset.versions.map((v) => [v.version, v.config.tone])).toEqual([
+      [1, 'экспертный'],
+      [2, 'дружелюбный'],
+      [3, 'экспертный'],
+    ]);
+    expect(restoreVersion(two.list, 'vp_a', 9).link).toBe(null);
+  });
+});
+
+describe('text review in run history', () => {
+  it('says how many items passed, or the score and the problems', async () => {
+    const { toRun } = await import('../../../docs/live.js');
+    const a = {
+      id: 'wf',
+      name: 'x',
+      nodes: [{ id: 'rv', action: 'ai.review', config: {} }],
+      edges: [],
+    };
+    const run = (out) =>
+      toRun(
+        {
+          id: 'r',
+          workflowId: 'wf',
+          status: 'SUCCEEDED',
+          steps: [{ nodeId: 'rv', status: 'SUCCEEDED', outputPayload: out }],
+        },
+        [a]
+      ).steps[0].summary;
+    expect(run({ count: 1, held: 2, items: [] })).toMatch(/1 (из|of) 3/);
+    expect(run({ score: 4, passed: false, issues: ['канцелярит'], text: 'x' })).toMatch(
+      /4\/10.*канцелярит/
+    );
+  });
+});

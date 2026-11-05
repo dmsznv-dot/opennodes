@@ -46,6 +46,7 @@ import {
   setWorkflowTriggersEnabled,
   syncWorkflowTriggers,
   decideApproval,
+  resumeDecidedRun,
 } from '@localflow/execution-runtime';
 import { verifyWebhookHmac } from '@localflow/connectors-core';
 import { LocalFlowError, SafeHttpClient, slugifyWorkspaceName } from '@localflow/shared';
@@ -231,6 +232,7 @@ export class LocalFlowApiServer {
         retentionDays: this.config.runRetentionDays,
         triggers: {
           tickMs: this.config.triggerTickMs,
+          approvalPollMs: this.config.approvalPollMs,
           telegramApiBase: this.config.telegramApiBase,
           telegramPollTimeoutSec: this.config.telegramPollTimeoutSec,
           telegramMinPollIntervalMs: this.config.telegramMinPollIntervalMs,
@@ -1170,19 +1172,7 @@ export class LocalFlowApiServer {
             status: exec.status,
           });
         }
-        await rt.queue.executionProducer.add(
-          'resumeWorkflow',
-          {
-            executionId,
-            workflowId: exec.workflowId,
-            workflowVersionId: exec.workflowVersionId,
-            workspaceId: exec.workspaceId,
-            triggerType: exec.triggerType,
-            isResume: true,
-            enqueuedAt: Date.now(),
-          },
-          { jobId: `approval_${executionId}_${Date.now()}`, attempts: 1 }
-        );
+        await resumeDecidedRun(rt.queue, exec);
         return respond(202, { executionId, decision });
       }
 

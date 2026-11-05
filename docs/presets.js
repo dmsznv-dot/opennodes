@@ -76,8 +76,10 @@ export function savePreset(
 }
 
 /** The step's config after loading a preset's latest version (the step's other settings stay). */
-export function applyPreset(config = {}, preset, keys = VOICE_KEYS) {
-  const latest = preset.versions.at(-1);
+export function applyPreset(config = {}, preset, keys = VOICE_KEYS, version = null) {
+  const latest =
+    (version != null && preset.versions.find((v) => v.version === version)) ||
+    preset.versions.at(-1);
   const rest = Object.fromEntries(Object.entries(config).filter(([k]) => !keys.includes(k)));
   return { ...rest, ...latest.config, presetId: preset.id, presetVersion: latest.version };
 }
@@ -94,4 +96,29 @@ export function presetStatus(list = [], config = {}, keys = VOICE_KEYS) {
     newer: latest.version > (config.presetVersion ?? 0),
     edited: own ? !same(own.config, config, keys) : true,
   };
+}
+
+/** What differs between two versions of a voice or template: `[{ key, from, to }]`. */
+export function diffConfigs(from = {}, to = {}, keys = VOICE_KEYS) {
+  const a = pick(from, keys);
+  const b = pick(to, keys);
+  return keys
+    .filter((k) => (a[k] ?? '') !== (b[k] ?? ''))
+    .map((k) => ({ key: k, from: a[k] ?? '', to: b[k] ?? '' }));
+}
+
+/**
+ * Roll the library back to an older version: it becomes the newest one again (a new
+ * number), so history is never rewritten and steps pinned to any version keep it.
+ */
+export function restoreVersion(
+  list = [],
+  id,
+  version,
+  { now = Date.now(), keys = VOICE_KEYS } = {}
+) {
+  const preset = list.find((p) => p.id === id);
+  const old = preset?.versions.find((v) => v.version === version);
+  if (!old) return { list, preset, link: null };
+  return savePreset(list, { ...old.config }, { id, now, keys });
 }

@@ -1,6 +1,9 @@
 import {
   ExecutionSuspendedSignal,
   type ExecutionJournal,
+  type IWorkflowQueueManager,
+  type JournalExecutionRecord,
+  type NodeExecutionResult,
   type NodeExecutor,
 } from '@localflow/workflow-engine';
 import { toText } from './text.js';
@@ -17,6 +20,18 @@ export interface ApprovalState {
   waitingUntil: string;
   title: string;
   content: string;
+  /** Asked in a Telegram chat by a separate bot: where the buttons are. */
+  // Key names avoid “token” / “credential…”: logs and the journal mask those.
+  telegram?: {
+    /** The bot's connection id. */
+    bot: string;
+    chatId: string;
+    messageId?: number;
+    /** The random tag in the buttons, matching a press to this run. */
+    ref: string;
+    approvers: string[];
+    lang?: 'ru' | 'en';
+  };
   decision?: ApprovalDecision;
   decidedAt?: string;
   decidedBy?: string;
@@ -24,6 +39,61 @@ export interface ApprovalState {
 
 export function isApprovalState(v: unknown): v is ApprovalState {
   return Boolean(v && typeof v === 'object' && (v as { approval?: unknown }).approval === true);
+}
+
+/** What a waiting approval step gives once decided (or timed out); keeps waiting otherwise. */
+export function approvalOutcome(state: ApprovalState): NodeExecutionResult {
+  const due = Date.parse(state.waitingUntil);
+  const base = { title: state.title, content: state.content };
+  if (state.decision === 'approved')
+    return {
+      output: { approved: true, decidedAt: state.decidedAt, decidedBy: state.decidedBy, ...base },
+      activeOutputs: ['main'],
+    };
+  if (state.decision === 'rejected' || Date.now() >= due - 250)
+    return {
+      output: {
+        approved: false,
+        reason: state.decision === 'rejected' ? 'rejected' : 'timeout',
+        decidedAt: state.decidedAt ?? new Date().toISOString(),
+        ...(state.decidedBy ? { decidedBy: state.decidedBy } : {}),
+        stopped: true,
+        ...base,
+      },
+      activeOutputs: [],
+    };
+  // Woken up early with no decision yet: keep waiting.
+  throw new ExecutionSuspendedSignal(new Date(due), { ...state });
+}
+
+export function approvalHours(config: Record<string, unknown>): number {
+  return Math.min(
+    Math.max(Number(config.timeoutHours) || APPROVAL_DEFAULT_HOURS, 1 / 3600),
+    APPROVAL_MAX_HOURS
+  );
+}
+
+/** Puts a run whose approval was decided back on the queue, to go on now. */
+export async function resumeDecidedRun(
+  queue: IWorkflowQueueManager,
+  exec: Pick<
+    JournalExecutionRecord,
+    'id' | 'workflowId' | 'workflowVersionId' | 'workspaceId' | 'triggerType'
+  >
+): Promise<void> {
+  await queue.executionProducer.add(
+    'resumeWorkflow',
+    {
+      executionId: exec.id,
+      workflowId: exec.workflowId,
+      workflowVersionId: exec.workflowVersionId,
+      workspaceId: exec.workspaceId,
+      triggerType: exec.triggerType,
+      isResume: true,
+      enqueuedAt: Date.now(),
+    },
+    { jobId: `approval_${exec.id}_${Date.now()}`, attempts: 1 }
+  );
 }
 
 /**
@@ -39,32 +109,8 @@ export function buildApprovalExecutors(options: {
       async execute(node, config, step) {
         const row = await options.journal.findNodeExecution(step.executionId, node.id);
         const state = row?.outputPayload;
-        if (isApprovalState(state) && state.waitingUntil) {
-          const due = Date.parse(state.waitingUntil);
-          const base = { title: state.title, content: state.content };
-          if (state.decision === 'approved')
-            return {
-              output: { approved: true, decidedAt: state.decidedAt, ...base },
-              activeOutputs: ['main'],
-            };
-          if (state.decision === 'rejected' || Date.now() >= due - 250)
-            return {
-              output: {
-                approved: false,
-                reason: state.decision === 'rejected' ? 'rejected' : 'timeout',
-                decidedAt: state.decidedAt ?? new Date().toISOString(),
-                stopped: true,
-                ...base,
-              },
-              activeOutputs: [],
-            };
-          // Woken up early with no decision yet: keep waiting.
-          throw new ExecutionSuspendedSignal(new Date(due), { ...state });
-        }
-        const hours = Math.min(
-          Math.max(Number(config.timeoutHours) || APPROVAL_DEFAULT_HOURS, 1 / 3600),
-          APPROVAL_MAX_HOURS
-        );
+        if (isApprovalState(state) && state.waitingUntil) return approvalOutcome(state);
+        const hours = approvalHours(config);
         throw new ExecutionSuspendedSignal(new Date(Date.now() + hours * 3_600_000), {
           approval: true,
           title: toText(config.title).trim() || toText(node.data.label).trim(),

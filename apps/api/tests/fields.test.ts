@@ -29,6 +29,10 @@ const EFFECT_ONLY: Record<string, string> = {
   'ai.process.titleLine': 'per item only: the AI is asked for a title line (audit.test)',
   'rss.read.pageImages': 'off: items without a picture are not looked up (audit.test)',
   'logic.approval.timeoutHours': 'sets when the wait ends: waitingUntil (queue.test)',
+  'telegram.approval.approvers':
+    'kept in lower case without “@”; only they can press (approval-telegram.test)',
+  'telegram.approval.timeoutHours':
+    'sets when the wait ends: waitingUntil (approval-telegram.test)',
   'context.voice.emoji': 'becomes a sentence ("- Emoji: no emoji") in the voice text (voice.test)',
 };
 /** A choice other than the default that makes the rest of the fields count. */
@@ -304,7 +308,7 @@ describe('every field of every step is used', () => {
       expect(res.statusCode).toBe(200);
       // An approval waits for a person: its step stays PENDING with what to decide on.
       expect(step?.status, step?.errorMessage ?? '').toBe(
-        act.type === 'core.approval' ? 'PENDING' : 'SUCCEEDED'
+        ['core.approval', 'telegram.approval'].includes(act.type) ? 'PENDING' : 'SUCCEEDED'
       );
       expect(ignored, `${id}: fields with no effect`).toEqual([]);
     });

@@ -31,7 +31,15 @@ import {
   GROUPS,
 } from './tags.js';
 import { markdownNodes } from './markdown.js';
-import { savePreset, applyPreset, presetStatus, PRESET_KINDS, VOICE_KEYS } from './presets.js';
+import {
+  savePreset,
+  applyPreset,
+  presetStatus,
+  diffConfigs,
+  restoreVersion,
+  PRESET_KINDS,
+  VOICE_KEYS,
+} from './presets.js';
 import {
   ACTIONS,
   SERVICES,
@@ -2750,9 +2758,9 @@ function presetBlock(a, node, saveNode) {
   const prefix = node.action === 'context.prompt' ? 'pt' : 'vp';
   const list = store[kind.store] ?? [];
   const status = presetStatus(list, node.config, kind.keys);
-  const apply = (preset) => {
+  const apply = (preset, version = null) => {
     checkpoint(a);
-    node.config = applyPreset(node.config, preset, kind.keys);
+    node.config = applyPreset(node.config, preset, kind.keys, version);
     ui.panelDirty = false;
     touch(a);
     render();
@@ -2836,7 +2844,111 @@ function presetBlock(a, node, saveNode) {
     { class: 'field voice-presets' },
     h('div', { class: 'field-label' }, t(`${prefix}.title`)),
     line,
-    h('div', { class: 'row-gap', style: { flexWrap: 'wrap' } }, select, load, saveBtn)
+    h('div', { class: 'row-gap', style: { flexWrap: 'wrap' } }, select, load, saveBtn),
+    status.preset ? versionHistory(a, node, status.preset, kind, apply) : null
+  );
+}
+
+/**
+ * The versions of the step's preset: compare any with the step, load one into the step,
+ * or make an old one the newest again (a rollback adds a version, history stays).
+ */
+function versionHistory(a, node, preset, kind, apply) {
+  const fields = ACTIONS[node.action]?.fields ?? [];
+  const label = (k) => L(fields.find((f) => f.key === k)?.label) || k;
+  const show = (v) => (String(v).length > 160 ? `${String(v).slice(0, 160)}…` : String(v) || '—');
+  const out = h('div', { class: 'version-diff', role: 'status' });
+  const latest = preset.versions.at(-1).version;
+  const rows = [...preset.versions].reverse().map((v) =>
+    h(
+      'li',
+      { class: 'version-row' },
+      h(
+        'span',
+        {},
+        h('b', {}, `v${v.version}`),
+        ` · ${formatDateTime(v.savedAt)}`,
+        v.version === node.config?.presetVersion ? ` · ${t('vh.inStep')}` : '',
+        v.version === latest ? ` · ${t('vh.latest')}` : ''
+      ),
+      h(
+        'span',
+        { class: 'row-gap' },
+        h(
+          'button',
+          {
+            type: 'button',
+            class: 'btn btn-small',
+            onclick: () => {
+              // What changes in the step if this version is loaded: step → version.
+              const diff = diffConfigs(node.config, v.config, kind.keys);
+              clear(out);
+              out.append(
+                h('div', { class: 'small' }, h('b', {}, t('vh.diffTitle', { v: v.version }))),
+                diff.length
+                  ? h(
+                      'ul',
+                      { class: 'small plain-list' },
+                      diff.map((d) =>
+                        h(
+                          'li',
+                          {},
+                          h('b', {}, `${label(d.key)}: `),
+                          h('s', { class: 'muted' }, show(d.from)),
+                          ' → ',
+                          show(d.to)
+                        )
+                      )
+                    )
+                  : h('p', { class: 'small muted' }, t('vh.same'))
+              );
+            },
+          },
+          t('vh.compare')
+        ),
+        v.version === node.config?.presetVersion
+          ? null
+          : h(
+              'button',
+              {
+                type: 'button',
+                class: 'btn btn-small',
+                onclick: () => {
+                  if (!confirm(t('vp.loadConfirm'))) return;
+                  apply(preset, v.version);
+                },
+              },
+              t('vh.load')
+            ),
+        v.version === latest
+          ? null
+          : h(
+              'button',
+              {
+                type: 'button',
+                class: 'btn btn-small',
+                onclick: () => {
+                  if (!confirm(t('vh.restoreConfirm', { v: v.version }))) return;
+                  const res = restoreVersion(store[kind.store] ?? [], preset.id, v.version, {
+                    keys: kind.keys,
+                  });
+                  store[kind.store] = res.list;
+                  touch(a);
+                  toast(t('vh.restored', { v: v.version, n: res.link?.presetVersion }));
+                  render();
+                },
+              },
+              t('vh.restore')
+            )
+      )
+    )
+  );
+  return h(
+    'details',
+    { class: 'version-history', ...rememberOpen('versions') },
+    h('summary', {}, t('vh.title', { n: preset.versions.length })),
+    h('ul', { class: 'plain-list' }, rows),
+    out
   );
 }
 

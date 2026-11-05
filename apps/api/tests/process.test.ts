@@ -411,6 +411,40 @@ describe('@localflow/api — Text review (checks a text against the brand voice)
     expect(good.steps.find((s) => s.nodeId === 'next')?.status).toBe('SUCCEEDED');
   });
 
+  it('for each item: only the items that passed go on; all failing stops the flow', async () => {
+    const items = [
+      { title: 'Плохо', text: 'Доставка осуществляется в течение дня.' },
+      { title: 'Хорошо', text: 'Привезём сегодня.' },
+    ];
+    const res = await runProcess(
+      {
+        text: '{{ $item.text }}',
+        voice: '{{ $nodes.v.output }}',
+        forEach: '{{ $trigger.items }}',
+        stopIfFails: true,
+      },
+      VOICE,
+      { type: 'ai.review', after: true, payload: { items } }
+    );
+    expect(res.execution.status).toBe('SUCCEEDED');
+    const out = res.step.outputPayload;
+    expect(out.count).toBe(1);
+    expect(out.held).toBe(1);
+    expect(out.items.map((i: any) => i.title)).toEqual(['Хорошо']);
+    expect(out.heldItems.map((i: any) => i.title)).toEqual(['Плохо']);
+    expect(out.outputs.map((o: any) => o.score)).toEqual([3, 9]);
+    expect(res.steps.find((s) => s.nodeId === 'next')?.status).toBe('SUCCEEDED');
+
+    modelRequests = [];
+    const none = await runProcess(
+      { text: '{{ $item.text }}', forEach: '{{ $trigger.items }}', stopIfFails: true },
+      VOICE,
+      { type: 'ai.review', after: true, payload: { items: [items[0]] } }
+    );
+    expect(none.step.outputPayload).toMatchObject({ count: 0, held: 1, stopped: true });
+    expect(none.steps.find((s) => s.nodeId === 'next')?.status ?? 'SKIPPED').toBe('SKIPPED');
+  });
+
   it('a reply without a score is an error, not a silent pass', async () => {
     const res = await review('BROKEN text');
     expect(res.execution.status).toBe('FAILED');

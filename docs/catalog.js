@@ -1932,6 +1932,7 @@ export const ACTIONS = {
     type: 'ai.review',
     service: 'ai',
     kind: 'action',
+    forEach: true,
     needs: tr('текст и подключение ИИ', 'a text and an AI connection'),
     gives: tr(
       'оценку и список замечаний; текст не меняется',
@@ -1980,6 +1981,10 @@ export const ACTIONS = {
         label: tr(
           'Остановить сценарий, если текст не прошёл',
           'Stop the scenario when the text fails'
+        ),
+        help: tr(
+          'Для каждой записи — дальше пойдут только записи, которые прошли проверку.',
+          'For each item — only the items that passed go on.'
         ),
       },
       {
@@ -2093,6 +2098,103 @@ export const ACTIONS = {
       summary: tr(
         'В демо считается утверждённым. В работе сценарий ждёт вашего решения в «Истории».',
         'Counted as approved in the demo. Live, the scenario waits for your decision in “History”.'
+      ),
+    }),
+  },
+  'telegram.approval': {
+    type: 'telegram.approval',
+    service: 'telegram',
+    kind: 'action',
+    needs: tr('отдельный бот и чат для утверждений', 'a separate bot and a chat for approvals'),
+    gives: tr(
+      'продолжение только после «Утвердить» в Telegram',
+      'the next steps only after “Approve” in Telegram'
+    ),
+    name: tr('Отправить на утверждение в Telegram', 'Send for approval in Telegram'),
+    desc: tr(
+      'Отдельный бот присылает предпросмотр в чат для утверждений с кнопками «Утвердить» и «Отклонить». Без «Утвердить» шаги ниже не выполнятся. Решить можно и в «Истории».',
+      'A separate bot posts a preview to an approvals chat with “Approve” and “Reject” buttons. Without “Approve” the steps below do not run. You can also decide in “History”.'
+    ),
+    keywords:
+      'утверждение утвердить одобрить согласовать модерация телеграм кнопки предпросмотр approval approve telegram moderation preview buttons',
+    fields: [
+      {
+        key: 'chatId',
+        type: 'text',
+        required: true,
+        basic: true,
+        label: tr('Чат для утверждений', 'Approvals chat'),
+        placeholder: '@my_approvals',
+        help: tr(
+          'Закрытый канал или группа, куда добавлен бот этого шага. Возьмите отдельного бота — не того, что запускает сценарии: Telegram отдаёт нажатия только одному читателю.',
+          'A private channel or group the bot of this step is in. Use a separate bot — not the one that starts scenarios: Telegram gives button presses to one reader only.'
+        ),
+      },
+      {
+        key: 'content',
+        type: 'textarea',
+        required: true,
+        basic: true,
+        acceptsData: true,
+        label: tr('Что прислать на утверждение', 'What to send for approval'),
+        help: tr('Обычно — готовый пост: «+ Данные».', 'Usually the ready post: “+ Data”.'),
+      },
+      {
+        key: 'approvers',
+        type: 'text',
+        required: false,
+        basic: false,
+        label: tr('Кто может утверждать', 'Who may approve'),
+        placeholder: '@editor, @boss',
+        help: tr('Пусто — любой участник чата.', 'Empty — anyone in the chat.'),
+      },
+      {
+        key: 'title',
+        type: 'text',
+        required: false,
+        basic: false,
+        label: tr('Заголовок сообщения', 'Message title'),
+        placeholder: tr('Пост в канал', 'Channel post'),
+      },
+      {
+        key: 'timeoutHours',
+        type: 'number',
+        required: false,
+        basic: false,
+        label: tr('Сколько ждать решения, часов', 'How long to wait, hours'),
+        placeholder: '24',
+        help: tr(
+          'Без ответа за это время — как «Отклонить».',
+          'No answer in time counts as “Reject”.'
+        ),
+      },
+      {
+        key: 'lang',
+        type: 'select',
+        required: true,
+        basic: false,
+        default: 'ru',
+        label: tr('Язык кнопок и ответов бота', 'Language of the bot’s buttons and replies'),
+        options: [
+          { value: 'ru', label: tr('русский', 'Russian') },
+          { value: 'en', label: tr('английский', 'English') },
+        ],
+      },
+    ],
+    outputs: [
+      { key: 'approved', label: tr('Утверждено (да/нет)', 'Approved (yes/no)'), example: 'true' },
+      { key: 'decidedBy', label: tr('Кто решил', 'Who decided'), example: '@editor' },
+      {
+        key: 'content',
+        label: tr('Что утверждали', 'What was approved'),
+        example: tr('Текст поста…', 'The post…'),
+      },
+    ],
+    simulate: (c) => ({
+      output: { approved: true, decidedBy: '@demo', content: c.content ?? '' },
+      summary: tr(
+        `Бот прислал бы предпросмотр в ${c.chatId ?? 'чат'} с кнопками. В демо считается утверждённым.`,
+        `The bot would post a preview to ${c.chatId ?? 'the chat'} with buttons. Counted as approved in the demo.`
       ),
     }),
   },

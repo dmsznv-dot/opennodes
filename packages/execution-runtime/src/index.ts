@@ -17,3 +17,4 @@ export * from './text.js';
 export * from './context.js';
 export * from './approval.js';
 export * from './review.js';
+export * from './approval-telegram.js';

@@ -292,6 +292,14 @@ export const checkConnection = (id) =>
 function summarize(output) {
   if (output == null) return '';
   if (typeof output !== 'object') return String(output).slice(0, 160);
+  // A review: its score; for each item, how many passed.
+  if (typeof output.held === 'number')
+    return t('run.sum.held', { n: output.count, total: output.count + output.held });
+  if (typeof output.score === 'number' && typeof output.passed === 'boolean')
+    return t(output.passed ? 'run.sum.passed' : 'run.sum.failedReview', {
+      score: output.score,
+      issues: (output.issues ?? []).slice(0, 3).join('; '),
+    });
   for (const key of ['text', 'category', 'titles', 'messageId', 'status']) {
     if (output[key] !== undefined && output[key] !== null && output[key] !== '') {
       return String(output[key]).slice(0, 160);

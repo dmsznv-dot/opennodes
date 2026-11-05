@@ -19,6 +19,7 @@ export const FOR_EACH_TYPES = [
   'ai.openai',
   'ai.ollama',
   'ai.process',
+  'ai.review',
   'ai.classify',
   'text.compose',
   'text.format',
@@ -133,6 +134,8 @@ export function withForEach(
       const items = all.slice(0, limit);
       const { forEach: _f, forEachLimit: _l, ...template } = raw;
       const outputs: unknown[] = [];
+      // Items the step itself held back (a review that failed with “stop”): they do not go on.
+      const held = new Set<number>();
 
       for (const [i, item] of items.entries()) {
         if (step.cancellationToken?.isCancelled) break;
@@ -156,6 +159,7 @@ export function withForEach(
             { ...step, expressionScope: scope as unknown as typeof step.expressionScope }
           );
           outputs.push(res.output);
+          if (Array.isArray(res.activeOutputs) && res.activeOutputs.length === 0) held.add(i);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           throw new ActionExecutionError(
@@ -167,19 +171,26 @@ export function withForEach(
       }
 
       const results = outputs.map((o) => toText(mainValue(o)));
+      const going = (_: unknown, i: number) => !held.has(i);
+      const passed = items
+        .slice(0, outputs.length)
+        .map((item, i) => postFields(item, results[i] ?? ''));
+      const allHeld = outputs.length > 0 && held.size === outputs.length;
       return {
         output: {
-          count: outputs.length,
+          count: outputs.length - held.size,
           total: all.length,
           skipped: all.length - items.length,
-          items: items
-            .slice(0, outputs.length)
-            .map((item, i) => postFields(item, results[i] ?? '')),
-          results: results.join('\n\n'),
-          text: results.join('\n\n'),
+          items: passed.filter(going),
+          results: results.filter(going).join('\n\n'),
+          text: results.filter(going).join('\n\n'),
           outputs,
+          ...(held.size
+            ? { held: held.size, heldItems: passed.filter((_, i) => held.has(i)) }
+            : {}),
+          ...(allHeld ? { stopped: true } : {}),
         },
-        activeOutputs: ['main'],
+        activeOutputs: allHeld ? [] : ['main'],
       };
     },
   };

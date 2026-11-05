@@ -25,6 +25,7 @@ import { buildConnectorExecutors, notImplementedNodeTypes } from './connectors.j
 const TRIGGER_TYPES = ['trigger.manual', 'trigger.webhook', 'trigger.cron', 'trigger.telegram'];
 import { buildDelayExecutors } from './delay.js';
 import { buildApprovalExecutors } from './approval.js';
+import { TelegramApprovalPoller, buildTelegramApprovalExecutor } from './approval-telegram.js';
 import { buildLogicExecutors } from './logic.js';
 import { settleRssItems, withOnlyNewItems, withPageImages } from './rss.js';
 import { buildAgentExecutor } from './agent.js';
@@ -89,6 +90,7 @@ export class ExecutionRuntime {
   private readonly heartbeatMs: number;
   readonly staleMs: number;
   readonly ssrfAllowlist: string[];
+  readonly telegramApiBase?: string;
   private readonly executorTypes: string[];
   private readonly logger: RuntimeLogger;
 
@@ -104,6 +106,7 @@ export class ExecutionRuntime {
     this.heartbeatMs = options.heartbeatMs ?? 5_000;
     this.staleMs = options.staleMs ?? 45_000;
     this.ssrfAllowlist = options.ssrfAllowlist ?? [];
+    this.telegramApiBase = options.telegramApiBase;
     this.logger = options.logger ?? silentLogger;
     const connectors = buildConnectorExecutors({
       httpClient: new SafeHttpClient(),
@@ -134,6 +137,12 @@ export class ExecutionRuntime {
       ...buildLogicExecutors(),
       ...buildContextExecutors(),
       ...buildApprovalExecutors({ journal: this.journal }),
+      'telegram.approval': buildTelegramApprovalExecutor({
+        journal: this.journal,
+        resolveCredential: createCredentialResolver(options.db, this.encryption),
+        telegramApiBase: options.telegramApiBase,
+        ssrfAllowlist: options.ssrfAllowlist,
+      }),
       ...buildDelayExecutors({
         journal: this.journal,
         inlineMaxMs: options.inlineDelayMaxMs ?? 5_000,
@@ -321,7 +330,12 @@ export interface ExecutionWorkerOptions {
   /** Finished runs older than this many days are deleted (hourly); 0 keeps them. Default 90. */
   retentionDays?: number;
   /** Schedule and Telegram triggers; `false` leaves them to another process. */
-  triggers?: false | Omit<TriggerSchedulerOptions, 'db' | 'runtime' | 'queue' | 'logger'>;
+  triggers?:
+    | false
+    | (Omit<TriggerSchedulerOptions, 'db' | 'runtime' | 'queue' | 'logger'> & {
+        /** How often presses on Telegram approval buttons are read. */
+        approvalPollMs?: number;
+      });
   logger?: RuntimeLogger;
 }
 
@@ -336,6 +350,8 @@ export class ExecutionWorker {
   private readonly logger: RuntimeLogger;
   private lastPrune = 0;
   readonly scheduler?: TriggerScheduler;
+  /** Presses on “Approve” / “Reject” in Telegram approval chats. */
+  readonly approvals?: TelegramApprovalPoller;
 
   constructor(private readonly options: ExecutionWorkerOptions) {
     this.logger = options.logger ?? silentLogger;
@@ -350,6 +366,16 @@ export class ExecutionWorker {
         db: options.db,
         runtime: options.runtime,
         queue: options.queue,
+        logger: this.logger,
+      });
+      this.approvals = new TelegramApprovalPoller({
+        db: options.db,
+        journal: options.runtime.journal,
+        queue: options.queue,
+        resolveCredential: createCredentialResolver(options.db, options.runtime.encryption),
+        telegramApiBase: options.runtime.telegramApiBase,
+        ssrfAllowlist: options.runtime.ssrfAllowlist,
+        tickMs: options.triggers?.approvalPollMs,
         logger: this.logger,
       });
     }
@@ -369,6 +395,7 @@ export class ExecutionWorker {
     );
     await this.consumer.start();
     await this.scheduler?.start();
+    this.approvals?.start();
   }
 
   async scan(): Promise<void> {
@@ -402,6 +429,7 @@ export class ExecutionWorker {
   }
 
   async stop(): Promise<void> {
+    await this.approvals?.stop();
     await this.scheduler?.stop();
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
