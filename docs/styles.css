@@ -2519,3 +2519,32 @@ textarea.input {
   stroke: var(--accent, #6d5efc);
   stroke-width: 3.5;
 }
+
+/* An instruction from two places: yellow, and hovering it lights up the template step. */
+.node-warn,
+.two-sources {
+  color: #b45309;
+  cursor: help;
+}
+:root[data-theme='dark'] .node-warn,
+:root[data-theme='dark'] .two-sources {
+  color: #fbbf24;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .node-warn,
+  :root:not([data-theme='light']) .two-sources {
+    color: #fbbf24;
+  }
+}
+.two-sources {
+  font-size: 13px;
+  margin: var(--space-1) 0;
+  padding: var(--space-2);
+  border-radius: 6px;
+  background: rgba(251, 191, 36, 0.12);
+}
+.node-card.node-highlight {
+  outline: 3px solid #fbbf24;
+  outline-offset: 3px;
+  box-shadow: 0 0 0 6px rgba(251, 191, 36, 0.25);
+}

@@ -1963,7 +1963,22 @@ function canvasView(a) {
         stepStatePill(state)
       ),
       h('span', { class: 'node-title' }, nodeTitle(n)),
-      h('span', { class: 'node-sub' }, nodeSubtitle(a, n)),
+      (() => {
+        // An instruction both in a linked template and in “What to do”: said in yellow,
+        // and hovering it lights up the template step.
+        const tpl = twoInstructionSources(a, n.config?.prompt, n.config?.instruction);
+        return tpl
+          ? h(
+              'span',
+              {
+                class: 'node-sub node-warn',
+                onmouseenter: () => highlightNode(tpl.id, true),
+                onmouseleave: () => highlightNode(tpl.id, false),
+              },
+              `⚠ ${t('ai.twoSourcesShort')}`
+            )
+          : h('span', { class: 'node-sub' }, nodeSubtitle(a, n));
+      })(),
       store.settings.devMode ? h('span', { class: 'node-dev' }, `${act?.type} · ${n.id}`) : null
     );
     const handle = h('div', {
@@ -3241,6 +3256,21 @@ function voiceSizeBlock(node, controls) {
   return box;
 }
 
+/** The template step when the AI step's instruction comes from it and from “What to do”. */
+function twoInstructionSources(a, promptVal, instruction) {
+  if (!String(instruction ?? '').trim() || !promptVal) return null;
+  return (
+    a.nodes.find((x) => x.action === 'context.prompt' && voiceExpr(x.id) === promptVal) ?? null
+  );
+}
+
+/** Lights up a step on the board (hovering a warning that points at it). */
+function highlightNode(id, on) {
+  document
+    .querySelector(`.node-card[data-node-id="${id}"]`)
+    ?.classList.toggle('node-highlight', on);
+}
+
 /** “What the model gets”: the AI step's system and user messages, built as the server does. */
 function modelPromptBlock(a, node, controls) {
   const warn = h('p', { class: 'small fe-nudge', hidden: true });
@@ -3661,7 +3691,44 @@ function nodePanel(a, node) {
       };
       forEachHelp();
     }
-    return h('div', { class: 'field', 'data-field': f.key }, labelRow, control, help, preview, err);
+    let twoSources = null;
+    if (f.key === 'instruction' && act?.fields?.some((x) => x.type === 'prompt')) {
+      // The same warning as on the card, kept up to date while typing.
+      let tplId = null;
+      twoSources = h('div', {
+        class: 'two-sources',
+        hidden: true,
+        onmouseenter: () => tplId && highlightNode(tplId, true),
+        onmouseleave: () => tplId && highlightNode(tplId, false),
+      });
+      const holder = h('span', { hidden: true });
+      holder._updatePreview = () => {
+        const tpl = twoInstructionSources(
+          a,
+          controls.get('prompt')?.value ?? node.config?.prompt,
+          control.value
+        );
+        if (tplId && tplId !== tpl?.id) highlightNode(tplId, false);
+        tplId = tpl?.id ?? null;
+        twoSources.hidden = !tpl;
+        if (tpl)
+          twoSources.textContent = `⚠ ${t('ai.twoSources', {
+            name: tpl.config?.name || nodeTitle(tpl),
+            n: stepNumbers(a).get(tpl.id),
+          })}`;
+      };
+      controls.set('__twoSources', holder);
+    }
+    return h(
+      'div',
+      { class: 'field', 'data-field': f.key },
+      labelRow,
+      control,
+      twoSources,
+      help,
+      preview,
+      err
+    );
   };
   let forEachHelp = () => {};
   const hasUpstream = ancestorsOf(a, node.id).size > 0;

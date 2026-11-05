@@ -220,6 +220,9 @@ const DICT = {
     'panel.chooseAccount': '— выберите аккаунт —',
     'panel.basic': 'Основные',
     'panel.advanced': 'Дополнительно',
+    'ai.twoSourcesShort': 'Инструкция из двух мест',
+    'ai.twoSources':
+      'ИИ берёт инструкцию из двух мест: шаблон «{name}» (шаг {n}) и это поле. Сначала идёт шаблон, затем этот текст.',
     'vh.title': 'История версий ({n})',
     'vh.inStep': 'в этом шаге',
     'vh.latest': 'последняя',
@@ -718,6 +721,9 @@ const DICT = {
     'panel.chooseAccount': '— choose an account —',
     'panel.basic': 'Main settings',
     'panel.advanced': 'Advanced',
+    'ai.twoSourcesShort': 'Instruction from two places',
+    'ai.twoSources':
+      'The AI takes its instruction from two places: the template “{name}” (step {n}) and this field. The template comes first, then this text.',
     'vh.title': 'Version history ({n})',
     'vh.inStep': 'in this step',
     'vh.latest': 'latest',
