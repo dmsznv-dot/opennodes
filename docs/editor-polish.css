@@ -34,9 +34,8 @@
 .node-card:hover { box-shadow: 0 3px 12px #00000014; }
 .node-card.selected { box-shadow: 0 0 0 1px var(--accent); }
 .node-title { display: block; padding-right: 28px; font-size: 14px; font-weight: 600; letter-spacing: -.15px; line-height: 1.35; }
-.node-rename { position: absolute; z-index: 6; display: grid; place-items: center; width: 24px; height: 24px; padding: 4px; border: 0; border-radius: 5px; background: transparent; color: var(--text-3); opacity: .36; cursor: pointer; transition: opacity 140ms, background 140ms, color 140ms; }
-.node-rename svg { width: 14px; height: 14px; }
-.node-rename:hover, .node-rename:focus-visible { opacity: 1; color: var(--text); background: var(--surface-2); outline: none; }
+.node-menu-button { position: absolute; z-index: 6; display: grid; place-items: center; width: 24px; height: 24px; padding: 4px; border: 0; border-radius: 5px; background: transparent; color: var(--text-3); opacity: .65; font-size: 20px; line-height: 1; cursor: pointer; transition: opacity 140ms, background 140ms, color 140ms; }
+.node-menu-button:hover, .node-menu-button:focus-visible { opacity: 1; color: var(--text); background: var(--surface-2); outline: none; }
 .ai-auto-note { margin: 12px 0; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--cat-ai) 30%, var(--border)); border-left: 3px solid var(--cat-ai); border-radius: 7px; background: color-mix(in srgb, var(--cat-ai) 6%, var(--surface)); color: var(--text-2); font-size: 11px; line-height: 1.45; }
 .picker-categories { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
 .picker-category { border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--text-2); padding: 5px 9px; font: inherit; font-size: 11px; cursor: pointer; white-space: nowrap; }

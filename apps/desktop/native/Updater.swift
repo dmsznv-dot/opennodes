@@ -78,7 +78,7 @@ final class DesktopUpdater: NSObject, WKScriptMessageHandler {
     private let dataDirectory: URL
     private var completedBackup: URL?
     init(dataURL: URL) {
-        currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.3.2"
+        currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.3.3"
         dataDirectory = dataURL.standardizedFileURL
         resultURL = dataURL.appendingPathComponent("update-result.json")
         state = ["status": "idle", "currentVersion": currentVersion]

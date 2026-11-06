@@ -39,25 +39,18 @@ export function portsFor(node) {
   return { inputs, outputs };
 }
 
-/** Ports visible on the canvas; data fields remain available through the data picker. */
+/** Field bindings remain in the execution schema for saved workflows. */
 export function canvasPortsFor(node, automation = null) {
-  const ports = portsFor(node);
-  if (ACTIONS[node?.action]?.type === 'core.rss') {
-    // RSS is a single feed. The named values belong in the data picker, not six dots.
-    return { ...ports, outputs: ports.outputs.filter((port) => port.id === 'main') };
-  }
-  if (['ai.process', 'ai.review'].includes(node?.action)) {
-    // The AI step's instruction and data are edited as fields; only semantic context
-    // connections (template and brand voice) need their own canvas sockets.
-    return {
-      ...ports,
-      inputs: ports.inputs.filter((port) =>
-        ['main', 'prompt', 'voice'].includes(port.id) ||
-        (port.id === 'model' && automation?.nodes?.some((item) => item.action === 'context.model'))
-      ),
-    };
-  }
-  return ports;
+  const { inputs, outputs } = portsFor(node);
+  return {
+    inputs: inputs.filter((port) => {
+      if (port.id === 'main') return true;
+      if (!contextTypes.has(port.type)) return false;
+      return port.type !== 'modelConfig' ||
+        automation?.nodes?.some((item) => item.action === 'context.model');
+    }),
+    outputs: outputs.filter((port) => port.id === 'main'),
+  };
 }
 
 /** Infer only absent handles. Explicit legacy main handles stay explicit. */
@@ -72,8 +65,9 @@ export function resolvedHandles(a, edge) {
 
 export function portPosition(node, direction, handle, width, height, automation = null) {
   const ports = canvasPortsFor(node, automation)[direction === 'input' ? 'inputs' : 'outputs'];
-  const index = Math.max(0, ports.findIndex((p) => p.id === handle));
-  return { x: node.position.x + width * (index + 1) / (ports.length + 1), y: node.position.y + (direction === 'output' ? height : 0) };
+  const visible = ports.findIndex((p) => p.id === handle);
+  const index = visible >= 0 ? visible : ports.findIndex((p) => p.id === 'main');
+  return { x: node.position.x + width * (index < 0 ? 0.5 : (index + 1) / (ports.length + 1)), y: node.position.y + (direction === 'output' ? height : 0) };
 }
 
 export function compatibleTypes(source, target) {

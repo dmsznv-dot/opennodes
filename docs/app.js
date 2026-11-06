@@ -1961,9 +1961,9 @@ function canvasView(a) {
       els.plus.style.left = `${n.position.x + CARD_W / 2 - 16}px`;
       els.plus.style.top = `${n.position.y + cardH + 20}px`;
     }
-    if (els.rename) {
-      els.rename.style.left = `${n.position.x + CARD_W - 36}px`;
-      els.rename.style.top = `${n.position.y + 46}px`;
+    if (els.menu) {
+      els.menu.style.left = `${n.position.x + CARD_W - 36}px`;
+      els.menu.style.top = `${n.position.y + 46}px`;
     }
   };
 
@@ -2070,21 +2070,20 @@ function canvasView(a) {
           '＋'
         )
       : null;
-    const rename = h('button', {
+    const menuLabel = t('step.menuButton', { name: nodeTitle(n) });
+    const menu = h('button', {
       type: 'button',
-      class: 'node-rename',
-      'aria-label': t('step.renameButton', { name: nodeTitle(n) }),
-      title: t('step.renameButton', { name: nodeTitle(n) }),
+      class: 'node-menu-button',
+      'aria-label': menuLabel,
+      'aria-haspopup': 'menu',
+      title: menuLabel,
       onclick: (event) => {
-        event.stopPropagation();
-        renameStep(a, n);
+        const { right, bottom } = event.currentTarget.getBoundingClientRect();
+        openNodeMenu(a, n.id, { x: right, y: bottom });
       },
-    }, svg('svg', { viewBox: '0 0 16 16', 'aria-hidden': 'true' },
-      svg('path', { d: 'M11.8 2.2a1.4 1.4 0 0 1 2 2L6 12l-3.2.8.8-3.2 8.2-7.4Z', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.3', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }),
-      svg('path', { d: 'm9.8 4.1 2.1 2.1', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.3' })
-    ));
-    cardEls.set(n.id, { card, ports, plus, rename });
-    world.append(...[card, ...ports.map((p) => p.element), plus, rename].filter(Boolean));
+    }, '⋯');
+    cardEls.set(n.id, { card, ports, plus, menu });
+    world.append(...[card, ...ports.map((p) => p.element), plus, menu].filter(Boolean));
     place(n);
   }
   drawEdges();
@@ -2233,13 +2232,16 @@ function canvasView(a) {
 /** A connection drawn from one step's dot to another step. */
 function connectSteps(a, source, target, sourceHandle = 'main', targetHandle = null) {
   if (!target || target === source) return;
+  const visibleInputs = canvasPortsFor(a.nodes.find((n) => n.id === target), a).inputs;
   if (!targetHandle) {
-    const choices = portsFor(a.nodes.find((n) => n.id === target)).inputs
-      .filter((p) => !connectionProblem(a, source, sourceHandle, target, p.id));
+    const choices = visibleInputs.filter(
+      (p) => !connectionProblem(a, source, sourceHandle, target, p.id)
+    );
     if (choices.length === 1) targetHandle = choices[0].id;
     else if (sourceHandle === 'main' && choices.some((p) => p.id === 'main')) targetHandle = 'main';
     else { toast(t('port.choose')); return; }
   }
+  if (!visibleInputs.some((port) => port.id === targetHandle)) return;
   const problem = connectionProblem(a, source, sourceHandle, target, targetHandle);
   if (problem) { toast(t(problem), 'error'); return; }
   const edge = { id: uid('e'), source, target, sourceHandle, targetHandle };
@@ -2455,6 +2457,7 @@ function openNodeMenu(a, id, client) {
   if (!n) return;
   openMenuAt(client, [
     { label: t('cv.menuOpen'), run: () => openPanel(a, id) },
+    { label: t('step.renameTitle'), run: () => renameStep(a, n) },
     { label: t('ed.addNext'), run: () => openPicker(a, id) },
     {
       label: t('panel.delete'),
@@ -2489,7 +2492,7 @@ function isFlowEdge(a, edge) {
 
 function connectedInputs(a, node) {
   const links = a.edges.filter((e) => e.target === node.id).map((e) => ({ edge: e,
-    input: canvasPortsFor(node, a).inputs.find((p) => p.id === resolvedHandles(a, e).targetHandle),
+    input: portsFor(node).inputs.find((p) => p.id === resolvedHandles(a, e).targetHandle),
     source: a.nodes.find((n) => n.id === e.source) })).filter((x) => x.input?.binding);
   if (!links.length) return null;
   return h('div', { class: 'connected-inputs' }, h('strong', { class: 'small' }, t('port.linked')),
