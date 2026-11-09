@@ -1,0 +1,12 @@
+{
+  "name": "opennodes-reels",
+  "private": true,
+  "type": "module",
+  "description": "10 cartoon reels about OpenNodes: HTML animation rendered to MP4",
+  "scripts": {
+    "render": "node render.mjs"
+  },
+  "devDependencies": {
+    "puppeteer-core": "25.16.0"
+  }
+}
