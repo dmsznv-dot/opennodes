@@ -6,6 +6,8 @@ OpenNodes is a visual workflow builder for connecting data sources, AI models, A
 
 [Interactive demo](https://dmsznv-dot.github.io/opennodes/) · [Download for macOS](https://github.com/dmsznv-dot/opennodes/releases/latest) · [Developer guide](./DEVELOPMENT.md) · [Русский](./README.md)
 
+![The OpenNodes editor showing a scheduled RSS-to-Telegram workflow with an AI step](./assets/showcase/editor.webp)
+
 ## What you can build
 
 - **Briefings and digests.** Read an RSS feed, process new entries with an AI model and send the output to Telegram.
