@@ -1,6 +1,7 @@
 import { ActionExecutionError } from '@localflow/connector-sdk';
 import type { NodeExecutor } from '@localflow/workflow-engine';
 import { toText } from './text.js';
+import { modelChatSettings } from './context.js';
 
 /** The reviewer's own rules — it judges, it never rewrites. */
 export const REVIEW_RULES =
@@ -65,7 +66,7 @@ export function buildReviewExecutor(chat: NodeExecutor): NodeExecutor {
             await chat.execute(
               { ...node, type: 'ai.openai' },
               {
-                model: config.model,
+                ...modelChatSettings(config),
                 system: reviewSystem(voice, toText(config.criteria)),
                 prompt: `Text to review:\n---\n${text}\n---\nReply with the JSON only.`,
               },

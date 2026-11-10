@@ -3,7 +3,7 @@ import { feedText } from '@localflow/connectors-core';
 import type { SafeHttpClient } from '@localflow/shared';
 import type { NodeExecutor } from '@localflow/workflow-engine';
 import { toText } from './text.js';
-import { fillPrompt, readPrompt } from './context.js';
+import { fillPrompt, readPrompt, modelChatSettings } from './context.js';
 
 const ARTICLE_CHARS = 6_000; // per page, so a few articles fit any model's context
 const MAX_LINKS = 10;
@@ -198,7 +198,7 @@ export function buildProcessExecutor(chat: NodeExecutor, options: ProcessOptions
             (
               await chat.execute(
                 { ...node, type: 'ai.openai' },
-                { model: config.model, system, prompt: userPrompt },
+                { ...modelChatSettings(config), system, prompt: userPrompt },
                 step
               )
             ).output as { text?: unknown }

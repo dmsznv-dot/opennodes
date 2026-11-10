@@ -1,6 +1,7 @@
 import { WorkflowNode, WorkflowEdge } from '../types.js';
 import { detectCycles } from './cycle-detector.js';
 import { arePortsCompatible } from './port-validator.js';
+import { isSafePortBinding, isSafePortValuePath } from '../schemas/node.js';
 
 export interface GraphValidationError {
   code:
@@ -15,6 +16,9 @@ export interface GraphValidationError {
     | 'ERR_MULTIPLE_TRIGGERS'
     | 'ERR_DUPLICATE_NODE_ID'
     | 'ERR_DUPLICATE_EDGE_ID'
+    | 'ERR_INPUT_ALREADY_CONNECTED'
+    | 'ERR_REQUIRED_INPUT_MISSING'
+    | 'ERR_INVALID_PORT_CONFIGURATION'
     | 'ERR_CONTEXT_LINK';
   message: string;
   nodeIds?: string[];
@@ -43,6 +47,7 @@ export interface GraphValidationResult {
 export const CONTEXT_LINKS: Record<string, { consumers: readonly string[]; inputs: boolean }> = {
   'context.voice': { consumers: ['ai.process', 'ai.review'], inputs: false },
   'context.prompt': { consumers: ['ai.process'], inputs: true },
+  'context.model': { consumers: ['ai.process', 'ai.review'], inputs: false },
 };
 
 const isContext = (type: string | undefined) => Boolean(type && CONTEXT_LINKS[type]);
@@ -79,6 +84,47 @@ export function validateWorkflowGraph(
       });
     } else {
       nodeMap.set(node.id, node);
+    }
+    for (const port of [...(node.inputs ?? []), ...(node.outputs ?? [])]) {
+      if (
+        (port.binding !== undefined &&
+          (!isSafePortBinding(port.binding) || port.direction !== 'input')) ||
+        (port.valuePath !== undefined &&
+          (!isSafePortValuePath(port.valuePath) || port.direction !== 'output'))
+      ) {
+        errors.push({
+          code: 'ERR_INVALID_PORT_CONFIGURATION',
+          message: `Node '${node.id}' port '${port.id}' has an invalid binding or value path`,
+          nodeIds: [node.id],
+        });
+      }
+    }
+    for (const port of (node.inputs ?? []).filter((p) => p.binding)) {
+      const connected = edges.filter(
+        (e) =>
+          e.target === node.id &&
+          node.inputs.find((p) => p.id === e.targetHandle)?.binding === port.binding
+      );
+      if (connected.length > 1 && connected[0]?.targetHandle === port.id) {
+        errors.push({
+          code: 'ERR_INPUT_ALREADY_CONNECTED',
+          message: `Input '${node.id}:${port.id}' (${port.binding}) accepts only one connection`,
+          nodeIds: [node.id],
+          edgeIds: connected.map((e) => e.id),
+        });
+      }
+      const configured =
+        Object.prototype.hasOwnProperty.call(node.data.config, port.binding!) &&
+        node.data.config[port.binding!] !== undefined &&
+        node.data.config[port.binding!] !== null &&
+        node.data.config[port.binding!] !== '';
+      if (port.required && !node.data.disabled && connected.length === 0 && !configured) {
+        errors.push({
+          code: 'ERR_REQUIRED_INPUT_MISSING',
+          message: `Required input '${node.id}:${port.id}' (${port.binding}) needs a connection or a configured value`,
+          nodeIds: [node.id],
+        });
+      }
     }
   }
 
@@ -174,15 +220,18 @@ export function validateWorkflowGraph(
     }
 
     // Context steps: only into the steps that use them; a voice takes nothing itself.
-    const contextProblem = isContext(sourceNode.type)
-      ? isContext(targetNode.type)
-        ? 'a context step cannot lead into another context step'
-        : !CONTEXT_LINKS[sourceNode.type]!.consumers.includes(targetNode.type)
-          ? `'${sourceNode.type}' links only to ${CONTEXT_LINKS[sourceNode.type]!.consumers.join(', ')}`
-          : null
-      : isContext(targetNode.type) && !CONTEXT_LINKS[targetNode.type]!.inputs
-        ? `'${targetNode.type}' takes no data from other steps`
-        : null;
+    const contextProblem =
+      edge.kind === 'context' && !isContext(sourceNode.type)
+        ? 'a context dependency must originate from a context step'
+        : isContext(sourceNode.type)
+          ? isContext(targetNode.type)
+            ? 'a context step cannot lead into another context step'
+            : !CONTEXT_LINKS[sourceNode.type]!.consumers.includes(targetNode.type)
+              ? `'${sourceNode.type}' links only to ${CONTEXT_LINKS[sourceNode.type]!.consumers.join(', ')}`
+              : null
+          : isContext(targetNode.type) && !CONTEXT_LINKS[targetNode.type]!.inputs
+            ? `'${targetNode.type}' takes no data from other steps`
+            : null;
     if (contextProblem) {
       errors.push({
         code: 'ERR_CONTEXT_LINK',

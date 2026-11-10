@@ -6,11 +6,13 @@
 import { parseExpr, splitTemplate } from './tokens.js';
 import { ACTIONS, SERVICES, postFields, askedLanguage } from './catalog.js';
 import { L, t, getLocale } from './i18n.js';
+import { portsFor, boundField, resolvedHandles } from './ports.js';
 
 // ── Graph validation (single trigger + Kahn cycle check) ────────────────────
 
 /** Steps that take a context step of this action (have a field of its type). */
 export function contextConsumers(actionId) {
+  if (actionId === 'context.model') return ['ai.process', 'ai.review'];
   const field = ACTIONS[actionId]?.contextField;
   return field
     ? Object.keys(ACTIONS).filter((id) => ACTIONS[id].fields?.some((f) => f.type === field))
@@ -70,7 +72,9 @@ export function stepWarnings(a, node, { automations = [a] } = {}) {
   ]) {
     if (!act.fields?.some((f) => f.key === field && f.type === field)) continue;
     const all = linked(type);
-    const chosen = a.nodes.find((n) => n.action === type && ctxRef(n.id) === cfg[field]);
+    const chosen =
+      boundField(a, node, field)?.source ??
+      a.nodes.find((n) => n.action === type && ctxRef(n.id) === cfg[field]);
     const unused = all.filter((n) => n !== chosen);
     if (all.length > 1)
       out.push({
@@ -86,9 +90,9 @@ export function stepWarnings(a, node, { automations = [a] } = {}) {
       });
   }
 
-  const template = a.nodes.find(
-    (n) => n.action === 'context.prompt' && cfg.prompt && ctxRef(n.id) === cfg.prompt
-  );
+  const template =
+    boundField(a, node, 'prompt')?.source ??
+    a.nodes.find((n) => n.action === 'context.prompt' && cfg.prompt && ctxRef(n.id) === cfg.prompt);
   if (template && String(cfg.instruction ?? '').trim())
     out.push({
       key: 'warn.twoSources',
@@ -339,10 +343,11 @@ export function fromHuman(a, text) {
 export function danglingRefs(a, node) {
   const upstream = ancestorsOf(a, node.id);
   const bad = [];
-  for (const v of Object.values(node.config ?? {})) {
+  for (const [key, v] of Object.entries(node.config ?? {})) {
+    if (boundField(a, node, key)) continue;
     const s = typeof v === 'string' ? v : JSON.stringify(v ?? '');
-    for (const m of s.matchAll(EXPR_GLOBAL)) {
-      if (m[1] === 'nodes' && !upstream.has(m[2])) bad.push(m[0]);
+    for (const m of s.matchAll(/\{\{\s*\$nodes\.([\w-]+)\.output(?:\.[^{}]*?)?\s*\}\}/g)) {
+      if (!upstream.has(m[1])) bad.push(m[0]);
     }
   }
   return bad;
@@ -354,6 +359,8 @@ export function resolveValue(value, ctx) {
   if (typeof value === 'string') {
     const parts = splitTemplate(value);
     if (parts.length === 1 && parts[0].expr) {
+      const whole = parts[0].expr.trim().match(/^\$(?:nodes\.([\w-]+)\.output|trigger)$/);
+      if (whole) return whole[1] ? ctx.nodes[whole[1]] : ctx.trigger;
       const p = parseExpr(parts[0].expr);
       if (p && !p.fmt) return lookup(ctx, p.scope, p.nodeId, p.key);
     }
@@ -438,8 +445,9 @@ export function nodeIssues(a, node, connections) {
       v = (Array.isArray(v) ? v : []).filter((id) => connections.some((c) => c.id === id));
       if (!v.length) v = undefined;
     }
-    const required = f.required && !(f.requiredUnless && node.config?.[f.requiredUnless]);
-    if (required && (v === undefined || v === null || v === ''))
+    const supplied = (key) => boundField(a, node, key) || node.config?.[key];
+    const required = f.required && !(f.requiredUnless && supplied(f.requiredUnless));
+    if (required && !boundField(a, node, f.key) && (v === undefined || v === null || v === ''))
       issues.push({ key: 'err.field', params: { label: L(f.label) }, field: f.key });
   }
   for (const token of danglingRefs(a, node))
@@ -539,11 +547,17 @@ export function simulate(a, connections, opts = {}) {
       continue;
     }
 
-    const resolved = resolveValue(structuredClone(node.config ?? {}), ctx);
+    const config = structuredClone(node.config ?? {});
+    for (const input of portsFor(node).inputs) {
+      if (!input.binding) continue;
+      const bound = boundField(a, node, input.binding);
+      if (bound) config[input.binding] = bound.expression;
+    }
+    const resolved = resolveValue(config, ctx);
     const conn = connections.find((c) => c.id === node.connectionId);
     const sim =
-      action.forEach && node.config?.forEach
-        ? simulateEach(action, node.config, ctx)
+      action.forEach && config.forEach
+        ? simulateEach(action, config, ctx)
         : action.simulate(resolved);
     if (action.kind === 'trigger') ctx.trigger = sim.output;
     ctx.nodes[id] = sim.output;
@@ -632,7 +646,12 @@ export async function graphSha256(a) {
         connectionId: n.connectionId ?? null,
         disabled: !!n.disabled,
       })),
-    edges: a.edges.map((e) => `${e.source}->${e.target}`).sort(),
+    edges: a.edges
+      .map((e) => {
+        const handles = resolvedHandles(a, e);
+        return JSON.stringify([e.source, handles.sourceHandle, e.target, handles.targetHandle]);
+      })
+      .sort(),
   };
   const buf = await crypto.subtle.digest(
     'SHA-256',

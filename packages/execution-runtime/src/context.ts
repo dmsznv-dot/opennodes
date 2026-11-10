@@ -101,28 +101,98 @@ export function readPrompt(v: unknown): PromptRef | null {
 /**
  * Fill a template's variables where it is used — in the AI step, so “for each item” fills
  * them for every item. A variable whose step (or item) is not there is an error that names
- * it; a field that is simply empty in one item stays empty.
+ * it; a present but empty field stays empty. Missing fields are never silently erased.
  */
 export function fillPrompt(p: PromptRef, scope: Record<string, unknown>): string {
-  for (const m of p.template.matchAll(VAR_RE)) {
-    const root = variableRoot(m[1]!);
-    if (root && evaluator.evaluate(`{{ ${root} }}`, scope) === undefined) {
-      throw new ActionExecutionError(
-        `Prompt Template “${p.name || 'template'}”: no data for {{ ${m[1]} }} — ${
-          root === '$item'
-            ? 'it uses the data of each item; set “for each item” on this AI step'
-            : 'the step it comes from is not before this one or has not run'
-        }.`,
-        'prompt',
-        'context.prompt'
-      );
-    }
-  }
-  return toText(evaluator.evaluate(p.template, scope)).trim();
+  return p.template
+    .replace(VAR_RE, (_match: string, expression: string) => {
+      // Resolve once: evaluating for validation and again for rendering can change
+      // the result of supported transformations such as array.reverse().
+      const value = evaluator.evaluate(`{{ ${expression} }}`, scope);
+      const root = variableRoot(expression);
+      if (root && value === undefined) {
+        throw new ActionExecutionError(
+          `Prompt Template “${p.name || 'template'}”: no data for {{ ${expression} }} — ${
+            root === '$item'
+              ? 'it uses the data of each item; set “for each item” on this AI step'
+              : 'the source step has not run or the requested field is missing'
+          }.`,
+          'prompt',
+          'context.prompt'
+        );
+      }
+      return toText(value);
+    })
+    .trim();
+}
+
+export interface ModelConfig {
+  model: string;
+  temperature?: number;
+  maxTokens?: number;
+}
+
+/** Only settings supported by the OpenAI-compatible chat connector cross this boundary. */
+function readModelConfig(value: unknown): ModelConfig {
+  const fail = (message: string): never => {
+    throw new ActionExecutionError(`Model Config: ${message}`, 'model', 'context.model');
+  };
+  if (!value || typeof value !== 'object') return fail('choose a model.');
+  const config = value as Record<string, unknown>;
+  if (typeof config.model !== 'string' || !config.model.trim()) return fail('choose a model.');
+  if (
+    config.temperature !== undefined &&
+    (typeof config.temperature !== 'number' ||
+      !Number.isFinite(config.temperature) ||
+      config.temperature < 0 ||
+      config.temperature > 2)
+  )
+    return fail('temperature must be a number from 0 to 2.');
+  if (
+    config.maxTokens !== undefined &&
+    (typeof config.maxTokens !== 'number' ||
+      !Number.isSafeInteger(config.maxTokens) ||
+      config.maxTokens <= 0)
+  )
+    return fail('maxTokens must be a positive integer.');
+  return {
+    model: config.model.trim(),
+    ...(config.temperature !== undefined ? { temperature: config.temperature as number } : {}),
+    ...(config.maxTokens !== undefined ? { maxTokens: config.maxTokens as number } : {}),
+  };
+}
+
+/** Explicit settings on the task take precedence over linked model defaults. */
+export function modelChatSettings(config: Record<string, unknown>): Partial<ModelConfig> {
+  const linked: Partial<ModelConfig> =
+    config.modelConfig === undefined ? {} : readModelConfig(config.modelConfig);
+  const model =
+    typeof config.model === 'string' && config.model.trim() ? config.model.trim() : linked.model;
+  return {
+    ...(model !== undefined ? { model } : {}),
+    ...(config.temperature !== undefined || linked.temperature !== undefined
+      ? { temperature: (config.temperature ?? linked.temperature) as number }
+      : {}),
+    ...(config.maxTokens !== undefined || linked.maxTokens !== undefined
+      ? { maxTokens: (config.maxTokens ?? linked.maxTokens) as number }
+      : {}),
+  };
 }
 
 export function buildContextExecutors(): Record<string, NodeExecutor> {
   return {
+    'context.model': {
+      async execute(_node, config) {
+        return {
+          output: {
+            ...readModelConfig(config),
+            name: toText(config.name).trim(),
+            version: config.presetVersion ?? config.version ?? null,
+          },
+          activeOutputs: ['main'],
+        };
+      },
+    },
     'context.voice': {
       async execute(_node, config) {
         const fit = fitVoice(config);

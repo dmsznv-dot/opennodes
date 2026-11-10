@@ -1,6 +1,22 @@
 import { z } from 'zod';
 import { PORT_TYPES, PORT_DIRECTIONS } from '@localflow/shared';
 
+const unsafeNames = new Set([...Object.getOwnPropertyNames(Object.prototype), 'prototype']);
+
+/** A single config field, never an assignment expression or a nested mutation. */
+export const isSafePortBinding = (value: string): boolean =>
+  /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(value) && !unsafeNames.has(value);
+
+/** Own-property selection only; numeric segments support array items. */
+export const isSafePortValuePath = (value: string): boolean =>
+  value.length <= 1024 &&
+  value
+    .split('.')
+    .every(
+      (segment) =>
+        /^(?:[A-Za-z_][A-Za-z0-9_]*|0|[1-9][0-9]*)$/.test(segment) && !unsafeNames.has(segment)
+    );
+
 export const NodePortSchema = z.object({
   id: z.string().min(1, 'Port ID cannot be empty'),
   name: z.string().min(1, 'Port name cannot be empty'),
@@ -8,6 +24,14 @@ export const NodePortSchema = z.object({
   direction: z.enum(PORT_DIRECTIONS),
   required: z.boolean().default(false),
   description: z.string().optional(),
+  binding: z
+    .string()
+    .refine(isSafePortBinding, 'Binding must be a safe config field name')
+    .optional(),
+  valuePath: z
+    .string()
+    .refine(isSafePortValuePath, 'Value path must contain safe dot-separated properties')
+    .optional(),
 });
 
 export const NodeExecutionPolicySchema = z.object({

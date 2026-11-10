@@ -15,7 +15,7 @@ export const WorkflowDefinitionSchema = z.object({
   workspaceId: z.string().min(1, 'Workspace ID cannot be empty'),
   name: z.string().min(1, 'Workflow name cannot be empty').max(255),
   description: z.string().max(1000).optional(),
-  schemaVersion: z.literal('1.0').default('1.0'),
+  schemaVersion: z.enum(['1.0', '1.1']).default('1.0'),
   nodes: z.array(WorkflowNodeSchema),
   edges: z.array(WorkflowEdgeSchema),
   triggerConfig: z.record(z.string(), z.unknown()).optional(),

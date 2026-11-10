@@ -315,7 +315,12 @@ export class WorkflowEngine {
       }
 
       // Check edge dependency / branch skip
-      const shouldRun = this.edgeResolver.shouldExecuteNode(node, workflow.edges, context);
+      const shouldRun = this.edgeResolver.shouldExecuteNode(
+        node,
+        workflow.edges,
+        context,
+        workflow.nodes
+      );
 
       // On resume a node may already have a journal row (interrupted, waiting or skipped);
       // reuse it so a run never lists the same step twice.
@@ -393,7 +398,29 @@ export class WorkflowEngine {
       const scope = context.buildExpressionScope();
       let evaluatedConfig: Record<string, unknown>;
       try {
-        evaluatedConfig = this.expressionEvaluator.evaluateObject(node.data.config ?? {}, scope);
+        const bound = this.edgeResolver.resolveBindings(
+          node,
+          workflow.edges,
+          context,
+          workflow.nodes
+        );
+        const configured = Object.fromEntries(
+          Object.entries(node.data.config ?? {}).filter(
+            ([key]) => !Object.prototype.hasOwnProperty.call(bound, key)
+          )
+        );
+        evaluatedConfig = {
+          ...this.expressionEvaluator.evaluateObject(configured, scope),
+          ...bound,
+        };
+        for (const port of node.inputs.filter((p) => p.binding && p.required)) {
+          const value = evaluatedConfig[port.binding!];
+          if (value === undefined || value === null || value === '') {
+            throw new Error(
+              `Required input '${node.id}:${port.id}' (${port.binding}) has no value after evaluation`
+            );
+          }
+        }
       } catch (err: unknown) {
         const errMsg = err instanceof Error ? err.message : String(err);
         const now = new Date();

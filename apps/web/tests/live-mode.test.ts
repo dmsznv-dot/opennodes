@@ -63,7 +63,13 @@ describe('live mode — editor graph ⇄ engine graph', () => {
       for (const e of graph.edges) expect(WorkflowEdgeSchema.safeParse(e).success).toBe(true);
       const check = validateWorkflowGraph(graph.nodes, graph.edges, { requireSingleTrigger: true });
       expect(check.errors, tpl.id).toEqual([]);
-      expect(fromEngineGraph(graph.nodes, graph.edges), tpl.id).toEqual(editor);
+      const restored = fromEngineGraph(graph.nodes, graph.edges);
+      expect(restored.nodes, tpl.id).toEqual(editor.nodes);
+      expect(
+        restored.edges.map(({ id, source, target }) => ({ id, source, target })),
+        tpl.id
+      ).toEqual(editor.edges);
+      expect(toEngineGraph(restored), tpl.id).toEqual(graph);
     }
   });
 

@@ -8,3 +8,4 @@ export * from './validation/connection.js';
 export * from './validation/port-validator.js';
 export * from './validation/graph-validator.js';
 export * from './utils/checksum.js';
+export * from './utils/migration.js';
